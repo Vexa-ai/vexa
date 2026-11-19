@@ -1,0 +1,15 @@
+{
+  "why": "each path is named once",
+  "body": {
+    "files": [
+      {
+        "path": "Default/Cookies",
+        "data": "cm90YXRlZC1jb29raWUtZGI="
+      },
+      {
+        "path": "Default/Cookies",
+        "data": "eQ=="
+      }
+    ]
+  }
+}

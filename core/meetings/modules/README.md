@@ -14,5 +14,6 @@ The transcript spine, in dependency order:
 | [whisper](whisper/) | `stt.v1` egress (PCM → Whisper segments) | — |
 | _gmeet-capture_ | Google Meet per-channel audio + glow name | page → `gmeet-capture.v1` |
 | [gmeet-pipeline](gmeet-pipeline/) | channel-routed transcription → transcript.v1 | `gmeet-capture.v1` → `transcript.v1` |
+| [no-image-backend](no-image-backend/) | stands in for `sharp` so the mixed lane's transformers loads without libvips (LGPL) | — |
 
 _Filled in brick-by-brick as each lands gate-green (Stage 3)._

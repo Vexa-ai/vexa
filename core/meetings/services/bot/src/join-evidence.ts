@@ -51,8 +51,14 @@ export type JoinFailureReason =
   | 'never_reached_lobby'
   /** We never got as far as the meeting page (navigation error, off-origin redirect, closed target). */
   | 'navigation_failure'
+  /** The meeting page rendered in a language other than the bot's pinned English (a signed-in
+   *  account's own language), so the join layer could not read the lobby or a rejection. */
+  | 'ui_locale_mismatch'
   /** The USER stopped the run while the bot was still knocking. Not a failure. */
   | 'stopped_while_joining'
+  /** The platform refused every bot pod before a host saw a request (Google Meet's 403). Typed by
+   *  meeting-api on the meeting's final refusal (lifecycle/meet_respawn.py); the bot does not emit it. */
+  | 'platform_join_refused'
   /** The signals do not support a verdict. `detail` carries what was observed. */
   | 'unknown';
 
@@ -80,6 +86,11 @@ export interface JoinEvidence {
   detail?: string;
   timings?: { time_to_lobby_ms?: number; time_in_lobby_ms?: number; total_ms?: number };
   lobby_budget_ms?: number;
+  /** The cluster node this attempt ran on (the pod's `spec.nodeName`, from VEXA_NODE_NAME). The
+   *  platform retry places the next attempt elsewhere; absent when the runtime does not say. */
+  node?: string;
+  /** Where the join-failure screenshot was stored (meeting-api's answer); absent when none was. */
+  screenshot_key?: string;
 }
 
 /** Cap the free-text platform signal so a stack trace can never bloat `meeting.data`. Mirrors the
@@ -110,6 +121,9 @@ const NAVIGATION_MARKERS = [
   'control_plane_unreachable',
 ];
 
+/** The reason code @vexa/join's UiLocaleMismatchError message starts with. */
+const UI_LOCALE_MISMATCH_MARKER = 'ui_locale_mismatch';
+
 /** Markers that identify a PLATFORM-POLICY refusal (not a human's decision) → exogenous. */
 const PLATFORM_POLICY_MARKERS = [
   'zoom_requires_rtms',
@@ -119,6 +133,9 @@ const PLATFORM_POLICY_MARKERS = [
   'bot detection',
   'bot-detection',
   'unusual traffic',
+  // @vexa/join GoogleJoinRefusedError: Meet answered the knock with "You can't join this video call"
+  // (CreateMeetingDevice 403). No request reached the host.
+  'google_meet_join_refused',
 ];
 
 /** Markers that identify OUR admission flow as the thing that broke — the join layer could not read
@@ -131,6 +148,13 @@ const ADMISSION_FLOW_FAULT_MARKERS = [
   'no admission signal',
 ];
 
+/** Markers that identify the PLATFORM ending an unanswered knock on its own clock (Meet's
+ *  "No one responded to your request to join the call", about 10 min in). Nobody refused: the
+ *  wait expired, whatever share of our own budget it burned. */
+const PLATFORM_ENDED_KNOCK_MARKERS = [
+  'google meet ended the join request',
+];
+
 /** Default owner per typed reason; moved only by positive evidence in `detail`. */
 const ATTRIBUTION_BY_REASON: Record<JoinFailureReason, JoinFailureAttribution> = {
   awaiting_admission_rejected: 'host_action',
@@ -138,7 +162,9 @@ const ATTRIBUTION_BY_REASON: Record<JoinFailureReason, JoinFailureAttribution> =
   auth_session_missing: 'system_fault',
   never_reached_lobby: 'system_fault',
   navigation_failure: 'system_fault',
+  ui_locale_mismatch: 'system_fault',
   stopped_while_joining: 'user_action',
+  platform_join_refused: 'system_fault',
   unknown: 'unknown',
 };
 
@@ -185,10 +211,16 @@ export function classifyJoinFailure(
 
     const detail = cleanDetail(signals.detail);
     if (matches(detail, NAVIGATION_MARKERS)) return 'navigation_failure';
+    // The join layer's own typed verdict that the page was not in English: every reading it made
+    // on that page (a timeout, a "rejection") is untrusted, so this outranks the outcome.
+    if (matches(detail, [UI_LOCALE_MISMATCH_MARKER])) return 'ui_locale_mismatch';
 
     // A typed denial (or a bot-detection block, which is the platform refusing us just as flatly)
     // is a verdict, not an inference — it outranks any timing.
     if (outcome === 'rejected' || outcome === 'blocked') return 'awaiting_admission_rejected';
+
+    // The platform's own expiry, positively identified: a timeout, not the timing guess below.
+    if (outcome === 'timeout' && matches(detail, PLATFORM_ENDED_KNOCK_MARKERS)) return 'awaiting_admission_timeout';
 
     if (signals.reachedLobby) {
       const inLobby = millis(signals.timeInLobbyMs);

@@ -1,4 +1,8 @@
 {{- if .Values.agentApi.enabled }}
+{{- $ws := include "vexa.workspaceStore" . | fromYaml }}
+{{- /* backend: s3 needs no claim. It stays rendered (keepVolumeClaim, default true) so switching the
+       backend never deletes the old volume before its migration Job has copied and verified it. */}}
+{{- if or (not $ws.s3) $ws.keepVolumeClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -18,4 +22,5 @@ spec:
   {{- if .Values.agentApi.workspaces.storageClassName }}
   storageClassName: {{ .Values.agentApi.workspaces.storageClassName | quote }}
   {{- end }}
+{{- end }}
 {{- end }}

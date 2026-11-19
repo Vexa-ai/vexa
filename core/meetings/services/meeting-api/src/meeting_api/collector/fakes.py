@@ -18,6 +18,9 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from . import share_access
+from .ports import ARTIFACT_DELETION_FIELD, deletion_stamp
+
 
 def _segment_to_api(seg: dict) -> dict:
     """A stored segment → api.v1 ``TranscriptionSegment`` (start/end/text/language required)."""
@@ -32,6 +35,10 @@ def _segment_to_api(seg: dict) -> dict:
             out[k] = seg[k]
     return out
 
+
+
+#: The planned-call keys a room writes on its meeting row (rooms, F1).
+ROOM_PLAN_KEYS = ("room", "agenda", "calendar_event_ref", "end_at", "cancelled_at")
 
 class InMemoryTranscriptStore:
     """A dict-backed ``TranscriptStore``. Owner-scoped by ``user_id`` (the authorization
@@ -87,6 +94,27 @@ class InMemoryTranscriptStore:
         }
         return mid
 
+    async def get_transcript_gaps(self, meeting_id) -> list:
+        """Mirror of the real store: the stored ``transcript_gaps`` report of a row, ``[]`` when none."""
+        try:
+            m = self._meetings.get(int(meeting_id))
+        except (TypeError, ValueError):
+            return []
+        gaps = ((m or {}).get("data") or {}).get("transcript_gaps")
+        return list(gaps) if isinstance(gaps, list) else []
+
+    async def transcript_erased(self, meeting_id) -> bool:
+        try:
+            m = self._meetings.get(int(meeting_id))
+        except (TypeError, ValueError):
+            return False
+        data = (m or {}).get("data")
+        return isinstance(data, dict) and bool(data.get("artifact_deletion"))
+
+    async def erased_meeting_ids(self) -> list:
+        return sorted(mid for mid, m in self._meetings.items()
+                      if isinstance(m.get("data"), dict) and m["data"].get("artifact_deletion"))
+
     async def native_for(self, meeting_id):
         """Numeric meeting_id → (native_meeting_id, platform), cross-user (the internal segment
         consumer owns the mapping). Mirrors the SqlAlchemy store so ingest can stamp the live payload."""
@@ -106,7 +134,7 @@ class InMemoryTranscriptStore:
         # why the by-ROW-id read path exists (P0). Tiebreak on the id so the pick is deterministic.
         matches = [
             (mid, m) for mid, m in self._meetings.items()
-            if m["user_id"] == user_id
+            if share_access.owns(m["user_id"], m.get("data"), user_id)
             and m["platform"] == platform
             and m["native_meeting_id"] == native_meeting_id
         ]
@@ -121,7 +149,7 @@ class InMemoryTranscriptStore:
         by-id read returns exactly that row's segments/notes. Mirrors the real store's viewer-aware
         response projection, ``viewer_is_owner`` included — the fake and the real store must agree on
         what a share recipient receives, since most of the suite drives the fake."""
-        from .projection import project_response_data
+        from .projection import project_response_data, visible_recordings
 
         m = self._meetings[mid]
         by_id = dict(m["segments"])
@@ -146,7 +174,7 @@ class InMemoryTranscriptStore:
             "status": m["status"],
             "start_time": m["start_time"],
             "end_time": m["end_time"],
-            "recordings": m["data"].get("recordings", []),
+            "recordings": visible_recordings(m["data"], viewer_is_owner=viewer_is_owner),
             "notes": m["data"].get("notes"),
             "data": project_response_data(m["data"], viewer_is_owner=viewer_is_owner),
             "segments": [_segment_to_api(s) for s in segments],
@@ -177,7 +205,7 @@ class InMemoryTranscriptStore:
         deletion = data.get("artifact_deletion") or {}
         if deletion and deletion.get("state", "completed") == "completed":
             return None
-        is_owner = m.get("user_id") == user_id
+        is_owner = share_access.owns(m.get("user_id"), m.get("data"), user_id)
         authorized = (
             is_owner
             or user_id in (data.get("transcript_viewers") or [])
@@ -206,7 +234,7 @@ class InMemoryTranscriptStore:
 
         def accessible(m):
             data = m.get("data") if isinstance(m.get("data"), dict) else {}
-            return (m["user_id"] == user_id
+            return (share_access.owns(m["user_id"], m.get("data"), user_id)
                     or user_id in (data.get("transcript_viewers") or [])
                     or data.get("workspace_id") in mws)
         rows = [
@@ -243,7 +271,7 @@ class InMemoryTranscriptStore:
         def _row(mid, m):
             # One ownership decision per row, feeding both `shared` and the projection's viewer tier
             # (mirrors the real store's `_row`).
-            is_owner = m["user_id"] == user_id
+            is_owner = share_access.owns(m["user_id"], m.get("data"), user_id)
             row = {
                 "id": mid,
                 "user_id": m["user_id"],
@@ -343,7 +371,7 @@ class InMemoryTranscriptStore:
         except (TypeError, ValueError):
             return None
         row = self._meetings.get(mid)
-        if row is None or row.get("user_id") != user_id:
+        if row is None or not share_access.owns(row.get("user_id"), row.get("data"), user_id):
             return None
         return self._mint_share_on(mid, mode, allowed_emails, expires_in_sec)
 
@@ -362,13 +390,82 @@ class InMemoryTranscriptStore:
         grant = next((g for g in m["data"].get("share_grants", []) if g.get("secret_hash") == _sha(secret)), None)
         if not grant:
             return {"error": "invalid"}
-        err = validate_transcript_grant(grant, user_email)
+        from . import share_access
+        err = validate_transcript_grant(grant, user_email) or share_access.redeem_refusal(
+            m["data"], user_id, grant)
         if err:
             return {"error": err}
-        viewers = m["data"].setdefault("transcript_viewers", [])
-        if user_id not in viewers:
-            viewers.append(user_id)
+        share_access.record_redeem(m["data"], user_id, user_email, grant)
         return {"meeting_id": mid, "ok": True}
+
+    def _owned_row_edit(self, user_id, meeting_id, edit):
+        """Mirror of the SqlAlchemy store's owner-scoped row edit: absent and foreign read alike."""
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        row = self._meetings.get(mid)
+        if row is None or not share_access.owns(row.get("user_id"), row.get("data"), user_id):
+            return None
+        data = dict(row["data"])
+        result = edit(data, mid, row["user_id"])
+        if result is None:
+            return None
+        row["data"] = data
+        return result
+
+    async def stamp_share_mail(self, user_id, meeting_id, grant_id):
+        from . import share_access
+        self._owned_row_edit(user_id, meeting_id, lambda d, mid, owner: share_access.stamp_mail(d, str(grant_id)))
+
+    async def count_share_mails_since(self, user_id, since_iso):
+        n = 0
+        for m in self._meetings.values():
+            if m.get("user_id") != user_id:
+                continue
+            for g in (m.get("data") or {}).get("share_grants") or []:
+                if str(g.get("mailed_at") or "") >= str(since_iso):
+                    n += 1
+        return n
+
+    async def backfill_share_roster(self, user_id, meeting_id, emails):
+        from . import share_access
+
+        def edit(d, mid, owner):
+            share_access.backfill_roster(d, emails, owner_id=owner)
+            return share_access.access_view(d, meeting_id=mid, owner_id=owner)
+        return self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def get_share_access(self, user_id, meeting_id):
+        from . import share_access
+        return self._owned_row_edit(user_id, meeting_id, lambda d, mid, owner: share_access.access_view(
+            d, meeting_id=mid, owner_id=owner))
+
+    async def revoke_share_grant(self, user_id, meeting_id, grant_id):
+        from . import share_access
+
+        def edit(d, mid, owner):
+            if not share_access.revoke_grant(d, str(grant_id)):
+                return None
+            return share_access.access_view(d, meeting_id=mid, owner_id=owner)
+        return self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def remove_share_viewer(self, user_id, meeting_id, viewer_id):
+        from . import share_access
+
+        def edit(d, mid, owner):
+            if not share_access.remove_viewer(d, int(viewer_id)):
+                return None
+            return share_access.access_view(d, meeting_id=mid, owner_id=owner)
+        return self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def set_share_settings(self, user_id, meeting_id, *, recording):
+        from . import share_access
+
+        def edit(d, mid, owner):
+            share_access.set_settings(d, recording=recording)
+            return share_access.access_view(d, meeting_id=mid, owner_id=owner)
+        return self._owned_row_edit(user_id, meeting_id, edit)
 
     async def connect_doc(self, user_id, platform, native_meeting_id, doc):
         from .adapters import _upsert_doc
@@ -455,7 +552,7 @@ class InMemoryTranscriptStore:
                                      calendar_source=None,
                                      workspace_source=None, attendees=None,
                                      auto_join_last_attempt=None,
-                                     auto_join_error=None):
+                                     auto_join_error=None, room_plan=None):
         if self._dup_non_terminal(user_id, platform, native_meeting_id):
             return {"error": "duplicate"}
         data: dict = {"auto_join": bool(auto_join)}
@@ -482,6 +579,11 @@ class InMemoryTranscriptStore:
             data["auto_join_last_attempt"] = auto_join_last_attempt
         if auto_join_error:
             data["auto_join_error"] = auto_join_error
+        # A ROOM'S PLANNED CALL (rooms, F1): the room that owns it, its agenda page and the calendar
+        # event that is its time's source of truth — data the owner's flows and the room read.
+        for key, value in (room_plan or {}).items():
+            if key in ROOM_PLAN_KEYS and value:
+                data[key] = value
         mid = self.seed_meeting(
             user_id=user_id, platform=platform, native_meeting_id=native_meeting_id,
             status="scheduled" if scheduled_at else "idle",
@@ -493,7 +595,7 @@ class InMemoryTranscriptStore:
                                      calendar_sources=None):
         """Identity-only stamp on a row in ANY status — mirrors the adapter (live-row adoption)."""
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         data = m["data"]
         if calendar_uid:
@@ -538,7 +640,7 @@ class InMemoryTranscriptStore:
 
         hits = []
         for mid, m in self._meetings.items():
-            if m["user_id"] != user_id:
+            if not share_access.owns(m["user_id"], m.get("data"), user_id):
                 continue          # owner-scoped, fail-closed — mirrors the adapter
             if platform and m["platform"] != platform:
                 continue
@@ -586,11 +688,11 @@ class InMemoryTranscriptStore:
         which is exactly the property that makes skipping the real build safe."""
         return {"status": "skipped", "reason": "in-memory store"}
 
-    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None):
+    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None, notes=None):
         """Caller-owned annotations on a row in ANY status — mirrors the adapter. No status check:
         nothing written here is read by the dispatch pipeline, so there is no FSM to fight."""
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         data = m["data"]
         # `title` lives in the data blob, NOT as a top-level field — mirrors the adapter and
@@ -618,11 +720,16 @@ class InMemoryTranscriptStore:
             if reason:
                 return {"error": "metadata_too_large", "detail": reason}
             data["metadata"] = merged
+        if notes is not None:
+            if notes:
+                data["notes"] = str(notes)[:200000]
+            else:
+                data.pop("notes", None)
         return self._planned_row(meeting_id)
 
     async def update_planned_meeting(self, user_id, meeting_id, updates):
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] not in ("idle", "scheduled"):
             return {"error": "conflict"}
@@ -670,6 +777,12 @@ class InMemoryTranscriptStore:
                 data["attendees"] = updates["attendees"]
             else:
                 data.pop("attendees", None)
+        for key in ROOM_PLAN_KEYS:
+            if key in updates:
+                if updates[key]:
+                    data[key] = updates[key]
+                else:
+                    data.pop(key, None)
         if "auto_join" in updates:
             data["auto_join"] = bool(updates["auto_join"])
         if "auto_join_user_set" in updates:
@@ -699,7 +812,7 @@ class InMemoryTranscriptStore:
 
     async def delete_planned_meeting(self, user_id, meeting_id):
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] not in ("idle", "scheduled"):
             return False
@@ -710,7 +823,7 @@ class InMemoryTranscriptStore:
         from datetime import datetime, timezone
 
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] not in ("completed", "failed"):
             return {"error": "conflict"}
@@ -718,13 +831,9 @@ class InMemoryTranscriptStore:
         prior = data.get("artifact_deletion") or {}
         already_deleted = bool(prior and prior.get("state", "completed") == "completed")
         if not already_deleted:
-            data["artifact_deletion"] = {
-                "state": "pending",
-                "requested_at": prior.get("requested_at")
-                or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "scope": "primary_transcript_and_recording_storage",
-                "backup_residuals": "expire_under_deployment_retention_policy",
-            }
+            data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                "pending", prior=prior,
+                at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             m["data"] = data
         return {
             "meeting_id": meeting_id,
@@ -732,11 +841,32 @@ class InMemoryTranscriptStore:
             "already_deleted": already_deleted,
         }
 
+    async def mark_delete_when_ended(self, user_id, meeting_id):
+        from datetime import datetime, timezone
+
+        from .ports import DELETE_WHEN_ENDED_FIELD
+        m = self._meetings.get(meeting_id)
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
+            return None
+        if m["status"] in ("completed", "failed"):
+            return {"terminal": True}
+        data = dict(m.get("data") or {})
+        data.setdefault(DELETE_WHEN_ENDED_FIELD, {
+            "requested_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")})
+        m["data"] = data
+        return {"platform": m["platform"], "native_meeting_id": m["native_meeting_id"]}
+
+    async def delete_when_ended_requested(self, user_id, meeting_id):
+        from .ports import DELETE_WHEN_ENDED_FIELD
+        m = self._meetings.get(meeting_id)
+        return bool(m is not None and share_access.owns(m["user_id"], m.get("data"), user_id)
+                    and (m.get("data") or {}).get(DELETE_WHEN_ENDED_FIELD))
+
     async def finalize_completed_artifact_deletion(self, user_id, meeting_id):
         from datetime import datetime, timezone
 
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] not in ("completed", "failed"):
             return False
@@ -744,17 +874,13 @@ class InMemoryTranscriptStore:
         data = dict(m.get("data") or {})
         for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
             data.pop(key, None)
-        data["artifact_deletion"] = {
-            "state": "completed",
-            "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "scope": "primary_transcript_and_recording_storage",
-            "backup_residuals": "expire_under_deployment_retention_policy",
-        }
+        data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+            "completed", at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
         m["data"] = data
         if self._redis is not None:
-            await self._redis.delete(
-                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
-            )
+            from .ports import erased_meeting_cache_keys
+
+            await self._redis.delete(*erased_meeting_cache_keys(meeting_id))
             await self._redis.srem("active_meetings", str(meeting_id))
         return True
 
@@ -808,27 +934,64 @@ class InMemoryTranscriptStore:
             if sid:
                 m["segments"][sid] = dict(seg)
 
-    async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
-        from .adapters import _find_processed_view
+    async def complete_transcript_import(self, user_id, meeting_id, *, segments, started_at,
+                                        ended_at, source, session_uid):
+        """Mirror of the SqlAlchemy store's import — same owner scope, same idempotency on
+        ``session_uid``, same FSM refusal, same row shape afterwards. Most of the suite drives this
+        fake, so the two must agree on every branch a caller can observe."""
+        from datetime import datetime as _now_dt
+        from datetime import timezone
 
-        m = self._meetings.get(meeting_id)
-        if not m:
+        from .transcript_import import IN_FLIGHT_STATUSES
+
+        def _iso(dt):
+            return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
             return None
-        view = _find_processed_view(m["data"], view_id)
-        return view.get("source_cursor") if view else None
+        m = self._meetings.get(mid)
+        if m is None or not share_access.owns(m.get("user_id"), m.get("data"), user_id):
+            return None  # owner-scoped: not-yours is indistinguishable from not-there
+        data = m["data"] if isinstance(m.get("data"), dict) else {}
+        prior = data.get("transcript_import")
+        if isinstance(prior, dict) and prior.get("session_uid") == session_uid:
+            return {
+                "meeting_id": mid, "imported": False, "status": m["status"],
+                "segments_imported": int(prior.get("segments") or 0),
+                "start_time": m["start_time"], "end_time": m["end_time"],
+                "session_uid": session_uid, "source": prior.get("source") or source,
+                "imported_at": prior.get("imported_at"),
+            }
+        if m["status"] in IN_FLIGHT_STATUSES:
+            return {"error": "conflict", "status": m["status"]}
 
-    async def merge_processed_view(
-        self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
-    ) -> None:
-        """Persist drained copilot notes into ``data['processed']['views']`` — the SAME pure
-        upsert the SqlAlchemy store commits (the versioned multi-view shape, merged by note id)."""
-        from .adapters import _upsert_processed_view
-
-        m = self._row_or_placeholder(meeting_id)
-        m["data"] = _upsert_processed_view(
-            m["data"], view_id=view_id, kind=kind, notes=notes,
-            source_cursor=source_cursor, params=params,
-        )
+        written = 0
+        for seg in segments:
+            sid = seg.get("segment_id")
+            if not sid:
+                continue
+            m["segments"][sid] = dict(seg)
+            written += 1
+        m["status"] = "completed"
+        m["start_time"] = _iso(started_at)
+        m["end_time"] = _iso(ended_at)
+        data["transcript_import"] = {
+            "source": source, "session_uid": session_uid, "segments": written,
+            "started_at": m["start_time"], "ended_at": m["end_time"],
+            "imported_at": _iso(_now_dt.now(timezone.utc)),
+        }
+        data["segments_captured"] = len(m["segments"])
+        m["data"] = data
+        return {
+            "meeting_id": mid, "imported": True, "status": "completed",
+            "segments_imported": written, "segments_captured": data["segments_captured"],
+            "start_time": m["start_time"], "end_time": m["end_time"],
+            "platform": m["platform"], "native_meeting_id": m["native_meeting_id"],
+            "session_uid": session_uid, "source": source,
+            "imported_at": data["transcript_import"]["imported_at"],
+        }
 
     async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
         from .adapters import _find_processed_view
@@ -933,3 +1096,10 @@ class FakeRedisBus:
     async def publish(self, channel, data):
         self.published.append((channel, data))
         return await self._client.publish(channel, data)
+
+    async def settle_chat_send(self, request_id, *, meeting_id, posted, reason=None):
+        """``RedisBus.settle_chat_send`` over the wrapped fakeredis client."""
+        from ..chat_delivery import ChatDeliveryLedger
+
+        return await ChatDeliveryLedger(self._client).settle(
+            request_id, meeting_id=meeting_id, posted=posted, reason=reason)

@@ -7,15 +7,17 @@
  * to their green gates, so "fully modular" is a claim backed by evidence, not prose.
  *
  *   node scripts/arch-report.mjs           # (re)generate docs/docs/governance/arch-compliance.mdx
- *   node scripts/arch-report.mjs --check    # verify every modularity gate is green (exit 1 if not); no write
+ *   node scripts/arch-report.mjs --check    # verify every modularity gate is green AND the committed map is
+ *                                           # what a fresh render writes (exit 1 if not); no write
  */
 import { execSync } from "node:child_process";
-import { writeFileSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CHECK = process.argv.includes("--check");
+const MAP = join(ROOT, "docs", "docs", "governance", "arch-compliance.mdx");
 
 /** Run one gate (via scripts/gates.mjs) and extract its single-line evidence (the ✓/✗ message). */
 function gate(name) {
@@ -45,8 +47,10 @@ const rows = PRINCIPLES.map((pr) => {
 });
 const allOk = rows.every((r) => r.ok);
 
-if (!CHECK) {
-  const md = [
+/** The map, as text. --check compares the committed file to this, so the map can never claim a state
+ *  the tree no longer has (a new directory, contract or carrier changes the evidence it prints). */
+function render() {
+  return [
     "---",
     'title: "Architecture compliance (generated)"',
     'description: "Generated map: every modularity principle and the gate that enforces it."',
@@ -63,7 +67,7 @@ if (!CHECK) {
     "|---|---|---|---|---|",
     ...rows.map((r) => `| **${r.p}** | ${r.rule} | ${r.results.map((x) => `\`gate:${x.g}\``).join(" · ")} | ${r.results.map((x) => x.ev).join("; ")} | ${r.ok ? "✅" : "❌"} |`),
     "",
-    `**Modularity verdict: ${allOk ? "all gates green — the v0.12 backend is fully modular by the constitution's own definition" : "RED — a modularity gate is failing"}.**`,
+    `**Modularity verdict: ${allOk ? "all gates green — the backend is fully modular by the constitution's own definition" : "RED — a modularity gate is failing"}.**`,
     "",
     "Per-service module structure (each a front-doored brick, independently testable): `meeting-api` =",
     "`{lifecycle · bot_spawn · collector · recordings · webhooks · scheduling · sessions · obs}`; `runtime` =",
@@ -71,13 +75,26 @@ if (!CHECK) {
     "gated too (`gate:test-isolation`) — a test cannot reach across a module boundary where prod imports can't.",
     "",
   ].join("\n");
-  writeFileSync(join(ROOT, "docs", "docs", "governance", "arch-compliance.mdx"), md);
-  console.log(`arch-report → docs/docs/governance/arch-compliance.mdx (${allOk ? "all modularity gates green" : "SOME RED"})`);
-} else if (allOk) {
-  console.log(`  ✓ arch-report — ${rows.length} modularity principles each map to a green gate (P9)`);
-} else {
-  console.error("  ✗ arch-report — a modularity gate is RED:\n" +
-    rows.filter((r) => !r.ok).map((r) => `    ${r.p}: ${r.results.filter((x) => !x.ok).map((x) => `${x.g} (${x.ev})`).join(", ")}`).join("\n"));
 }
 
-process.exit(allOk ? 0 : 1);
+const md = render();
+let current = true;
+if (!CHECK) {
+  writeFileSync(MAP, md);
+  console.log(`arch-report → docs/docs/governance/arch-compliance.mdx (${allOk ? "all modularity gates green" : "SOME RED"})`);
+} else {
+  current = existsSync(MAP) && readFileSync(MAP, "utf8") === md;
+  if (!allOk) {
+    console.error("  ✗ arch-report — a modularity gate is RED:\n" +
+      rows.filter((r) => !r.ok).map((r) => `    ${r.p}: ${r.results.filter((x) => !x.ok).map((x) => `${x.g} (${x.ev})`).join(", ")}`).join("\n"));
+  }
+  if (!current) {
+    console.error("  ✗ arch-report — docs/docs/governance/arch-compliance.mdx is not what the tree renders now " +
+      "(its evidence is stale). Run `node scripts/arch-report.mjs` and commit the file.");
+  }
+  if (allOk && current) {
+    console.log(`  ✓ arch-report — ${rows.length} modularity principles each map to a green gate, and the committed map is current (P9)`);
+  }
+}
+
+process.exit(allOk && current ? 0 : 1);

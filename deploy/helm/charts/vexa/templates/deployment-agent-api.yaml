@@ -1,4 +1,7 @@
 {{- if .Values.agentApi.enabled }}
+{{- $s3 := include "vexa.s3" . | fromYaml }}
+{{- $ss := include "vexa.agentSessions" . | fromYaml }}
+{{- $ws := include "vexa.workspaceStore" . | fromYaml }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,7 +10,7 @@ metadata:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.agentApi.replicaCount }}
-  {{- if eq (.Values.agentApi.workspaces.accessMode | default "ReadWriteOnce") "ReadWriteMany" }}
+  {{- if and (not $ws.s3) (eq (.Values.agentApi.workspaces.accessMode | default "ReadWriteOnce") "ReadWriteMany") }}
   {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   {{- else }}
   # agent-api mounts the single agent-workspaces PVC. A ReadWriteOnce volume cannot be held by two
@@ -15,7 +18,8 @@ spec:
   # Multi-Attach error — the new pod can't mount until the old one releases, and maxUnavailable:0
   # forbids the old one from leaving first. Recreate tears the old pod down before the new one
   # starts. A ReadWriteMany workspace (multi-worker dispatch) lifts the constraint and takes the
-  # shared rolling strategy instead.
+  # shared rolling strategy instead. backend: s3 keeps Recreate too: one agent-api writes the bucket
+  # at a time in 0.13.4 (the lock and generation make a second one safe by refusal, not coherent).
   strategy:
     type: Recreate
   {{- end }}
@@ -29,30 +33,87 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: agent-api
       annotations:
-        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- if .Values.flows.enabled }}
+        checksum/subject-tickets: {{ include "vexa.checksum" (list . .Values.subjectTickets.agent) }}
+        {{- end }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      enableServiceLinks: false
+      {{- include "vexa.podSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if $ss.active }}
+      # Waits for the agent-sessions-schema Job to have made the store's role and tables (a release
+      # resource, so on a first install it runs beside this Pod). Logs in as the store's own role only.
+      initContainers:
+      {{- else if include "vexa.extraCA.enabled" . }}
+      initContainers:
+      {{- end }}
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+      {{- if $ss.active }}
+        - name: session-schema
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag | default (include "vexa.releaseTag" .) }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "control_plane.session_schema", "wait"]
+          env:
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_DB
+            - name: VEXA_SESSIONS_DB_USER
+              value: {{ $ss.dbUser | quote }}
+            - name: VEXA_SESSIONS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ss.dbSecret | quote }}
+                  key: password
+      {{- end }}
       containers:
         - name: agent-api
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag }}"
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
               containerPort: 8100
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: VEXA_AGENT_API_PORT
               value: "8100"
             - name: VEXA_RUNTIME_API_URL
               value: "http://{{ include "vexa.componentName" (list . "runtime") }}:{{ .Values.runtime.service.port }}"
             - name: VEXA_AGENT_API_SELF_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- if .Values.flows.enabled }}
+            # Routines are flows (ADR-0046): the /api/routines adapter, the one-time move of old
+            # routines into flows and message_agent all call flows-api with its operator key.
+            - name: VEXA_FLOWS_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
+            {{- if .Values.crm.enabled }}
+            # ADR-0047 d5: each workspace's record links, published per commit.
+            - name: VEXA_CRM_REFERENCES_POLL_S
+              value: {{ .Values.crm.referencesPollSeconds | quote }}
+            # PRD 0.13.4 D35: which Person each account resolves to (POST /internal/persons).
+            - name: CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+            {{- end }}
+            - name: VEXA_FLOWS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.flowsApiKeySecretName" . }}
+                  key: VEXA_FLOWS_API_KEY
+            {{- end }}
             - name: VEXA_GATEWAY_URL
               value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
             # Owner-scopes the live SSE feed (GET /api/meeting/stream): agent-api hits GET /meetings/{id}
@@ -63,21 +124,111 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
             - name: VEXA_AGENT_PROFILE
               value: "agent"
+            # Equal to the runtime's VEXA_WORKSPACE_MOUNT_TARGET and to the store's mountPath below.
             - name: VEXA_WORKSPACES_DIR
-              value: "/workspaces"
-            # The workspace store backing the runtime binds into spawned workers. On k8s the PVC name
-            # is the contract; full worker mounting needs RWX storage (see README — follow-up).
-            - name: VEXA_WORKSPACE_MOUNT_SOURCE
-              value: {{ include "vexa.componentName" (list . "agent-workspaces") | quote }}
+              value: {{ include "vexa.workspacesDir" . | quote }}
+            # Where the repositories live (WS-S3): volume (this PVC is the truth) or s3 (the bucket is
+            # the single durable truth, VEXA_WORKSPACES_DIR an emptyDir cache, writes acknowledged only
+            # once durable; the boot self-tests the bucket and stops with a sentence on a misconfiguration).
+            - name: VEXA_WORKSPACE_BACKEND
+              value: {{ $ws.backend | quote }}
+            {{- if $ws.s3 }}
+            - name: VEXA_WORKSPACE_S3_ENDPOINT
+              value: {{ $ws.endpoint | quote }}
+            - name: VEXA_WORKSPACE_S3_BUCKET
+              value: {{ $ws.bucket | quote }}
+            - name: VEXA_WORKSPACE_S3_PREFIX
+              value: {{ $ws.prefix | quote }}
+            - name: VEXA_WORKSPACE_S3_REGION
+              value: {{ $ws.region | quote }}
+            - name: VEXA_WORKSPACE_S3_PATH_STYLE
+              value: {{ $ws.pathStyle | quote }}
+            - name: VEXA_WORKSPACE_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ws.existingSecret | quote }}
+                  key: {{ $ws.accessKeyIdKey | quote }}
+            - name: VEXA_WORKSPACE_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ws.existingSecret | quote }}
+                  key: {{ $ws.secretAccessKeyKey | quote }}
+            - name: VEXA_WORKSPACE_CACHE_MAX_BYTES
+              value: {{ $ws.cacheMaxBytes | quote }}
+            - name: VEXA_WORKSPACE_S3_CA_BUNDLE
+              value: {{ ternary (printf "/run/vexa-workspace-s3-ca/%s" $ws.caKey) "" (or (ne $ws.caConfigMap "") (ne $ws.caSecret "")) | quote }}
+            {{- end }}
             # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global),
-            # mounted READ-ONLY into every worker. Empty = no _global mount (mount-when-present); REF pins
-            # it for safe rollout (empty = HEAD). Provisioning a real _global repo on k8s is a follow-up.
+            # mounted into every worker. Empty = agent-api's in-store /workspaces/_global, created empty at
+            # boot (an empty _global is fine); set a path only for a separately provisioned repo. REF pins
+            # it for safe rollout (empty = HEAD).
             - name: VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH
               value: {{ .Values.agentApi.globalSystemWorkspacePath | default "" | quote }}
             - name: VEXA_GLOBAL_SYSTEM_WORKSPACE_REF
               value: {{ .Values.agentApi.globalSystemWorkspaceRef | default "" | quote }}
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: VEXA_REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
+            # The internal tier agent-api both presents (Lane M) and BELIEVES (_internal_caller,
+            # meeting-room gate 0). The chart never set it here at all, so every helm deploy ran
+            # agent-api with an empty secret; it is required-explicit now and the boot refuses
+            # without it (F95).
+            - name: INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: INTERNAL_API_SECRET
+            # IDENTITY over the internal tier (the secret above): the workspace registry (roster,
+            # visibility, connections, invites, closed rooms' members), the membership index, orgs,
+            # presence, the admin check, and the numeric principal a room's turn runs as. On first
+            # start agent-api adopts every workspace's file-store and in-tree policy into the registry
+            # (migrate_policy_store, while VEXA_POLICY_LEGACY_READ is on).
+            {{- if .Values.adminApi.enabled }}
+            - name: VEXA_ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            {{- end }}
+            # A ROOM'S TURN RUNS AS ITS WORKSPACE'S OWN PRINCIPAL (D2), never as the owner's account.
+            # Needs VEXA_ADMIN_API_URL; without identity a room's turn gets no toolbelt (fail closed).
+            - name: VEXA_ROOM_WS_PRINCIPAL
+              value: {{ .Values.agentApi.roomWsPrincipal | default false | quote }}
+            # The runtime caller credential agent-api presents on every runtime.v1 / schedule.v1 call.
+            - name: RUNTIME_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: RUNTIME_API_TOKEN
+            # gateway-identity.v1: the gateway's PUBLIC key (the identity-public-key ConfigMap, mounted
+            # below). This service verifies the gateway's signature and cannot make one.
+            - name: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE
+              value: /run/vexa-identity/public/key.pem
+            {{- if .Values.flows.enabled }}
+            # subject-ticket.v1: agent-api's OWN Ed25519 private key (issuer `agent`, the
+            # subject-ticket-agent-key Secret, mounted below and by no other workload). A routine the
+            # person turns on carries a grant signed with it, a message to a person an event ticket.
+            - name: VEXA_SUBJECT_TICKET_KEY_FILE
+              value: /run/vexa-subject-ticket/key.pem
+            {{- end }}
+            # THE WORKER'S TOOLBELT (worker_toolbelt): each worker presents a per-dispatch delegation
+            # token, signed with this secret, at the gateway's /mcp — the one assembled MCP server.
+            {{- if .Values.mcp.enabled }}
+            - name: VEXA_MCP_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}/mcp"
+            {{- end }}
+            - name: VEXA_MCP_DELEGATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MCP_DELEGATION_SECRET
+            # NO WORKER HOLDS A MODEL-PROVIDER KEY (H5/W1): agent-api seals each turn's model route
+            # with this secret for the model proxy and hands the worker a per-turn token to it.
+            - name: VEXA_MODEL_PROXY_URL
+              value: "http://{{ include "vexa.componentName" (list . "model-proxy") }}:8102"
+            - name: VEXA_MODEL_PROXY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MODEL_PROXY_SECRET
+                  optional: true
             - name: VEXA_DISPATCH_SIGNING_KEY
               valueFrom:
                 secretKeyRef:
@@ -89,12 +240,50 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_BOT_API_KEY
                   optional: true
-            - name: VEXA_AGENT_DEFAULT_SUBJECT
-              value: {{ .Values.agentApi.defaultSubject | default "u_live" | quote }}
+            # DEPRECATED, migration only: opens Git credentials an older build kept on the workspaces
+            # volume so they can move into the credential broker. See values.yaml `secrets.secretsKey`.
+            - name: VEXA_SECRETS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_SECRETS_KEY
+                  optional: true
             - name: VEXA_AGENT_MODEL
               value: {{ .Values.models.agentModel | default "" | quote }}
-            - name: VEXA_MEETING_MODEL
-              value: {{ .Values.models.meetingModel | default "" | quote }}
+            # The git providers besides GitHub (shared/git_provider.py); see values.yaml. A list renders
+            # as JSON; the earlier comma string passes through verbatim.
+            - name: VEXA_GIT_PROVIDERS
+              {{- if kindIs "slice" .Values.agentApi.gitProviders }}
+              value: {{ toJson .Values.agentApi.gitProviders | quote }}
+              {{- else }}
+              value: {{ .Values.agentApi.gitProviders | default "" | quote }}
+              {{- end }}
+            # Internal git hosts and networks a workspace repository may reach (shared/git_egress.py).
+            - name: VEXA_GIT_ALLOWED_INTERNAL_HOSTS
+              value: {{ .Values.agentApi.gitAllowedInternalHosts | default "" | quote }}
+            {{- with .Values.models.catalog }}
+            # The model catalog (models.v1 Catalog, ADR-0043): the providers and models people pick
+            # per chat. Refused whole at boot when anything in it is wrong. It holds no credential:
+            # each provider's secret_ref (env:VEXA_MODEL_SECRET_<NAME>) is delivered below from models.catalogSecrets.
+            - name: VEXA_MODEL_CATALOG
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- range .Values.models.catalogSecrets }}
+            {{- $env := required "models.catalogSecrets[].env is required" .env }}
+            {{- if not (regexMatch "^VEXA_MODEL_SECRET_[A-Z0-9_]+$" $env) }}
+            {{- fail (printf "models.catalogSecrets[].env %q must be VEXA_MODEL_SECRET_<NAME>: a catalog secret never shares a name with agent-api's own variables" $env) }}
+            {{- end }}
+            # Its own Secret, named explicitly: never the chart's shared admin-token Secret.
+            - name: {{ $env }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "models.catalogSecrets[].secretName is required (the Secret holding this provider key)" .secretName }}
+                  key: {{ .key | default $env }}
+            {{- end }}
+            - name: VEXA_AGENT_AUTO_CONTINUE_CHAT
+              value: {{ .Values.agentApi.autoContinueChat | toString | quote }}
+            - name: VEXA_AGENT_MAX_CHAT_CONTINUATIONS
+              value: {{ .Values.agentApi.maxChatContinuations | toString | quote }}
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -123,6 +312,29 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: CLAUDE_CODE_OAUTH_TOKEN
                   optional: true
+            # THE HARNESS ROUTE, agent-api's half: the dispatch stamps VEXA_RUNNER onto each turn, the
+            # credential preflight counts VEXA_LLM_API_KEY, or VEXA_LLM_BASE_URL on openai-agent, as a
+            # configured model, and the
+            # Settings → Models check reads the deployment endpoint. The runtime carries the same keys
+            # to the workers themselves (see the runtime Deployment).
+            {{- with .Values.models.runner }}
+            - name: VEXA_RUNNER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.models.llmBaseUrl }}
+            - name: VEXA_LLM_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.models.llmExtraBody }}
+            - name: VEXA_LLM_EXTRA_BODY
+              value: {{ . | quote }}
+            {{- end }}
+            - name: VEXA_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_LLM_API_KEY
+                  optional: true
             - name: ANTHROPIC_MODEL
               value: {{ .Values.models.anthropicModel | default "" | quote }}
             - name: ANTHROPIC_DEFAULT_OPUS_MODEL
@@ -133,12 +345,98 @@ spec:
               value: {{ .Values.models.anthropicHaikuModel | default "" | quote }}
             - name: VEXA_LOG_LEVEL
               value: {{ .Values.agentApi.logLevel | default "info" | quote }}
+            - name: VEXA_FEATURES
+              value: {{ .Values.features | default "" | quote }}
+            - name: VEXA_AGENT_ALLOW
+              # one list for the edge and agent-api: the gateway's value
+              value: {{ .Values.gateway.agentAllow | default "" | quote }}
+            # The kill switch for model calls (control_plane/llm_budget.py): every turn refused.
+            - name: VEXA_LLM_KILL_SWITCH
+              value: {{ ternary "1" "" (.Values.agentApi.llmKillSwitch | default false) | quote }}
+            {{- if include "vexa.credentialBrokerEnabled" . }}
+            # Connections (credential-broker.v1): agent-api signs as the `agent` role, never `human`.
+            - name: VEXA_CONNECTIONS_BROKER_URL
+              value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+            - name: VEXA_CONNECTIONS_AGENT_KEY_FILE
+              value: /run/vexa-connections/agent/key
+            # Saved Git tokens and deploy keys: the broker is their one store (role `git`).
+            - name: VEXA_GIT_STORE_BROKER_URL
+              value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+            - name: VEXA_GIT_STORE_KEY_FILE
+              value: /run/vexa-connections/git/key
+            {{- end }}
+            {{- if $ss.active }}
+            # The session store (ADR-0048): the database as the store's OWN role (the migrations Job
+            # creates it, grants on agent_session* only) and the store's OWN bucket with a key scoped
+            # to it. agent-api holds neither the database admin credential nor the recordings key;
+            # workers hold nothing of it.
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_DB
+            - name: VEXA_SESSIONS_DB_USER
+              value: {{ $ss.dbUser | quote }}
+            - name: VEXA_SESSIONS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ss.dbSecret | quote }}
+                  key: password
+            - name: VEXA_SESSIONS_S3_ENDPOINT
+              value: {{ $s3.endpoint | quote }}
+            - name: VEXA_SESSIONS_S3_BUCKET
+              value: {{ $ss.bucket | quote }}
+            - name: VEXA_SESSIONS_S3_REGION
+              value: {{ $s3.region | default "us-east-1" | quote }}
+            - name: VEXA_SESSIONS_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ss.existingSecret | quote }}
+                  key: {{ $ss.accessKeyIdKey | quote }}
+            - name: VEXA_SESSIONS_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ss.existingSecret | quote }}
+                  key: {{ $ss.secretAccessKeyKey | quote }}
+            {{- end }}
+            # Calls (ADR-0048 decision 6): participants' room tokens, when livekit.enabled.
+            - name: LIVEKIT_URL
+              value: {{ ternary .Values.livekit.url "" .Values.livekit.enabled | quote }}
+            - name: LIVEKIT_INTERNAL_URL
+              value: {{ ternary (printf "ws://%s:%v" (include "vexa.componentName" (list . "livekit")) .Values.livekit.service.port) "" .Values.livekit.enabled | quote }}
+            - name: LIVEKIT_API_KEY
+              value: {{ ternary .Values.livekit.apiKey "" .Values.livekit.enabled | quote }}
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: LIVEKIT_API_SECRET
+                  optional: true
             {{- with .Values.agentApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           volumeMounts:
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: workspaces
-              mountPath: /workspaces
+              mountPath: {{ include "vexa.workspacesDir" . }}
+            {{- include "vexa.workspaceStore.caMount" . | nindent 12 }}
+            - name: identity-public-key
+              mountPath: /run/vexa-identity/public
+              readOnly: true
+            {{- if .Values.flows.enabled }}
+            - name: subject-ticket-key
+              mountPath: /run/vexa-subject-ticket
+              readOnly: true
+            {{- end }}
+            {{- if include "vexa.credentialBrokerEnabled" . }}
+            - name: connections-keys
+              mountPath: /run/vexa-connections
+              readOnly: true
+            {{- end }}
           startupProbe:
             httpGet:
               path: /health
@@ -163,9 +461,46 @@ spec:
           resources:
             {{- toYaml .Values.agentApi.resources | nindent 12 }}
       volumes:
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- if $ws.s3 }}
+        # backend: s3 — a disposable cache, hydrated from the bucket at boot; losing it loses nothing.
+        - name: workspaces
+          emptyDir:
+            {{- if $ws.cacheSizeLimit }}
+            sizeLimit: {{ $ws.cacheSizeLimit | quote }}
+            {{- end }}
+        {{- include "vexa.workspaceStore.caVolume" . | nindent 8 }}
+        {{- else }}
         - name: workspaces
           persistentVolumeClaim:
             claimName: {{ include "vexa.componentName" (list . "agent-workspaces") }}
+        {{- end }}
+        # gateway-identity.v1: the public key only — the signing key is mounted by the gateway alone.
+        - name: identity-public-key
+          configMap:
+            name: {{ include "vexa.componentName" (list . "identity-public-key") }}
+            defaultMode: 0444
+            items:
+              - { key: public-key.pem, path: key.pem }
+        {{- if .Values.flows.enabled }}
+        # subject-ticket.v1: this producer's own ticket key, here and in no other workload.
+        - name: subject-ticket-key
+          secret:
+            secretName: {{ .Values.subjectTickets.agent.existingSecret | default (include "vexa.componentName" (list . "subject-ticket-agent-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
+        {{- end }}
+        {{- if include "vexa.credentialBrokerEnabled" . }}
+        # The agent and git role keys — never the human key, never the store key.
+        - name: connections-keys
+          secret:
+            secretName: {{ include "vexa.credentialBrokerKeys" . }}
+            defaultMode: 0444
+            items:
+              - { key: agent.key, path: agent/key }
+              - { key: git.key, path: git/key }
+        {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

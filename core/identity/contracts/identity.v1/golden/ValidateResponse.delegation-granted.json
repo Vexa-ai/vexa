@@ -1,0 +1,22 @@
+{
+  "user_id": 42,
+  "scopes": [
+    "bot",
+    "tx"
+  ],
+  "max_concurrent": 3,
+  "email": "jane@example.com",
+  "is_admin": false,
+  "delegation": {
+    "regime": "autonomous",
+    "workspaces": [
+      "42"
+    ],
+    "grants": [
+      "bot.request"
+    ],
+    "flow": "user:42/bot-at-1213"
+  },
+  "person_is_admin": false,
+  "credential_class": "delegation"
+}

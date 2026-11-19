@@ -90,3 +90,35 @@ def resolve_spawn_flag(
         if v in _FALSE or v == "":
             return False
     raise InvalidFlagValue(field or env_name.lower())
+
+
+#: The deployment's own answer to "does a bot tape its captured signal when nobody has said?".
+#: admin-api reads the same key for its last tier (user > platform setting > THIS), and meeting-api
+#: reads it only when identity gave no answer at all. The Helm chart sets it to ``false``.
+CAPTURE_SIGNAL_DEFAULT_ENV = "VEXA_CAPTURE_SIGNAL_DEFAULT"
+
+
+class InvalidDeploymentFlag(ValueError):
+    """A deployment flag whose value is not a recognized boolean. Raised, never guessed: a typo in
+    a data-protection switch must stop the boot, not quietly read as the default."""
+
+
+def capture_signal_default(raw: Optional[str] = None) -> bool:
+    """``VEXA_CAPTURE_SIGNAL_DEFAULT`` as a boolean: unset or empty is ``True`` (the compose and
+    Lite default, unchanged), a recognized value is honoured, anything else raises
+    ``InvalidDeploymentFlag``. ``raw`` is the test seam; production reads the environment.
+
+    Strict where ``env_flag`` is lenient on purpose: ``env_flag`` keeps the default on a typo
+    because its default is the product working; this switch's safe side depends on the deployment,
+    so no side may be chosen for the operator. The boot calls this once (``__main__``)."""
+    value = os.getenv(CAPTURE_SIGNAL_DEFAULT_ENV) if raw is None else raw
+    if value is None or not value.strip():
+        return True
+    v = value.strip().lower()
+    if v in _TRUE:
+        return True
+    if v in _FALSE:
+        return False
+    raise InvalidDeploymentFlag(
+        f"{CAPTURE_SIGNAL_DEFAULT_ENV}={value!r} is not a recognized boolean "
+        f"({'/'.join(_TRUE)} / {'/'.join(_FALSE)})")

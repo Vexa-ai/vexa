@@ -1,0 +1,8 @@
+{
+  "source": "runtime",
+  "kind": "not_found",
+  "op": "status",
+  "status": 404,
+  "detail": "the runtime does not know this agent",
+  "remedy": ""
+}

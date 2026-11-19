@@ -49,7 +49,7 @@ Whatever a person's agent should keep in front of it.
 ordinary item is read when an agent asks what is waiting. A notice is read alongside whatever the
 agent was already doing: `GET /queue/notices` returns just these files' words, it is small enough
 to ask on every call, and the MCP edge carries the answer out on the results of the meeting tools
-(`core/meetings/services/mcp/src/vexa_mcp/notices.py`). So the same sentence reaches an agent that
+(`core/gateway/services/mcp/src/vexa_mcp/notices.py`). So the same sentence reaches an agent that
 never asked — which is the point, and also the reason to flag almost nothing.
 
 Everything else stays as it is: a flagged file is still an ordinary item on `GET /queue/waiting`

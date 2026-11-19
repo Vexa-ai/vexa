@@ -1,0 +1,7 @@
+{
+  "source": "agent-worker",
+  "kind": "tools_unconfined",
+  "status": null,
+  "detail": "This turn did not run: the worker could not hand u_1/desk/notes.md to the user the model's tools run as (Operation not permitted), and it never runs them as itself.",
+  "remedy": "Send it again. If it fails the same way, an operator must fix the ownership or permissions of that path in the workspace store."
+}

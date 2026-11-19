@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/contracts/gateway-identity.v1",
+  "title": "gateway-identity.v1 — the signed identity the gateway forwards to the services behind it",
+  "description": "The gateway resolves a bearer through identity's /internal/validate and forwards the request with X-Vexa-Identity: \"v1.\" + base64url(claims JSON) + \".\" + base64url(Ed25519 signature, by the gateway's private key, over \"v1.\" + base64url(claims JSON)). \"v1\" fixes the scheme; nothing is negotiated. agent-api, meeting-api and the credential broker hold only the gateway's public key, so they verify and cannot sign: the signature, then the issue time and the expiry within a bounded clock skew. agent-api and meeting-api rebuild every x-user-* header from these claims and refuse with 401 a request that asserts an x-user-* header without a valid signature and without the internal tier's X-Internal-Secret. The credential broker refuses an agent- or git-role call whose forwarded signature is missing, invalid or names a subject other than the assertion's actor.",
+  "$defs": {
+    "Claims": {
+      "type": "object",
+      "required": ["typ", "sub", "scopes", "iat", "exp"],
+      "additionalProperties": false,
+      "properties": {
+        "typ": { "const": "vexa-identity" },
+        "sub": { "type": "string", "minLength": 1, "description": "the user id identity resolved; becomes x-user-id" },
+        "email": { "type": "string", "description": "the verified email identity holds; becomes x-user-email" },
+        "scopes": { "type": "array", "items": { "type": "string" }, "description": "the credential's scopes; becomes x-user-scopes (comma-joined)" },
+        "limits": { "type": "integer", "minimum": 0, "description": "max concurrent bots; becomes x-user-limits" },
+        "workspaces": { "type": "array", "items": { "type": "string" }, "description": "shared-workspace memberships; becomes x-user-workspaces (comma-joined)" },
+        "writable_workspaces": { "type": "array", "items": { "type": "string" }, "description": "the memberships that may write (contributor or owner), a subset of workspaces; becomes x-user-writable-workspaces (comma-joined). Absent means the caller may write into no shared workspace." },
+        "webhook_url": { "type": "string", "description": "the user's webhook; becomes x-user-webhook-url" },
+        "webhook_secret": { "type": "string", "description": "its signing secret; becomes x-user-webhook-secret" },
+        "webhook_events": { "description": "its event filter; becomes x-user-webhook-events (JSON)" },
+        "credential_class": { "enum": ["session", "key", "delegation"], "description": "the bearer's credential class as identity.v1 ValidateResponse stated it (D13, 0.13.4): session (the terminal's signed-in browser), key (every other API key) or delegation (a worker); carried only when it is one of the three words; becomes x-user-credential-class. A service reads it with identity_token.credential_class_of, which answers delegation for any delegated identity and \"\" when it is absent. A decision that must be a person's own act asks for session." },
+        "delegation": { "$ref": "#/$defs/Delegation" },
+        "iat": { "type": "integer", "description": "issued at, unix seconds" },
+        "exp": { "type": "integer", "description": "expires at, unix seconds; a verifier refuses exp - iat > 300" }
+      }
+    },
+    "Delegation": {
+      "type": "object",
+      "description": "Present when the bearer was a worker's delegation token (vxd_). The ceiling the dispatch granted: a service refuses a person-in-the-loop verb when regime is not human.",
+      "required": ["regime", "workspaces"],
+      "additionalProperties": false,
+      "properties": {
+        "regime": { "enum": ["human", "autonomous"], "description": "becomes x-user-regime" },
+        "workspaces": {
+          "description": "\"*\" (everything already the subject's) or the isolation set; becomes x-user-delegation-workspaces",
+          "oneOf": [ { "const": "*" }, { "type": "array", "items": { "type": "string" } } ]
+        },
+        "target": { "type": "string", "description": "the chat's target workspace, a default and never a grant; becomes x-user-delegation-target" },
+        "unit": { "type": "string", "description": "the agent unit (a chat thread or a background job) the worker runs as — the delegation token's signed `unit` claim (delegation.v1), passed on by identity. The session: services log it as logevent.v1 `session` and the credential broker records it as audit.session; correlation, never a grant; becomes x-user-delegation-unit" },
+        "shared": { "const": true, "description": "the turn answers into a conversation other people read (delegation.v1 scope.shared); becomes x-user-delegation-shared: 1. A service refuses such a worker every person-wide read. Present only then" },
+        "principal_kind": { "const": "workspace", "description": "D2 (0.13.4): the worker runs as a WORKSPACE principal (a room's turn, the workspace's agent), not as any person; `sub` (x-user-id) is that principal's own numeric account, which owns nothing of a person's (identity.v1 ValidateDelegation.principal_kind). Present only beside `shared`; becomes x-user-principal-kind. A service that knows the kind refuses or narrows on it" },
+        "principal_workspace": { "type": "string", "minLength": 1, "description": "D2: the workspace that principal is the agent of. Present only beside `principal_kind`; becomes x-user-principal-workspace" },
+        "on_behalf_of": { "type": "string", "minLength": 1, "description": "D2: the person a workspace principal's turn answered (the room speaker) — attribution and the write-or-propose rule, never a grant. Present only beside `principal_kind`; becomes x-user-delegation-on-behalf-of" },
+        "bills_to": { "type": "integer", "description": "D2: the account a workspace principal's spend debits (the workspace owner's pool) — metering only, never a grant. Present only beside `principal_kind`; becomes x-user-bills-to" },
+        "grants": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["bot.request", "bot.stop", "flow.retire_self"] }, "description": "a routine's delegated authority (delegation.v1 scope.grants): the unattended verbs its person granted it, sorted; becomes x-user-delegation-grants (comma-joined). A service that refuses an unwatched caller lets exactly these verbs through. Present only beside flow" },
+        "flow": { "type": "string", "minLength": 1, "description": "the routine the grants belong to (delegation.v1 scope.flow, `user:<uid>/<name>`); becomes x-user-delegation-flow. Present only beside grants" }
+      }
+    },
+    "Headers": {
+      "type": "object",
+      "description": "A claims-to-headers vector: the x-user-* headers a service rebuilds from the claims in `claims_golden` (a claims-*.json beside it). Lower-cased names; scopes, workspaces and writable_workspaces comma-joined; webhook_events as JSON; limits as decimal; credential_class as x-user-credential-class; an absent, empty or null claim gives no header; delegation becomes x-user-regime, x-user-delegation-workspaces (\"*\" or comma-joined), x-user-delegation-target, x-user-delegation-unit, when shared, x-user-delegation-shared: 1, for a workspace principal x-user-principal-kind, x-user-principal-workspace, x-user-delegation-on-behalf-of and x-user-bills-to, and, for a granted routine, x-user-delegation-grants (comma-joined) and x-user-delegation-flow.",
+      "required": ["claims_golden", "headers"],
+      "additionalProperties": false,
+      "properties": {
+        "claims_golden": { "type": "string", "pattern": "^claims-[a-z-]+\\.json$" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" }, "propertyNames": { "pattern": "^x-user-[a-z-]+$" } }
+      }
+    },
+    "ReentryHeader": {
+      "const": "x-vexa-internal-mcp-identity",
+      "description": "MCP re-entry. A worker's delegation token (delegation.v1) is admitted by the gateway on /mcp only. The MCP's tools act by calling back into the gateway with the same bearer, so the MCP service (the carrier) holds the X-Vexa-Identity the gateway signed onto the /mcp request it is serving and sends it back, only on its calls to the gateway, in this header. The gateway (the only verifier) checks it with its own key's public half (signature, iat/exp within the skew and the 300 s lifetime) and admits the call only when the signed claims name the same sub as the bearer resolves to now AND carry a delegation equal to the bearer's (Reentry). The header is in the x-vexa-internal- family, which the gateway never forwards from a client to a service behind it. Header names are case-insensitive."
+    },
+    "Reentry": {
+      "type": "object",
+      "description": "A re-entry match vector, after the signature and lifetime checks have passed. `validation` is identity's /internal/validate answer for the bearer on the re-entering call (identity.v1 ValidateResponse); `signed` is the claims of the X-Vexa-Internal-Mcp-Identity token. `admitted` must equal: validation carries a delegation, AND signed.sub == str(validation.user_id), AND signed.delegation equals the delegation the gateway would sign for validation (regime, workspaces, target, unit, shared, principal_kind, principal_workspace, on_behalf_of, bills_to, grants, flow).",
+      "required": ["validation", "signed", "admitted", "what"],
+      "additionalProperties": false,
+      "properties": {
+        "validation": { "type": "object", "required": ["user_id"] },
+        "signed": { "$ref": "#/$defs/Claims" },
+        "admitted": { "type": "boolean" },
+        "what": { "type": "string" }
+      }
+    },
+    "Vector": {
+      "type": "object",
+      "description": "A signing test vector: any implementation signing these claims at `now` with the RFC 8032 section 7.1 TEST 1 key must produce `token` (Ed25519 signatures are deterministic), and `public_key` is that key's public half. The signing key is never in a vector: each implementation derives it from the 32-byte seed RFC 8032 publishes. Every service refuses this key at boot.",
+      "required": ["public_key", "now", "ttl_sec", "claims", "token"],
+      "additionalProperties": false,
+      "properties": {
+        "public_key": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----\n", "description": "SubjectPublicKeyInfo PEM, Ed25519 (RFC 8032 section 7.1 TEST 1)" },
+        "now": { "type": "integer" },
+        "ttl_sec": { "type": "integer" },
+        "claims": { "type": "object" },
+        "token": { "type": "string", "pattern": "^v1\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$" }
+      }
+    },
+    "Refusal": {
+      "type": "object",
+      "description": "A refusal vector: verifying `token` with `public_key` at `now` must fail with `reason`. Covers another key (RFC 8032 section 7.1 TEST 2), a tampered payload, algorithm confusion (an HMAC keyed with the public key), a missing signature, another scheme and an over-long lifetime.",
+      "required": ["public_key", "now", "token", "reason", "what"],
+      "additionalProperties": false,
+      "properties": {
+        "public_key": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----\n" },
+        "now": { "type": "integer" },
+        "token": { "type": "string" },
+        "reason": { "enum": ["malformed", "bad_signature", "lifetime_too_long", "not_yet_valid", "expired"] },
+        "what": { "type": "string" }
+      }
+    }
+  }
+}

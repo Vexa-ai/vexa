@@ -1,0 +1,13 @@
+{
+  "type": "error",
+  "message": "The agent runtime could not start your agent: a previous agent for this chat is still registered. Retry in a few seconds; if it keeps happening, an operator must remove the stale agent workload.",
+  "fault": {
+    "source": "runtime",
+    "kind": "spawn_refused",
+    "op": "spawn",
+    "status": 502,
+    "detail": "a previous agent for this chat is still registered",
+    "remedy": "Retry in a few seconds; if it keeps happening, an operator must remove the stale agent workload.",
+    "at": 1791282600.125
+  }
+}

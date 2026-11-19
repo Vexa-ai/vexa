@@ -1,0 +1,1 @@
+{ "shape": "SpawnFields", "value": { "allowed_languages": ["aa","ab","af","am","ar","as","az","ba","be","bg","bn","bo","br","bs","ca","cs","cy"] }, "reason": "at most 16 languages" }

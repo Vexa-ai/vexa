@@ -14,6 +14,7 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE } from "../adminApi";
+import { COMPANY_TOKEN_ID_COOKIE, PERSON_COOKIE, PERSON_INFO_COOKIE } from "../companyMode";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +84,9 @@ export async function POST() {
   // (`.vexa.ai`, where the platform webapp reuses the same OAuth app) — a host-only deletion can't reach
   // those, which is what trapped users at a stale-token 401. Clear them across host + every parent scope.
   for (const name of [AUTH_COOKIE, USER_INFO_COOKIE]) emit(name, domainScopes(host));
+  // A tab working as the company keeps the person's own session beside it (ADR-0049): signing out
+  // ends both, host-only, as company/ wrote them.
+  for (const name of [PERSON_COOKIE, PERSON_INFO_COOKIE, COMPANY_TOKEN_ID_COOKIE]) emit(name, [undefined]);
 
   // NextAuth always writes its cookies host-scoped (no Domain), so host-only clearing suffices. Keeping
   // these host-only also keeps the total Set-Cookie header size small — emitting every NextAuth name ×

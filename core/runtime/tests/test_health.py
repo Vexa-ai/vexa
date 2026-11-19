@@ -5,9 +5,11 @@ from fastapi.testclient import TestClient
 from runtime_kernel import Runtime
 from runtime_kernel.api import create_app
 
+from _caller import TOKEN, caller_client
+
 
 def test_health_ok_when_dependencies_reachable():
-    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}))
+    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}), caller_token=TOKEN)
     client = TestClient(app)
     r = client.get("/health")
     assert r.status_code == 200
@@ -22,6 +24,7 @@ def test_health_503_when_a_probe_fails():
     app = create_app(
         Runtime(profiles={"test": ["sleep", "30"]}),
         health_checks={"scheduler": lambda: False},
+        caller_token=TOKEN,
     )
     client = TestClient(app)
     r = client.get("/health")
@@ -46,7 +49,7 @@ def test_health_503_when_store_unreachable():
         def count_for_owner(self, *a, **k): return 0
 
     rt.store = BrokenStore()
-    client = TestClient(create_app(rt))
+    client = caller_client(create_app(rt, caller_token=TOKEN))
     r = client.get("/health")
     assert r.status_code == 503
     assert r.json()["checks"]["store"] is False

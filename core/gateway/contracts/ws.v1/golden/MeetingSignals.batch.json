@@ -1,0 +1,15 @@
+{
+  "type": "meeting.signals",
+  "meeting": { "id": "42", "platform": "google_meet", "native_id": "abc-defg-hij" },
+  "annotations": [
+    {
+      "id": "1800000000000-0",
+      "segment_id": "seg-17",
+      "scores": { "decision": 0.91, "action_item": 0.12, "addressed_to_vexa": 0.0 },
+      "words": { "Friday": 0.82, "rollout": 0.64 },
+      "model": "signal-model",
+      "brief_version": 3,
+      "at": 1800000000.5
+    }
+  ]
+}

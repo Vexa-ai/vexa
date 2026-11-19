@@ -1,0 +1,1 @@
+{ "shape": "DeploymentDefault", "value": { "DEFAULT_TRANSCRIPTION_LANGUAGE": "de", "DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES": "de, en" }, "reason": "comma-separated codes, no spaces" }

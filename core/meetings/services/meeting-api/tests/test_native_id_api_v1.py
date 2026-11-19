@@ -9,7 +9,7 @@ proving the restored native-keyed surface:
     unknown native → 404; FSM-owned row → 409; a shared (non-owned) row → 404 (never mutable).
   * DELETE /meetings/{platform}/{native} — 200 + row gone; unknown → 404.
   * GET /bots/status — carries BOTH `running` and `running_bots` (sealed golden field), same list.
-  * GET /bots/{platform}/{native}/chat — owner boundary real (unowned → 404); honest empty list.
+  * GET /bots/{platform}/{native}/chat — owner boundary real (unowned → 404); no captured chat → empty list.
 
 Negative control for the acceptance table: the same requests on current v0.12.2 (no native route)
 return 404 — these tests are the green half of that red→green pair.

@@ -1,0 +1,13 @@
+{
+  "event": "routine.paused",
+  "owner": "agent",
+  "published_by": "private",
+  "cardinality": "once_per_occurrence",
+  "refs": [
+    "uid",
+    "routine",
+    "reason"
+  ],
+  "source_event_id": "routine-paused-<uid>-<routine_id>-<stream id of the third refused run> — keyed to the PAUSE: a redelivery dedupes, and a routine switched back on and paused again is a second occurrence and a second card",
+  "description": "A scheduled routine was switched off because its runs kept being refused the same way: agent-api reads each run's outcome off the worker's output stream (`done.refused`) before the next fire and, at three consecutive refusals with one reason, writes `enabled: false` and a `paused_reason:` line into `routines/<name>.md`, cancels its job and publishes this; triggers `routine_paused`, whose step re-reads the routine file and blocks while it stays off, which is the person's one queue card. `routine` is the file's name, `reason` the refusal reason (usually `human_session_required`). Re-derivable from the desk like `desk.unscaffolded`: a publish that never lands loses the card, never the fact. Absent from the no-agents profile because the agent domain is. NOT PUBLISHED FROM THIS TREE (`published_by: private`), on the same terms as claim.proposed: the publisher lives in the agent-api control plane."
+}

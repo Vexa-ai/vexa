@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from shared.token_destination import embed_token
 from control_plane.workspace_attach import (
     CloneError,
-    _authenticated_url,
     _git_clone,
     attached_workspaces,
     rename_workspace,
@@ -142,32 +142,28 @@ def test_compliant_repo_is_used_as_is(tmp_path):
 
     res = swap_workspace(root, "u1", str(origin), "main")
 
-    assert res.nested is False
+    assert not hasattr(res, "nested")
     assert (root / "u1" / "CLAUDE.md").read_text() == "CUSTOM ROOT"  # used directly
 
 
-def test_noncompliant_repo_is_nested_under_kg_of_a_template_workspace(tmp_path, monkeypatch):
-    """A clone with NO governance root is wrapped: a fresh template workspace is materialized and the
-    clone is nested under kg/<name>/ (its own .git dropped, folded into the governed workspace's git)."""
-    template = tmp_path / "template"
-    template.mkdir()
-    (template / "CLAUDE.md").write_text("TEMPLATE ROOT")
-    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(template))
-
+def test_plain_repo_becomes_an_independent_root_with_git_intact(tmp_path):
+    from control_plane.workspace_attach import activate_workspace, workspace_slot_dir
     root = tmp_path / "workspaces"
-    _seed_active(root, "u1")
-    origin = _make_repo(tmp_path / "data-repo", "RAW", compliant=False)  # no CLAUDE.md
-
-    res = swap_workspace(root, "u1", str(origin), "main")
-
-    assert res.nested is True and res.cloned is True
-    ws = root / "u1"
-    assert (ws / "CLAUDE.md").read_text() == "TEMPLATE ROOT"          # governed by the template root
-    assert (ws / "kg" / "data-repo" / "MARK").read_text() == "RAW"    # clone nested under kg/
-    assert not (ws / "kg" / "data-repo" / ".git").exists()            # nested clone's git was dropped
-    # the nested import is committed into the workspace repo (clean tree)
-    status = subprocess.run(["git", "-C", str(ws), "status", "--porcelain"], capture_output=True, text=True)
-    assert status.stdout.strip() == ""
+    personal = _seed_active(root, "u1", "PERSONAL")
+    origin = _make_repo(tmp_path / "plain", "RAW", compliant=False)
+    result = activate_workspace(root, "u1", origin, "main")
+    ws = workspace_slot_dir(root, "u1", result.slug)
+    assert result.cloned and not hasattr(result, "nested")
+    # a clone is used as it is, so the slot record carries no nesting flag any more
+    from control_plane.workspace_attach import attached_workspaces
+    assert "nested" not in attached_workspaces(root, "u1")["slots"][result.slug]
+    assert (ws / "MARK").read_text() == "RAW"
+    assert (ws / ".git").is_dir()
+    assert not (ws / "CLAUDE.md").exists()
+    assert not (ws / "kg").exists()
+    assert (personal / "CLAUDE.md").read_text() == "PERSONAL"
+    assert subprocess.check_output(["git", "-C", str(ws), "rev-parse", "HEAD"]) == subprocess.check_output(["git", "-C", origin, "rev-parse", "HEAD"])
+    assert subprocess.check_output(["git", "-C", str(ws), "remote", "get-url", "origin"], text=True).strip() == origin
 
 
 def test_requesting_active_repo_is_a_noop(tmp_path):
@@ -181,10 +177,10 @@ def test_requesting_active_repo_is_a_noop(tmp_path):
 
 
 def test_authenticated_url_embeds_token_for_https_only():
-    assert _authenticated_url("https://github.com/o/r.git", "TOK") == "https://TOK@github.com/o/r.git"
-    assert _authenticated_url("https://github.com/o/r.git", None) == "https://github.com/o/r.git"
-    assert _authenticated_url("git@github.com:o/r.git", "TOK") == "git@github.com:o/r.git"  # ssh: untouched
-    assert _authenticated_url("/local/path", "TOK") == "/local/path"                         # local: untouched
+    assert embed_token("https://github.com/o/r.git", "TOK") == "https://TOK@github.com/o/r.git"
+    assert embed_token("https://github.com/o/r.git", None) == "https://github.com/o/r.git"
+    assert embed_token("git@github.com:o/r.git", "TOK") == "git@github.com:o/r.git"  # ssh: untouched
+    assert embed_token("/local/path", "TOK") == "/local/path"                         # local: untouched
 
 
 def test_token_threads_to_clone_but_is_never_stored(tmp_path):

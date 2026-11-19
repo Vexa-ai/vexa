@@ -1,0 +1,42 @@
+/* Usage meter, limit card and level picker (features `usage` and `levels`), from the approved mock
+   (proto-on-product desktop/proto/proto.css). */
+.vx-us { position: relative; display: flex; justify-content: flex-end; padding: 0 8px 4px; }
+.vx-us-chip { font: inherit; font-size: 11px; color: var(--text-3); background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.vx-us-chip[data-full] { color: var(--warning-text); border-color: var(--warning); }
+.vx-us-pop { position: absolute; bottom: calc(100% + 4px); left: 8px; right: 8px; min-width: 240px; z-index: 50; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-1); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.vx-us-pop h4 { margin: 0; font-size: 13px; }
+.vx-us-row { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.vx-us-top { display: flex; justify-content: space-between; }
+.vx-us-row small, .vx-us-note { font-size: 11px; color: var(--text-3); margin: 0; }
+.vx-us-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.vx-us-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.vx-us-row[data-full] .vx-us-bar i { background: var(--warning); }
+.vx-us-limit { margin: 0; font-size: 12px; font-weight: 600; }
+.vx-us-acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; }
+.vx-us-btn { all: unset; box-sizing: border-box; cursor: pointer; font-size: var(--text-xs); color: var(--t1); padding: 3px 9px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); white-space: nowrap; }
+.vx-us-btn:hover { border-color: var(--line2); }
+.vx-us-btn[data-primary] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.vx-us-btn:disabled { opacity: .55; cursor: default; }
+.vx-us-card { display: flex; flex-direction: column; gap: 6px; max-width: 520px; margin: 8px 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); font-size: 13px; }
+.vx-us-card p { margin: 0; color: var(--text-2); font-size: 12px; }
+
+.vx-lv { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.vx-lv button { font: inherit; font-size: 11px; width: 22px; height: 22px; border: 1px solid var(--border); background: transparent; color: var(--text-2); border-radius: 6px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.vx-lv button[data-on] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.vx-lv-word { font-size: 11px; color: var(--text-3); margin-left: 4px; white-space: nowrap; }
+.vx-lv-badge { font: inherit; font-size: 11px; color: var(--text-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; background: transparent; white-space: nowrap; cursor: pointer; }
+.vx-lv-lock { position: relative; display: inline-flex; }
+.vx-lv-pop { position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 60; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px; min-width: 240px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-1); }
+
+/* THE MODEL CHIP (UI 7f) */
+.vx-mc { position: relative; display: inline-flex; }
+.vx-mc-pop { z-index: 1000; max-height: calc(100vh - 16px); overflow-y: auto; min-width: 260px; display: flex; flex-direction: column; gap: 2px; padding: 6px; background: var(--surface-1); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-1); }
+.vx-mc-row { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; border: 0; background: none; color: var(--text-1); font: inherit; text-align: left; border-radius: var(--radius-md, 6px); cursor: pointer; }
+.vx-mc-row[aria-checked="true"], .vx-mc-row:hover { background: var(--border-subtle); }
+.vx-mc-row small { color: var(--text-3); margin-left: auto; }
+.vx-mc-row kbd { font-size: 11px; color: var(--text-3); }
+.vx-mc-ask { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 8px; font-size: var(--text-xs); color: var(--text-2); }
+.vx-mc-effort { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--border-subtle); font-size: var(--text-xs); color: var(--text-3); }
+.vx-mc-effort button { font: inherit; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-subtle); background: none; color: var(--text-2); cursor: pointer; }
+.vx-mc-effort button[data-on] { background: var(--accent); color: var(--surface-1); border-color: var(--accent); }
+.vx-mc-more { border: 0; background: none; color: var(--text-2); font: inherit; font-size: var(--text-xs); text-align: left; padding: 6px 8px; cursor: pointer; }

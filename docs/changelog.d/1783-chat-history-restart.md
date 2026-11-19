@@ -1,0 +1,1 @@
+- A chat keeps its whole conversation. The worker no longer counts the agent CLI's own bookkeeping against the resume budget, so a busy chat resumes its session instead of starting over every few turns; and when a thread does start a fresh session, the chat still shows every earlier turn.

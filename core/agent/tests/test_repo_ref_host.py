@@ -101,9 +101,10 @@ def test_ipv4_mapped_ipv6_is_not_trusted_by_its_flags():
     assert _host_is_internal("[::ffff:10.0.0.1]:9000")
 
 
-def test_a_dotted_private_name_is_left_alone():
-    """A name with a dot is one somebody configured (a self-hosted mirror). Refusing it would break the
-    self-host case and close nothing: the deployment's own neighbours answer to bare labels."""
+def test_a_dotted_name_is_judged_by_where_it_resolves():
+    """A name with a dot is accepted when it leads somewhere public (the suite's resolver answers
+    with a public address); a bare label never is. Where a dotted name leads INSIDE the deployment,
+    see ``test_git_egress.py``."""
     assert not _host_is_internal("git.internal.example.com")
     assert _host_is_internal("git-internal")
 

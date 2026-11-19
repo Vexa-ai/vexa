@@ -4,17 +4,19 @@
  *
  * Flow: open the platform's sign-in page in the provisioning browser (headed locally, or
  * via the module's VNC flow inside a container) → a human signs in → `provisionLogin`
- * confirms with `validateLoggedIn` → the auth-essential subset of the profile is uploaded
+ * confirms with `validateLoggedIn` → the session profile (SESSION_PROFILE) is uploaded
  * to the deployment's userdata prefix (`syncBrowserDataToS3`). Every bot spawned by a
  * deployment configured with `BOT_AUTHENTICATED=true` then restores this session and
  * joins signed-in.
  *
- * Env (the SAME names meeting-api's spawn knob reads, one vocabulary per deployment):
+ * Env (the location uses the SAME names meeting-api's spawn knob reads):
  *   AUTH_PLATFORM            google | zoom | teams        (default: google)
  *   BOT_USERDATA_S3_PATH     userdata prefix, e.g. userdata/bot-identity-1
- *   BOT_S3_ENDPOINT          e.g. http://minio:9000
+ *   BOT_S3_ENDPOINT          e.g. http://localhost:18900
  *   BOT_S3_BUCKET            e.g. vexa
- *   BOT_S3_ACCESS_KEY / BOT_S3_SECRET_KEY   scoped userdata credentials — never admin creds
+ *   LOGIN_S3_ACCESS_KEY / LOGIN_S3_SECRET_KEY   a key pair that can WRITE the userdata prefix
+ *                            (on Compose: the storage's own MINIO_ACCESS_KEY / MINIO_SECRET_KEY).
+ *                            The bots' BOT_S3_* pair is read-only and cannot upload a session.
  *   LOGIN_PROFILE_DIR        where the live profile is written (default: BROWSER_DATA_DIR)
  *   LOGIN_TIMEOUT_MS         how long to wait for the human sign-in (default: 10 min)
  *
@@ -41,10 +43,18 @@ async function main(): Promise<number> {
     userdataS3Path: process.env.BOT_USERDATA_S3_PATH || undefined,
     s3Endpoint: process.env.BOT_S3_ENDPOINT || undefined,
     s3Bucket: process.env.BOT_S3_BUCKET || undefined,
-    s3AccessKey: process.env.BOT_S3_ACCESS_KEY || undefined,
-    s3SecretKey: process.env.BOT_S3_SECRET_KEY || undefined,
+    s3AccessKey: process.env.LOGIN_S3_ACCESS_KEY || undefined,
+    s3SecretKey: process.env.LOGIN_S3_SECRET_KEY || undefined,
   };
   const s3Configured = !!(s3.userdataS3Path && s3.s3Endpoint && s3.s3Bucket);
+  // Refuse before anyone signs in: the bots' BOT_S3_* pair is read-only by design, so an upload
+  // needs its own writer pair, and finding that out after the human sign-in wastes the sign-in.
+  if (s3Configured && !(s3.s3AccessKey && s3.s3SecretKey)) {
+    console.error('[provision-login] FAILED — set LOGIN_S3_ACCESS_KEY + LOGIN_S3_SECRET_KEY to a key pair ' +
+      'that can write the userdata prefix (on Compose: the storage\'s MINIO_ACCESS_KEY / MINIO_SECRET_KEY). ' +
+      'The bots\' BOT_S3_* pair is read-only and cannot upload a session.');
+    return 1;
+  }
 
   console.log(`[provision-login] platform=${platform} profileDir=${profileDir} ` +
     (s3Configured ? `upload → s3://${s3.s3Bucket}/${s3.userdataS3Path}` : 'no S3 config — profile dir only'));
@@ -65,11 +75,11 @@ async function main(): Promise<number> {
 
   const uploaded = syncBrowserDataToS3(s3, profileDir);
   if (uploaded === 0) {
-    console.error('[provision-login] FAILED — signed in, but zero auth-essential items reached ' +
+    console.error('[provision-login] FAILED — signed in, but zero session profile files reached ' +
       `s3://${s3.s3Bucket}/${s3.userdataS3Path} (see warnings above; check credentials/endpoint/aws CLI).`);
     return 1;
   }
-  console.log(`[provision-login] SUCCESS — ${uploaded} auth-essential items at ` +
+  console.log(`[provision-login] SUCCESS — ${uploaded} session profile file(s) at ` +
     `s3://${s3.s3Bucket}/${s3.userdataS3Path}/browser-data; authenticated bots will restore this session.`);
   return 0;
 }

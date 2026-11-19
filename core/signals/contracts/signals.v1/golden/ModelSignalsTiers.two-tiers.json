@@ -1,0 +1,1 @@
+{"cheapest": {"adapter": "openai-compatible", "route": "qwen-small", "base_url": "https://llm.internal.example/v1", "secret_ref": "none"}, "small": {"adapter": "jev", "route": "typesafe/jev-1.13", "secret_ref": "broker:signals/openrouter"}}

@@ -20,6 +20,9 @@ import { writeFileSync, readFileSync, readdirSync, mkdirSync, symlinkSync, rmSyn
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CONFIG_VALIDATE = join(ROOT, "deploy", "contracts", "config.v1", "validate.mjs");

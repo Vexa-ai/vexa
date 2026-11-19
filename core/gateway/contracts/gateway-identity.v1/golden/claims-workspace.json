@@ -1,0 +1,24 @@
+{
+  "delegation": {
+    "bills_to": 42,
+    "on_behalf_of": "43",
+    "principal_kind": "workspace",
+    "principal_workspace": "team-ws",
+    "regime": "human",
+    "shared": true,
+    "unit": "agent-ws-team-ws-room-s-room1",
+    "workspaces": [
+      "team-ws"
+    ]
+  },
+  "email": "ws-1042@principal.invalid",
+  "exp": 1760000060,
+  "iat": 1760000000,
+  "limits": 0,
+  "scopes": [
+    "bot",
+    "tx"
+  ],
+  "sub": "1042",
+  "typ": "vexa-identity"
+}

@@ -56,7 +56,8 @@ def _client_for(repo, storage):
 
 
 def _post_tape(client, *, part, data=TAPE, session_uid=SESSION_UID, fmt="jsonl", auth=None):
-    token = auth or mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+    token = auth or mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET,
+                                       session_uid=session_uid)
     return client.post(
         "/internal/recordings/upload",
         headers={"Authorization": f"Bearer {token}"},
@@ -165,8 +166,8 @@ def test_upload_route_accepts_a_signal_tape(monkeypatch):
 
 
 def test_upload_route_accepts_the_internal_secret(monkeypatch):
-    """The bot authenticates its tape with INTERNAL_API_SECRET, the same credential the recording
-    chunks and the lifecycle callback already use — no new secret crosses to the bot for this."""
+    """The internal tier may upload a tape (scoped by its session). A bot never holds it: the bot
+    authenticates with the MeetingToken minted for its session (tests/test_bot_credentials.py)."""
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
     repo, storage = _seeded()
     r = _post_tape(_client_for(repo, storage), part="stt", data=STT_TAPE, auth=INTERNAL)
@@ -195,7 +196,7 @@ def test_upload_route_still_serves_normal_recording_chunks():
 
     repo, storage = _seeded()
     client = _client_for(repo, storage)
-    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET, session_uid=SESSION_UID)
     r = client.post(
         "/internal/recordings/upload",
         headers={"Authorization": f"Bearer {token}"},
@@ -316,3 +317,36 @@ async def test_janitor_ignores_stray_objects_under_the_signal_prefix():
     await sweep_signal_tapes(storage, budget_bytes=1, now=NOW)
     assert storage.blobs["signal/README"] == b"not a tape"
     assert not any(k.startswith(p1) for k in storage.blobs)
+
+
+# ── a meeting's fixtures are erased through the tape keyspace's own prefix ──────────────────────
+
+async def test_meeting_fixture_deletion_erases_exactly_that_meetings_tapes():
+    from meeting_api.recordings.deletion import delete_meeting_fixtures
+    from meeting_api.recordings.jsonb import signal_meeting_prefix, signal_tape_key
+
+    storage = InMemoryStorage()
+    mine = [signal_tape_key(user_id=USER, meeting_id=1, session_uid=s, part="captured-signal")
+            for s in ("sess-a", "sess-b")]
+    mine.append(signal_tape_prefix(user_id=USER, meeting_id=1, session_uid="sess-a") + SIGNAL_PROMOTED_MARKER)
+    kept = [signal_tape_key(user_id=USER, meeting_id=12, session_uid="sess-c", part="captured-signal"),
+            signal_tape_key(user_id=USER + 1, meeting_id=1, session_uid="sess-d", part="captured-signal")]
+    for key in mine + kept:
+        await storage.upload(key, TAPE, content_type="application/x-ndjson")
+    assert all(k.startswith(signal_meeting_prefix(user_id=USER, meeting_id=1)) for k in mine)
+
+    deleted = await delete_meeting_fixtures(storage, user_id=USER, meeting_id=1)
+    assert sorted(deleted) == sorted(mine)
+    assert sorted(storage.blobs) == sorted(kept)
+
+
+async def test_meeting_fixture_deletion_derives_its_prefix_from_the_keyspace(monkeypatch):
+    """The delete names no keyspace of its own: move the tape prefix and the delete follows it."""
+    from meeting_api.recordings import deletion
+
+    storage = InMemoryStorage()
+    await storage.upload("moved/7/1/sess/captured-signal.jsonl", TAPE, content_type="application/x-ndjson")
+    monkeypatch.setattr(deletion, "signal_meeting_prefix",
+                        lambda *, user_id, meeting_id: f"moved/{user_id}/{meeting_id}/")
+    assert await deletion.delete_meeting_fixtures(storage, user_id=7, meeting_id=1) == [
+        "moved/7/1/sess/captured-signal.jsonl"]

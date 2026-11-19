@@ -28,6 +28,7 @@ facts it carried, so that nothing the mail actually knew is thrown away by refus
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import flows_config as cfg
@@ -46,8 +47,233 @@ QUARANTINE_TEMPLATE = (
     "directly.")
 
 
-def allow_domains(self_addr: str) -> set:
-    """The inbound allow-list: the declared value, else the mailbox's own domain."""
+# The refusal recorded when the company has switched invitations off (`bot_joins_on_invite: off`).
+INVITE_POLICY_OFF = "invite_policy_off"
+
+# A `From:` the sending domain did not vouch for (D25, H6): no DMARC pass, no aligned DKIM or SPF
+# pass in the receiving MTA's verdict. Treated as a stranger, whoever it names.
+UNAUTHENTICATED_MAIL = "unauthenticated_mail"
+
+
+# ── IS THE `From:` THE SENDER? (D25, H6) ─────────────────────────────────────────────────────────
+#
+# `From:` is a string anybody can type. A known user's address in it used to be enough to run a
+# turn in that user's own session. The domain vouches for its senders through DMARC, and the
+# receiving MTA records its verdict in `Authentication-Results` (RFC 8601). We read that verdict;
+# we never re-run SPF or DKIM here, and a mail carrying no verdict at all is unauthenticated.
+#
+# WHICH HEADER: the receiving MTA PREPENDS its own, so the TOPMOST one is ours and anything below it
+# came with the message (a sender can write any header it likes). `inbox.from_rfc822` keeps the
+# topmost. When `VEXA_FLOWS_MAIL_AUTHSERV_ID` names our MTA, a header that names any other is
+# ignored too.
+#
+# WHOSE VERDICT (`VEXA_FLOWS_MAIL_AUTH_MODE`): `mta` reads the MTA's header and nothing else. That
+# header is only as good as the MTA's habits: an authserv-id is public, and an MTA that writes no
+# header for some path leaves the sender's own on top (H6b). `inapp` does not read the header at
+# all: it verifies the message's DKIM signature here, from the RFC822 bytes, against the key the
+# signing domain publishes, and aligns it with the `From:` domain under that domain's DMARC record.
+# `both` requires the MTA's verdict AND the signature. SPF is not checked in-app: it needs the
+# connecting IP, which an IMAP reader never sees, so in-app DMARC is the DKIM half of DMARC.
+
+_COMMENT = re.compile(r"\([^()]*\)")
+_RESULT = re.compile(r"^\s*([a-z0-9_-]+)\s*=\s*([a-z0-9_-]+)(.*)$", re.IGNORECASE | re.DOTALL)
+_PROP = re.compile(r"([a-z0-9_-]+\.[a-z0-9_.-]+)\s*=\s*\"?([^\s;\"]+)\"?", re.IGNORECASE)
+
+
+def _domain(value: str) -> str:
+    v = str(value or "").strip().strip("<>").lower()
+    return v.rsplit("@", 1)[1] if "@" in v else v
+
+
+def _aligned(from_domain: str, other: str) -> bool:
+    """Relaxed alignment (RFC 7489 §3.1): the same domain, or one a parent of the other."""
+    a, b = from_domain.strip(".").lower(), other.strip(".").lower()
+    if not a or not b:
+        return False
+    return a == b or a.endswith("." + b) or b.endswith("." + a)
+
+
+def parse_auth_results(value) -> tuple[str, list[dict]]:
+    """``(authserv_id, [{method, result, props}])`` from one `Authentication-Results` value."""
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    text = _COMMENT.sub(" ", str(value or ""))
+    parts = [p.strip() for p in text.split(";")]
+    if not parts or not parts[0]:
+        return "", []
+    authserv = parts[0].split()[0].lower() if parts[0].split() else ""
+    out = []
+    for part in parts[1:]:
+        m = _RESULT.match(part)
+        if not m:
+            continue
+        props = {k.lower(): v.lower() for k, v in _PROP.findall(m.group(3) or "")}
+        out.append({"method": m.group(1).lower(), "result": m.group(2).lower(), "props": props})
+    return authserv, out
+
+
+AUTH_MODES = ("mta", "inapp", "both")
+
+
+def auth_mode() -> str:
+    """`VEXA_FLOWS_MAIL_AUTH_MODE`, or ValueError naming it. Unset is `mta`."""
+    mode = (cfg.get("VEXA_FLOWS_MAIL_AUTH_MODE") or "mta").lower()
+    if mode not in AUTH_MODES:
+        raise ValueError(f"VEXA_FLOWS_MAIL_AUTH_MODE={mode!r} — expected one of "
+                         + ", ".join(AUTH_MODES))
+    return mode
+
+
+def sender_authenticated(frm: str, headers: dict, raw: bytes = b"",
+                         txt=None) -> tuple[bool, str]:
+    """``(True, how)`` when the `From:` domain vouches for this mail, else ``(False, why)``.
+
+    `raw` is the message as received (RFC822 bytes), which in-app verification reads; `txt(name)
+    -> [str]` is the TXT lookup it uses, `dns_txt` unless injected. Fails closed: no verdict, a
+    verdict from another server, a verdict about another domain, a signature that does not verify
+    or does not align, an unknown mode and a DNS failure are none of them a pass."""
+    from_domain = _domain(frm)
+    if not from_domain:
+        return False, "the From: address has no domain"
+    try:
+        mode = auth_mode()
+    except ValueError as e:
+        return False, str(e)
+    if mode == "inapp":
+        return dkim_dmarc(from_domain, raw, txt or dns_txt)
+    ok, how = mta_verdict(from_domain, headers)
+    if mode == "mta" or not ok:
+        return ok, how
+    ok, how_inapp = dkim_dmarc(from_domain, raw, txt or dns_txt)
+    return ok, (f"{how}; {how_inapp}" if ok else how_inapp)
+
+
+def mta_verdict(from_domain: str, headers: dict) -> tuple[bool, str]:
+    """The receiving MTA's `Authentication-Results` verdict on `from_domain`."""
+    raw = None
+    for k, v in (headers or {}).items():
+        if str(k).lower() == "authentication-results":
+            raw = v
+            break
+    if not raw:
+        return False, "no Authentication-Results verdict on the message"
+    authserv, results = parse_auth_results(raw)
+    want = (cfg.get("VEXA_FLOWS_MAIL_AUTHSERV_ID") or "").strip().lower()
+    if want and authserv != want:
+        return False, f"the Authentication-Results verdict is not from {want}"
+    dmarc = [r for r in results if r["method"] == "dmarc"]
+    for r in dmarc:
+        hf = r["props"].get("header.from", from_domain)
+        # header.from IS the domain the MTA evaluated: it must be this From:'s, exactly
+        if r["result"] == "pass" and hf.strip(".") == from_domain:
+            return True, "dmarc=pass"
+    if any(r["result"] == "fail" for r in dmarc):
+        return False, "dmarc=fail for the From: domain"
+    # No DMARC pass to read (the domain publishes no policy, or the MTA did not evaluate it): an
+    # ALIGNED DKIM or SPF pass is what DMARC itself would have accepted.
+    for r in results:
+        if r["result"] != "pass":
+            continue
+        if r["method"] == "dkim" and _aligned(from_domain, r["props"].get("header.d", "")):
+            return True, "dkim=pass, aligned"
+        if r["method"] == "spf" and _aligned(from_domain, _domain(r["props"].get("smtp.mailfrom", ""))):
+            return True, "spf=pass, aligned"
+    return False, "no DMARC pass and no aligned DKIM or SPF pass for the From: domain"
+
+
+# ── in-app DKIM + DMARC ───────────────────────────────────────────────────────────────────────────
+
+DNS_TIMEOUT_S = 5
+
+
+def dns_txt(name: str) -> list[str]:
+    """The TXT strings at `name` (each record's chunks joined), [] when there is none. Raises on a
+    resolver failure, which every caller turns into a refusal."""
+    import dns.exception
+    import dns.resolver
+    try:
+        answer = dns.resolver.resolve(name, "TXT", lifetime=DNS_TIMEOUT_S)
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        return []
+    except dns.exception.DNSException as e:
+        raise OSError(f"DNS lookup for {name} failed: {type(e).__name__}") from None
+    return [b"".join(r.strings).decode("utf-8", "replace") for r in answer]
+
+
+def dmarc_record(from_domain: str, txt) -> tuple[str, dict]:
+    """``(domain, tags)`` of the DMARC record that governs `from_domain`: `_dmarc.<domain>` at the
+    domain itself, else at each parent up to the two-label one (the DNS tree walk). ``("", {})``
+    when no domain on the way publishes one."""
+    labels = from_domain.strip(".").split(".")
+    for i in range(0, max(len(labels) - 1, 1)):
+        domain = ".".join(labels[i:])
+        for rec in txt("_dmarc." + domain):
+            if rec.strip().lower().startswith("v=dmarc1"):
+                tags = {}
+                for part in rec.split(";"):
+                    k, _, v = part.partition("=")
+                    if k.strip():
+                        tags[k.strip().lower()] = v.strip().lower()
+                return domain, tags
+    return "", {}
+
+
+def dkim_dmarc(from_domain: str, raw: bytes, txt) -> tuple[bool, str]:
+    """Verify `raw`'s DKIM signatures here and apply DMARC's DKIM alignment to `from_domain`.
+
+    A pass is one signature that verifies against the key its `d=` publishes, signs the whole
+    body (no `l=`: a partial-body signature leaves whatever follows unsigned, and that text would
+    reach a prompt), and whose `d=` aligns with the `From:` domain: relaxed by default, exact when
+    the DMARC record says `adkim=s`. Anything else, including a DNS failure, is not a pass."""
+    import dkim
+
+    if not raw:
+        return False, "in-app: the message bytes are not available to verify"
+    try:
+        _org, policy = dmarc_record(from_domain, txt)
+    except Exception as e:  # noqa: BLE001 — any lookup failure is a refusal, named
+        return False, f"in-app: the DMARC lookup failed ({e})"
+    strict = policy.get("adkim") == "s"
+
+    def dnsfunc(name, timeout=DNS_TIMEOUT_S):
+        found = txt(name.decode("ascii", "replace") if isinstance(name, bytes) else str(name))
+        return found[0].encode() if found else None
+
+    d = dkim.DKIM(raw, minkey=1024, timeout=DNS_TIMEOUT_S)
+    sigs = sum(1 for k, _v in d.headers if k.lower() == b"dkim-signature")
+    if not sigs:
+        return False, "in-app: the message carries no DKIM signature"
+    seen = []
+    for idx in range(sigs):
+        try:
+            ok = d.verify(idx=idx, dnsfunc=dnsfunc)
+        except Exception as e:  # noqa: BLE001 — dkimpy raises on malformed input; not a pass
+            seen.append(f"signature {idx + 1}: {type(e).__name__}")
+            continue
+        signer = (getattr(d, "domain", b"") or b"").decode("ascii", "replace").lower()
+        if not ok:
+            seen.append(f"d={signer}: does not verify")
+            continue
+        if b"l" in (getattr(d, "signature_fields", {}) or {}):
+            seen.append(f"d={signer}: signs only part of the body (l=)")
+            continue
+        aligned = signer.strip(".") == from_domain.strip(".") if strict \
+            else _aligned(from_domain, signer)
+        if aligned:
+            return True, f"in-app: dkim=pass d={signer}, aligned" + (" (adkim=s)" if strict else "")
+        seen.append(f"d={signer}: not aligned with {from_domain}"
+                    + (" under adkim=s" if strict else ""))
+    return False, "in-app: no aligned DKIM pass (" + "; ".join(seen) + ")"
+
+
+def allow_domains(self_addr: str, rules: dict | None = None) -> set:
+    """The inbound allow-list, in the order every rule in this engine resolves:
+    `_global/POLICIES.md` (`mail_domains`, the admin account's answer) -> `VEXA_FLOWS_MAIL_DOMAINS`
+    (the operator's) -> the mailbox's own domain. `rules` is the resolved policy dict when the
+    caller already holds one; absent, the env and the fallback decide exactly as before."""
+    page = tuple((rules or {}).get("mail_domains") or ())
+    if page:
+        return {str(d).strip().lower().lstrip("@") for d in page if str(d).strip()}
     return cfg.domains("VEXA_FLOWS_MAIL_DOMAINS", fallback=(self_addr or ""))
 
 
@@ -75,8 +301,9 @@ def quarantine(db, *, ext_id: str, frm: str, kind: str, reason: str,
 
 
 def already_answered(db, frm: str) -> bool:
-    """Has this sender ever had the fixed line back? Once per address, ever — a stranger who keeps
-    writing gets rows, not replies, and a mail loop between two auto-responders cannot start."""
+    """Has this sender had the fixed line back? Once per address for as long as its quarantine rows
+    are kept (`VEXA_FLOWS_FACT_RETENTION_DAYS`, `flows.retention`) — a stranger who keeps writing
+    gets rows, not replies, and a mail loop between two auto-responders cannot start."""
     return bool(db.execute("SELECT 1 FROM mail_quarantine WHERE from_addr = :f AND replied_at IS NOT NULL",
                            {"f": (frm or "").strip().lower()}))
 

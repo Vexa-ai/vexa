@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "not_permitted",
+  "provider": "openrouter",
+  "model": "or-sonnet",
+  "status": null,
+  "detail": "Claude Sonnet via OpenRouter is open to admins only on this deployment.",
+  "remedy": "Pick another model for this chat."
+}

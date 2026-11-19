@@ -71,6 +71,9 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
       // reproduces the vexa-bot image's browser byte-for-byte — no drift.
       args: [
         ...getJoinBrowserArgs(),
+        // Chromium will not sandbox a browser running as root (this harness's container); the bot
+        // makes the same call in @vexa/remote-browser's launch.
+        ...(process.getuid?.() === 0 ? ["--no-sandbox", "--disable-setuid-sandbox"] : []),
         "--remote-debugging-port=9222", // CDP for the agent to attach
       ],
     });
@@ -101,7 +104,9 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
   try {
     result = await joinMeeting(page, {
       meetingUrl: url,
-      botName: "Vexa Join Layer (isolated)",
+      // Teams refuses parentheses (and most punctuation) in a display name: keep the default plain.
+      // BOT_NAME overrides it, e.g. to reproduce a refused name (#1780).
+      botName: process.env.BOT_NAME || "Vexa Join Layer",
       authenticated: !!AUTH_PROFILE,
       debug: true,
       hooks: {

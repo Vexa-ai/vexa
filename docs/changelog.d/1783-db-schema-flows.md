@@ -1,0 +1,1 @@
+- **gates:** `gate:db-schema` seals the flows tables too (`core/flows/schema.sql`, beside admin-api, meeting-api and the agent session store), and refuses a column added to a table that already exists unless the flows migrations add it in place (`ALTER TABLE … ADD COLUMN IF NOT EXISTS`) — `CREATE TABLE IF NOT EXISTS` never reaches a deployment that already holds the table.

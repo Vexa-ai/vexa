@@ -1,0 +1,25 @@
+{
+  "accounts": [
+    {
+      "id": "3f2a9c4e1b7d4e8fa0c6d5b2e9f1a7c3",
+      "owner": "user:42",
+      "platform": "google",
+      "display_name": "Notetaker (Google)",
+      "state": "ok",
+      "verified_at": "2026-10-13T09:15:00Z",
+      "created_at": "2026-10-12T16:02:11Z",
+      "created_by": "user:42",
+      "updated_at": "2026-10-13T09:15:00Z"
+    }
+  ],
+  "files": [
+    {
+      "path": "Default/Cookies",
+      "data": "Zml4dHVyZS1jb29raWUtYnl0ZXM="
+    },
+    {
+      "path": "Local State",
+      "data": "eyJmaXh0dXJlIjp0cnVlfQ=="
+    }
+  ]
+}

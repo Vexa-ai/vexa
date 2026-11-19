@@ -1,0 +1,22 @@
+{
+  "v": 2,
+  "producer": "crm",
+  "object": "card",
+  "owner": "11",
+  "visibility": "members",
+  "audience": [
+    "21",
+    "11",
+    "ws:sales"
+  ],
+  "lifecycle": {
+    "kind": "commitment",
+    "state": "proposed",
+    "next_actor": "11",
+    "next_check_at": "2026-10-18T09:00:00+00:00",
+    "handoff": "offered",
+    "summary": "what was promised"
+  },
+  "exp": 1792310700,
+  "sig": "fe088a40a4d632bb2015909983db6f0eee07148e496f69ec8a02d0af5dcedcd23cce98a556ef272c4ec3914d72cc22f4ed8bbb3bc33cd7972c36d5df1f9be603"
+}

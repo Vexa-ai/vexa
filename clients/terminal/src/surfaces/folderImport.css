@@ -1,0 +1,9 @@
+/* The folder sheet (FolderImport.tsx). Tokens only: no raw colours. */
+.fi-sheet { display: flex; flex-direction: column; gap: 12px; }
+.fi-col { display: flex; flex-direction: column; gap: 4px; }
+.fi-gap { margin-top: 10px; }
+.fi-gap-s { margin-top: 6px; }
+.fi-list { margin: 4px 0 0 16px; padding: 0; }
+.fi-input { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel2); color: var(--t1); }
+.fi-progress { width: 100%; }
+.fi-actions { display: flex; gap: 8px; justify-content: flex-end; }

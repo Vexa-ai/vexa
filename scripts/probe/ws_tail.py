@@ -28,7 +28,7 @@ ws_url = gateway.replace("http://", "ws://").replace("https://", "wss://").rstri
 acked = False
 with open(out_file, "w") as out:
     try:
-        ws = WS(f"{ws_url}/ws?api_key={api_key}", timeout=15)
+        ws = WS(f"{ws_url}/ws", timeout=15, headers={"X-API-Key": api_key})
     except Exception as e:  # noqa: BLE001 — the probe reads this line as the failure evidence
         out.write(json.dumps({"type": "probe-error", "error": str(e)}) + "\n")
         sys.exit(1)

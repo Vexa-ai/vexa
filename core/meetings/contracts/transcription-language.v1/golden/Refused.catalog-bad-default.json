@@ -1,0 +1,1 @@
+{"shape": "LanguageCatalog", "value": {"languages": [{"code": "en", "name": "English"}], "default": {"language": "de", "allowed_languages": ["en", "fr"]}, "model": "tiny.en", "source": "provider"}, "reason": "the default is a setting, held to the membership rule"}

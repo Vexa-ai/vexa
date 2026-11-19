@@ -301,3 +301,121 @@ export function createSilenceAlonenessSource(options: {
     },
   };
 }
+
+/** Heard remote audio, accumulated while no STT round-trip settles, before the lane is declared
+ *  deaf. Two minutes of audible meeting with no transcription attempt at all is no pause a
+ *  transcription lane takes on its own: its tick submits every few seconds of speech. */
+export const DEFAULT_DEAF_LANE_AUDIBLE_MS = 2 * 60 * 1000;
+
+export interface DeafLaneIncident {
+  /** Remote audio heard since the last settled STT round-trip. */
+  audibleMs: number;
+  /** Wall time since the last settled STT round-trip (or since capture became ready). */
+  sinceSttMs: number;
+  framesDelivered: number;
+}
+
+/** The typed STT fault a deaf lane is recorded as — the same accumulator, and so the same terminal
+ *  lifecycle `stt_fault`, every refused STT call reaches. */
+export function deafLaneFault(i: DeafLaneIncident): { source: 'stt'; kind: 'lane_deaf'; detail: string } {
+  return {
+    source: 'stt', kind: 'lane_deaf',
+    detail: `${Math.round(i.audibleMs / 1000)}s of remote audio heard with no STT round-trip for ${Math.round(i.sinceSttMs / 1000)}s`,
+  };
+}
+
+export interface DeafLaneMonitor {
+  /** One STT round-trip settled (result or typed fault) — the lane is attempting transcription. */
+  noteTranscribe(): void;
+  /** `transcribe` with every settled round-trip noted. The call and every property the lane reads
+   *  off the closure (the STT client's back-pressure gate) pass through unchanged. */
+  watch<T extends (...args: never[]) => Promise<unknown>>(transcribe: T): T;
+  /** Start polling; returns the stop function. */
+  start(): () => void;
+}
+
+/**
+ * The deaf-LANE guard — the sibling of the deaf-capture guard one hop further down the chain.
+ * Capture-fault is "streams are connected and no frames arrive"; this is "frames with energy keep
+ * arriving and the transcription lane never asks STT about them". The second shape is otherwise
+ * invisible: CPU stays busy, the segmenter keeps running, the meeting reads `active`, no error is
+ * raised anywhere, and the transcript simply stops.
+ *
+ * It counts HEARD time (poll intervals in which a delivered frame carried energy) since the last
+ * STT round-trip settled, so a quiet room never accumulates toward it and sparse noise accumulates
+ * slowly. Crossing `audibleMs` is one incident: stated loudly, re-stated every
+ * CAPTURE_FAULT_LOG_INTERVAL_MS while it persists, and handed to `onDeaf` once (the typed report
+ * the terminal lifecycle event carries). The next settled round-trip ends the incident.
+ */
+export function createDeafLaneMonitor(options: {
+  activity: RemoteAudioActivitySource;
+  audibleMs?: number;
+  now?: () => number;
+  pollMs?: number;
+  setInterval?: TimerScheduler['setInterval'];
+  clearInterval?: TimerScheduler['clearInterval'];
+  log?: (message: string) => void;
+  onDeaf?: (incident: DeafLaneIncident) => void;
+}): DeafLaneMonitor {
+  const now = options.now ?? Date.now;
+  const pollMs = options.pollMs ?? DEFAULT_ALONENESS_POLL_MS;
+  const threshold = options.audibleMs ?? DEFAULT_DEAF_LANE_AUDIBLE_MS;
+  const setIntervalFn = options.setInterval ?? ((callback, ms) => setInterval(callback, ms));
+  const clearIntervalFn = options.clearInterval ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
+  const log = options.log ?? ((message) => console.error(`[bot] ${message}`));
+
+  let lastSttAt: number | null = null;
+  let audibleMs = 0;
+  let lastHeardAt: number | undefined;
+  let lastTickAt: number | null = null;
+  let deafSince: number | null = null;
+  let deafLoggedAt: number | null = null;
+
+  const tick = (): void => {
+    const at = now();
+    const snapshot = options.activity.snapshot();
+    const elapsed = lastTickAt === null ? 0 : at - lastTickAt;
+    lastTickAt = at;
+    if (!snapshot.available) { audibleMs = 0; lastHeardAt = undefined; return; }
+    if (lastSttAt === null) lastSttAt = at;     // the clock starts when capture can hear
+    const heard = snapshot.lastRemoteAudioAt;
+    if (heard !== undefined && heard !== lastHeardAt) {
+      if (lastHeardAt !== undefined) audibleMs += elapsed;
+      lastHeardAt = heard;
+    }
+    if (audibleMs < threshold) return;
+    const incident: DeafLaneIncident = { audibleMs, sinceSttMs: at - lastSttAt, framesDelivered: snapshot.framesDelivered ?? 0 };
+    if (deafSince === null) {
+      deafSince = at;
+      try { options.onDeaf?.(incident); } catch { /* a report must never break the monitor */ }
+    }
+    if (deafLoggedAt === null || at - deafLoggedAt >= CAPTURE_FAULT_LOG_INTERVAL_MS) {
+      deafLoggedAt = at;
+      log(`DEAF LANE: ${Math.round(incident.audibleMs / 1000)}s of remote audio heard and no STT round-trip for`
+        + ` ${Math.round(incident.sinceSttMs / 1000)}s (frames_delivered=${incident.framesDelivered},`
+        + ` deaf_for_ms=${at - deafSince}) — audio is arriving and is not being transcribed`);
+    }
+  };
+
+  const noteTranscribe = (): void => {
+    lastSttAt = now();
+    audibleMs = 0;
+    if (deafSince !== null) log(`DEAF LANE cleared: STT round-trip after ${now() - deafSince}ms deaf`);
+    deafSince = null;
+    deafLoggedAt = null;
+  };
+
+  return {
+    noteTranscribe,
+    watch<T extends (...args: never[]) => Promise<unknown>>(transcribe: T): T {
+      const watched = (...args: Parameters<T>) => transcribe(...args).finally(noteTranscribe);
+      return Object.assign(watched, transcribe) as unknown as T;
+    },
+    start(): () => void {
+      const handle = setIntervalFn(tick, pollMs);
+      (handle as { unref?: () => void })?.unref?.();
+      let stopped = false;
+      return () => { if (!stopped) { stopped = true; clearIntervalFn(handle); } };
+    },
+  };
+}

@@ -39,38 +39,38 @@ Meeting: Google Meet bay-npte-svc
 
 ### Setup
 - 1 recorder bot (meeting 31, user 0 / admin)
-- 3 speaker TTS bots: Karl Moll (meeting 32), Dmtiry Grankin (meeting 33), Eddie Knight (meeting 34)
+- 3 speaker TTS bots: Alex Morrow (meeting 32), Dmtiry Grankin (meeting 33), Chris Lane (meeting 34)
 - Source: `/home/dima/dev/meeting_saved_closed_caption.txt` — 449 utterances, 9 speakers
-- Replayed: 15 utterances (14 Karl Moll, 1 Dmtiry Grankin) via OpenAI TTS voices (alloy, echo, fable)
+- Replayed: 15 utterances (14 Alex Morrow, 1 Dmtiry Grankin) via OpenAI TTS voices (alloy, echo, fable)
 
 ### Results
 | Metric | Value |
 |--------|-------|
 | Utterances sent | 15 (+ 1 test) |
 | Transcriptions captured (recorder) | 20 total (10 pre-existing + 10 from replay) |
-| TTS replay transcriptions | 9 Karl Moll + 1 Dmtiry Grankin = 10 |
-| Speakers detected | 2 of 3 bots used (Eddie Knight's lines came later in transcript) |
-| Speaker attribution accuracy | 100% — all Karl Moll TTS → "Karl Moll", Dmtiry TTS → "Dmtiry Grankin" |
+| TTS replay transcriptions | 9 Alex Morrow + 1 Dmtiry Grankin = 10 |
+| Speakers detected | 2 of 3 bots used (Chris Lane's lines came later in transcript) |
+| Speaker attribution accuracy | 100% — all Alex Morrow TTS → "Alex Morrow", Dmtiry TTS → "Dmtiry Grankin" |
 | Content accuracy | ~85-90% |
 | Whisper avg latency | 232ms |
 | Confirm latency | 12.8s |
 | Whisper failures | 0/95 |
 
 ### Speaker Attribution Detail
-- Karl Moll (TTS bot, voice=alloy) → Attributed as "Karl Moll" ✓ (9/9)
+- Alex Morrow (TTS bot, voice=alloy) → Attributed as "Alex Morrow" ✓ (9/9)
 - Dmtiry Grankin (TTS bot, voice=echo) → Attributed as "Dmtiry Grankin" ✓ (1/1)
-- Eddie Knight (TTS bot, voice=fable) → No utterances sent (his lines appear later in transcript)
+- Chris Lane (TTS bot, voice=fable) → No utterances sent (his lines appear later in transcript)
 
 ### Content Accuracy Notes
 - Short consecutive utterances from same speaker get merged (expected with rapid TTS playback)
-- "Karl Moll" name transcribed as "Carl Maul" in one instance (phonetic variation)
+- "Alex Morrow" name transcribed as "Alec Morro" in one instance (phonetic variation)
 - "See you next time" appears as final transcription — likely Whisper hallucination on trailing silence
 - 15 utterances sent → 10 transcriptions captured — some short utterances merged or below VAD threshold
 
 ### Cross-Bot Hearing
 Each speaker bot also transcribes what it hears (cross-hearing):
-- Meeting 33 (Dmtiry bot) heard 9 Karl Moll utterances
-- Meeting 34 (Eddie bot) heard 9 Karl Moll + 1 Dmtiry Grankin
+- Meeting 33 (Dmtiry bot) heard 9 Alex Morrow utterances
+- Meeting 34 (Chris bot) heard 9 Alex Morrow + 1 Dmtiry Grankin
 
 ### Recorder Bot Telemetry (meeting 31)
 - whisper=95 calls (232ms avg, 0 failed)
@@ -86,7 +86,7 @@ Speaker attribution works perfectly for **known bot names** (bot name matches sp
 3. Short utterances (< 3 words) sometimes merge with the next utterance rather than appearing separately
 
 ### Untested
-- Eddie Knight voice (fable) — his utterances are later in the transcript
+- Chris Lane voice (fable) — his utterances are later in the transcript
 - Simultaneous/overlapping speech from multiple TTS bots
 - More than 3 concurrent speaker bots
 - Speakers with names not matching their bot display name

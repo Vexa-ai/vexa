@@ -18,6 +18,9 @@ import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 

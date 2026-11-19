@@ -13,7 +13,8 @@
 services:
   # Nginx load balancer — the single front door (least-conn across workers).
   transcription-api:
-    image: nginx:alpine
+    # Pinned by digest (= nginx:alpine-slim on 2026-10-24; core modules only, which nginx.conf uses). Bump it on purpose, never implicitly.
+    image: nginx:alpine-slim@sha256:f45171d36c76a8b2f5ef97108a3a8a2294248a6578a0a180edc2d78f7d2edc26
     ports:
       - "${TRANSCRIPTION_LB_PORT:-8083}:80"
     volumes:

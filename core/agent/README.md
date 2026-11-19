@@ -3,7 +3,8 @@
 ## Purpose
 This module is the **execution domain**: it turns a trigger (a chat turn, a fired
 schedule, an external event, a live transcript beat) into a **governed agent action**
-committed to a user's `workspace.v1` git repo. It owns 8 control-plane contracts and houses
+committed to a user's `workspace.v1` git repo (owned by [`core/workspaces`](../workspaces),
+PRD decision 47 — this domain consumes it). It owns 7 control-plane contracts and houses
 the `agent-api` service — the one Dispatcher that funnels every trigger through a single
 `unit.v1` envelope and spawns an isolated `runtime.v1` agent worker. The worker reaches models
 and coding-agent CLIs only through the provider-agnostic [`llm`](llm) module (completion +
@@ -15,8 +16,7 @@ personal + normal single-rank workspaces, the sharing model, and live in-meeting
 documented in **[`docs/docs/core/workspaces.mdx`](../../docs/docs/core/workspaces.mdx)**.
 
 ## Boundary (SoC)
-**This domain is about:** the copilot lifecycle, chat, the user's `workspace.v1`, notes/cards, and agent
-config. **It is never about:** bot lifecycle, the meeting row, or *owning* the **transcript carrier**.
+**This domain is about:** chat, the user's `workspace.v1`, agent turns and agent config. **It is never about:** bot lifecycle, the meeting row, or *owning* the **transcript carrier**.
 
 The agent **may hold, compose, and serve meeting data downstream** — *once it has acquired it legally*,
 through a **published contract**: the gateway's `/transcripts` API (e.g. the meeting-scoped read tool) or
@@ -31,20 +31,29 @@ lives in the cookbook layer *above* both domains, never inside this one. See
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
 | consumes | meetings | `meetings/contracts/transcript.v1` (redis stream `transcription_segments` / `tc:meeting:<id>`) | transcript beats → live cards + `session_end` |
-| consumes | gateway / terminal | `POST /api/chat`, `POST /events`, `POST /invocations`, `POST /api/routines` | chat turns, external events, routine authoring |
+| consumes | gateway / terminal | `POST /api/chat`, `POST /api/routines` | a person's chat turns (never a worker's: a delegated identity is refused) and routine authoring |
+| consumes | the internal tier · the runtime's scheduler | `POST /events` (internal tier only), `POST /invocations` (internal tier, or a routine job this service signed — `X-Vexa-Dispatch-Signature`, `control_plane/dispatch_sink.py`) | external events and fired routines; the caller is authenticated before the body, which names the person, is read |
+| verifies | gateway | `gateway/contracts/gateway-identity.v1` (`X-Vexa-Identity`, `control_plane/identity_token.py`) | the caller's identity, signed by the edge with a key only it holds (agent-api holds the public key); an unsigned `x-user-*` header is believed only from the internal tier (`X-Internal-Secret`) |
+| publishes | gateway's MCP service | `mcp.tools.v1.json` at `/.well-known/mcp-tools.json` (routes in `mcp.tools.v1.openapi.json`) | the agent's tools — workspaces and their page verbs, the claim book, membership, the transcript highlight, Connections, the person's clock, `chat_name` — served by the one assembled MCP server to a person's client and to every worker; `tests/test_prompt_tools_served.py` holds every tool a product prompt names to that served set |
 | consumes | identity | `identity/contracts/identity.v1` (`IdentityPort.mint`) | per-dispatch signed token, `canAccess` |
-| spawns-over | runtime | `runtime/contracts/runtime.v1` (profile `agent`) | worker `env`: mounted workspaces, token, redis topics, `start` |
-| produces | workspace | `agent/contracts/workspace.v1` (git repo) | typed `kg/entities/*` with `EntityFrontmatter` |
+| spawns-over | runtime | `runtime/contracts/runtime.v1` (profile `agent`) | worker `env`: mounted workspaces, token, redis topics, `start`, and the toolbelt (`VEXA_MCP_URL` = the gateway's `/mcp`, a per-dispatch delegation token) |
+| produces | workspace | `workspaces/contracts/workspace.v1` (git repo) | typed `kg/entities/*` with `EntityFrontmatter` |
 | publishes | gateway / surfaces | `gateway/contracts/ws.v1` (redis `unit:<id>:out`, mode `card`) | turn events + `proactive-card.v1` outputs |
-| calls | scheduler | `schedule.v1` (a `routine.v1` `kind:scheduled` compiles to a cron job) | a `unit.v1` Invocation as the cron body |
+| calls | scheduler | `schedule.v1` — only the one-time routine migration lists and cancels old routine jobs (ADR-0046) | nothing new is armed: a routine is a person's own flow |
+| serves | agent workers | the model proxy (`control_plane/model_proxy.py`, `python -m control_plane.model_proxy`, port 8102) | a worker's model requests (`/llm/*`) and its harness's toolbelt (`/mcp`), each with that turn's token; agent-api seals the route — API key, models, delegation token — in Redis, and the proxy presents the real credential. No worker holds a provider API key or the toolbelt bearer (H5/W1); a deployment subscription stays with the vendor's own CLI |
+| calls | credential broker (this domain's own service) | `contracts/credential-broker.v1`, roles `agent` and `git` | Connections requests and results, each agent-role call with the gateway's `X-Vexa-Identity` for the person forwarded unchanged; never a stored credential |
+| owns | Postgres · S3 | `agent_session*` tables (`control_plane/session_store.py`, schema of record `_DDL`; role and tables made by `control_plane/session_schema.py init` on the migrations path) · the `vexa-sessions` bucket (`control_plane/session_blobs.py`, boto3) | the session store (ADR-0048): conversations, participants and transcript versions. agent-api logs in as its own role and uses a key scoped to its own bucket; `session_access.py` (the two gates and the leak rule), `session_turn.py` (gate, speak rule, leak rule per message), `session_sync.py` (hand-in and save-back), `session_migrate.py` (old layout → store), `worker/session_carry.py` (the worker side), `routers/sessions.py` (participants) |
 
 ## Contracts
 **Owns:** [`unit.v1`](contracts/unit.v1) · [`routine.v1`](contracts/routine.v1) ·
-[`workspace.v1`](contracts/workspace.v1) · [`event.v1`](contracts/event.v1) ·
+[`event.v1`](contracts/event.v1) ·
 [`tool.v1`](contracts/tool.v1) · [`task.v1`](contracts/task.v1) ·
-[`invoke.v1`](contracts/invoke.v1) · [`proactive-card.v1`](contracts/proactive-card.v1).
-Only `invoke.v1` + `workspace.v1` are pinned in `contracts.seal.json`; the rest are
+[`invoke.v1`](contracts/invoke.v1) · [`proactive-card.v1`](contracts/proactive-card.v1) ·
+[`credential-broker.v1`](contracts/credential-broker.v1).
+Only `invoke.v1` is pinned in `contracts.seal.json`; the rest are
 **UNSEALED** (sealed per-MVP). **Consumes:** `meetings/contracts/transcript.v1`,
+[`workspaces/contracts/workspace.v1`](../workspaces/contracts/workspace.v1) (moved out of this
+domain, PRD decision 47 step 1 — still sealed in `contracts.seal.json`, now under its own path),
 `runtime/contracts/runtime.v1`, `identity/contracts/identity.v1`, `gateway/contracts/ws.v1`.
 
 ## Isolated evaluation
@@ -59,8 +68,10 @@ Only `invoke.v1` + `workspace.v1` are pinned in `contracts.seal.json`; the rest 
 - ✅ delivered — one `unit.v1` Dispatcher; every trigger (message/scheduled/event/transcription) → one path
 - ✅ delivered — chat dispatch, warm-session resume, workspace git commit (`workspace.v1`)
 - ✅ delivered — generic event ingress (`event.v1` → `unit.v1`) and tool mechanism (`tool.v1` → `--allowedTools` + injected MCP)
-- ✅ delivered — routines: `routine.v1` `kind:scheduled` compiles to a `schedule.v1` cron job
-- ✅ delivered — live in-meeting copilot: transcript stream → propose-only beats → `proactive-card.v1`
+- ✅ delivered — routines are a person's own flows (ADR-0046): old `routines/*.md` files and routine jobs are converted once at startup; `/api/routines` is a deprecated adapter onto flows until 0.14.0
+- 🗑 removed (PRD decision 34) — the live in-meeting copilot (transcript stream → propose-only
+  beats → `proactive-card.v1`) and the `processed-notes.v1` stream it produced. The product runs no
+  model calls of its own beside the agent; a meeting reaches the agent over the MCP.
 - 🟡 partial — most owned contracts UNSEALED (sealed per-MVP); `invoke.v1` retired once the meetings path migrates
 - ⬜ planned — `routine.v1` gains a `target` (agent|meeting) so a routine can schedule a bot
 - ⬜ planned — `workspace.v1` meeting-entity convention (a meeting becomes `kg/entities/meeting/*`)

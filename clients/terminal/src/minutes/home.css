@@ -1,0 +1,35 @@
+/* The new-chat home (#1783) — tokens only, so light and dark follow tokens.css. */
+.vx-home { max-width: 1180px; margin: 0 auto; text-align: left; padding-top: 2vh; }
+.vx-home-greet h2 { font-size: var(--text-xl); font-weight: var(--weight-semibold); color: var(--t1); margin: 0 0 3px; letter-spacing: -.01em; }
+.vx-home-greet p { margin: 0; color: var(--t2); font-size: var(--text-md); }
+/* as many columns as fit (3 wide, 2 medium, 1 on a phone), and a row's cards share its width, so
+   the stream never leaves an empty cell (founder, UI lab 2026-10-14) */
+.vx-home-stream { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; align-items: flex-start; }
+.vx-home-stream > .vx-blk-card { flex: 1 1 300px; }
+.vx-home-stream > .vx-blk-card.wide, .vx-home-stream.one > .vx-blk-card { flex-basis: 100%; }
+.vx-home-left { margin-top: 12px; font-size: var(--text-xs); color: var(--t3); }
+@media (max-width: 640px) { .vx-home-stream > .vx-blk-card { flex-basis: 100%; } }
+.vx-home-composer { margin: 16px auto 0; max-width: 760px; display: flex; flex-direction: column; gap: 9px; }
+.vx-home-starters { margin: 10px auto 0; max-width: 760px; display: flex; flex-wrap: wrap; gap: 6px; }
+.vx-home-greet { max-width: 760px; margin: 0 auto; }
+.vx-home-toast { position: sticky; bottom: 12px; margin: 12px auto 0; width: max-content; max-width: 100%; display: flex; gap: 12px; align-items: center;
+  padding: 8px 12px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--line2); box-shadow: var(--shadow-1); font-size: var(--text-sm); color: var(--t1); }
+.vx-home-toast button { background: none; border: 0; color: var(--accent); font: inherit; font-weight: var(--weight-semibold); cursor: pointer; }
+
+/* the people you have interacted with: faces and names in a wrapping strip, then "All people (N)" */
+.vx-people-strip { max-width: 1180px; margin: 14px auto 0; }
+.vx-people-faces { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.vx-people-face { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--t1);
+  border-radius: var(--radius-full); padding: 2px 10px 2px 2px; font-size: var(--text-sm); cursor: pointer; }
+.vx-people-face:hover { border-color: var(--line2); }
+.vx-people-face:not([data-has-page]) { cursor: default; }
+.vx-people-name { white-space: nowrap; }
+.vx-people-more { border: 0; background: none; color: var(--accent-text); font-size: var(--text-sm); cursor: pointer; padding: 2px 6px; }
+.vx-people-all { margin-top: 10px; border: 1px solid var(--line2); border-radius: var(--radius-lg); background: var(--panel); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.vx-people-all-head { display: flex; gap: 8px; align-items: center; }
+.vx-people-search { flex: 1; min-width: 0; border: 1px solid var(--line2); border-radius: var(--radius-md); background: var(--panel2); color: var(--t1); padding: 6px 10px; font-size: var(--text-sm); }
+.vx-people-close { border: 0; background: none; color: var(--t2); font-size: var(--text-md); cursor: pointer; }
+.vx-people-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.vx-people-filters button { border: 1px solid var(--line2); background: none; color: var(--t2); border-radius: var(--radius-full); padding: 2px 10px; font-size: var(--text-xs); cursor: pointer; }
+.vx-people-filters button[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-text); border-color: transparent; }
+.vx-people-grid { display: flex; flex-wrap: wrap; gap: 6px; max-height: 360px; overflow: auto; }

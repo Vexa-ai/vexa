@@ -1,0 +1,14 @@
+{
+  "author": "agent:flow-9",
+  "created_at": "2026-10-15T09:00:00+00:00",
+  "id": "3d1012fe-11d4-49a0-9bd9-5b6993c77ead",
+  "ops": [
+    {
+      "by": "workspace",
+      "op": "group",
+      "section": "files"
+    }
+  ],
+  "reason": "You have many files",
+  "summary": "Grouped Files by workspace"
+}

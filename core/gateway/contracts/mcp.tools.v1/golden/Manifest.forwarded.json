@@ -1,0 +1,67 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "agent",
+  "source": "oss",
+  "owner": "core/agent",
+  "base_url_env": "AGENT_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": [
+    "identity"
+  ],
+  "forward": {
+    "edge_prefix": "/agent/",
+    "upstream_prefix": "/api/"
+  },
+  "tools": [
+    {
+      "name": "workspace_tree",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/tree"
+      },
+      "arguments": [
+        "hidden",
+        "slug"
+      ]
+    },
+    {
+      "name": "mail_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/mail/{message_id}"
+      },
+      "arguments": [
+        "message_id"
+      ]
+    },
+    {
+      "name": "mail_open",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/mail/{message_id}"
+      },
+      "arguments": [
+        "message_id"
+      ],
+      "alias_of": "mail_read"
+    }
+  ]
+}

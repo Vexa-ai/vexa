@@ -1,0 +1,61 @@
+/* THE CALL UI'S AREA STYLESHEET — CallButton, CallDock and CallRoom (terminal design guidelines §8,
+ * G2r). Every colour, radius, space, shadow and layer reads a token from app/tokens.css; a pixel
+ * value stays literal only where no token equals it. Layout geometry (display, flex, gap, sizes,
+ * offsets) stays inline at the call site. */
+
+/* ── shared type ─────────────────────────────────────────────────────────────────────────────── */
+.vx-call-chip { font-family: var(--sans); font-size: var(--text-xs); font-weight: var(--weight-medium); }
+.vx-call-meta { font-family: var(--sans); font-size: 11px; font-weight: var(--weight-regular); color: var(--t3); }
+.vx-call-meta[data-tone="accent"] { color: var(--accent); line-height: 1.4; }
+.vx-call-alert { color: var(--danger); }
+
+/* ── CallButton: Call / Join call · N / Review · N ──────────────────────────────────────────── */
+.vx-callbtn {
+  font-family: var(--sans); font-size: var(--text-xs); font-weight: var(--weight-medium);
+  border: 1px solid var(--line2); border-radius: var(--radius-md); padding: var(--space-0_5) 9px;
+  background: transparent; color: var(--t1); cursor: pointer;
+}
+.vx-callbtn[data-live] { color: var(--accent); }
+.vx-callbtn[data-close] { float: right; padding: 0 var(--space-1_5); }
+.vx-call-in { color: var(--accent); }
+
+/* ── ReviewPanel: the owner's review after a call ────────────────────────────────────────────── */
+.vx-call-review {
+  z-index: var(--z-popover); background: var(--sidebar); border: 1px solid var(--line2);
+  border-radius: var(--radius-lg); padding: 10px; box-shadow: var(--shadow-1);
+}
+.vx-call-review-head { margin-bottom: var(--space-2); line-height: 1.5; }
+.vx-call-proposal { border-top: 1px solid var(--line); padding: var(--space-2) 0; }
+.vx-call-proposal-kind { color: var(--t2); }
+.vx-call-proposal-body {
+  margin-top: var(--space-1); font-family: var(--mono); font-size: var(--text-xs);
+  background: var(--bg); color: var(--t1); border: 1px solid var(--line); border-radius: var(--radius-md);
+}
+.vx-call-proposal-acts { margin-top: var(--space-1); }
+
+/* ── CallDock: the call stays on screen while you move between chats ─────────────────────────── */
+/* the dock is the top of the conversation column (never an overlay over the right panel): one compact
+   bar (callkit/CallBar), the tiles under it only while a camera or a screen is on */
+.vx-calldock { background: var(--sidebar); color: var(--t1); border-bottom: 1px solid var(--line); }
+.vx-callroom { background: transparent; color: inherit; }
+.vx-calldock-docked { position: relative; flex: none; width: 100%; max-height: 50vh; overflow: visible; box-sizing: border-box; padding: 6px 12px; }
+.vx-calldock .vx-cb-devices ul { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.vx-calldock .vx-cb-devices button { width: 100%; text-align: left; padding: 3px 6px; border: none; border-radius: var(--radius-sm); background: none; color: var(--t1); font-size: var(--text-xs); cursor: pointer; }
+.vx-calldock .vx-cb-devices [data-lk-active="true"] button { background: var(--accent-tint); color: var(--accent-text); }
+/* ── a page shown to everyone (CallShowBar, callShow.ts) ─────────────────────────────────────── */
+.vx-show { display: flex; align-items: center; gap: 8px; min-height: 30px; margin-top: 4px; padding: 2px 8px; border-radius: var(--radius-md);
+  background: var(--accent-tint); color: var(--t1); font-family: var(--sans); font-size: var(--text-xs); }
+.vx-show svg { flex: none; color: var(--accent-text); }
+.vx-show-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+::highlight(vexa-show) { background-color: var(--accent-tint); color: inherit; }
+[data-show-highlight] { background: var(--accent-tint); border-radius: var(--radius-sm); }
+
+/* THE DOCK FLOATS WHEN ANOTHER VIEW COVERS THE CONVERSATION (founder, live app.dev 2026-10-18): the same
+   element, so the room stays connected; a compact bar above Meetings, Inbox, People and the pages sheet,
+   below popovers and dialogs. Kit surface and a line, no solid fill (7r). */
+.vx-calldock-floating { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  z-index: var(--z-drawer); width: min(760px, calc(100vw - 32px)); max-height: 40vh; overflow: visible; box-sizing: border-box;
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-2); }
+@media (max-width: 520px) {
+  .vx-calldock-floating { left: 16px; right: 16px; width: auto; transform: none; bottom: calc(8px + env(safe-area-inset-bottom)); padding: 4px 8px; }
+}

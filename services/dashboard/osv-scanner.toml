@@ -1,0 +1,7 @@
+# OSV-Scanner allow list for this directory's package-lock.json (the scanner reads the config beside
+# each lockfile); security/known-advisories.md carries the reasoning.
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2026-12-31
+reason = "braces 3.0.3, stack exhaustion on deeply nested patterns; no fixed release exists. A dev dependency only (eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch), run at lint time over the repository's own globs; it is not in the dashboard image."

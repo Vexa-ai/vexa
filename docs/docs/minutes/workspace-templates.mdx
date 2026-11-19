@@ -1,0 +1,110 @@
+---
+title: "Workspace templates"
+description: "Start a workspace from a template — event organization, client project, meeting series, research, the company's own or one you saved — by asking in the chat."
+---
+
+A **workspace template** is a set of pages a new workspace starts with, plus the questions to ask
+before creating it. Vexa ships four:
+
+| Template | Pages it creates | Asks |
+|---|---|---|
+| **Event organization** | overview, run of show, speakers, sponsors & budget, attendees & comms, tasks, venue logistics, follow-up | name, date, venue, capacity, organizers |
+| **Client project** | overview, meetings, decisions, deliverables, risks | client, project, deadline, contacts |
+| **Meeting series / community** | overview, members, notes, decisions, next agenda | name, cadence, purpose |
+| **Research** | question, sources, interviews, findings, answer | question, decision it informs, due date |
+
+Each also lists **suggested routines**, for example a weekly organizer digest or an RSVP watcher for
+an event. They are suggestions: nothing is switched on until you ask for it.
+
+## What you can do
+
+- **Create from a template.** Say *"create a workspace for our meetup from the event template"*.
+  The agent asks the template's questions in one message, creates the workspace with your answers
+  filled in, and the chat writes to it from then on. An unanswered question is marked *to decide*
+  in the pages.
+- **Create a shared workspace from an empty chat.** The **Create a shared workspace** starter asks
+  what it is for, picks a template, creates it, makes an invite link (or offers to share by email),
+  and offers a calendar event that carries the link. Nobody is invited until you say yes.
+- **Save a workspace as a template.** Say *"save this workspace as a template called board meeting"*.
+  Its pages (not its records or history) become your own template, offered from then on.
+- **Change the company's templates.** As the [admin account](/minutes/admin-account), ask in its
+  chat. The company's templates are edited there and every change can be undone from the history.
+
+| Message | Why | What to do |
+|---|---|---|
+| *no workspace template called 'x'* | the name is not a template you can use | the message lists the ones there are |
+| *you already have a template called 'x'* | saving over your own template | say replace, or pick another name |
+| *the admin account works on the company layer only* | the admin account has no workspaces | sign in with your everyday account |
+
+## How it works
+
+1. **Where templates live.** The company's are in `_global/workspace-templates/<name>/`; yours are
+   in your Personal workspace under `templates/workspaces/<name>/`. Yours win when the names match.
+   Each is a `TEMPLATE.md` manifest (title, description, when to use it, `## Creates`,
+   `## Questions`, `## Suggested routines`) plus the pages; a page may carry a placeholder for each
+   answer.
+2. **Seeds.** The four built-in templates ship in the agent-api image (`behavior/workspace-templates`)
+   and are copied into `_global/workspace-templates/` at boot when missing. A copy that is already
+   there is never overwritten, so an edit by the admin account survives every upgrade.
+3. **Create.** `workspace_create` runs the same create as `workspace_new`, then writes the template's
+   pages with the answers filled in and commits them in the new workspace. The answer names the
+   pages, the questions left unanswered, and the suggested routines.
+4. **Save.** `workspace_template_save` copies a workspace's pages (not `kg/entities/`, history or
+   settings) into your Personal workspace and commits them there.
+
+| Tool | Route (agent-api) | Who |
+|---|---|---|
+| `workspace_templates_list` | `GET /api/workspace/templates` | any signed-in person |
+| `workspace_create` | `POST /api/workspace/create` | any signed-in person; refused to the admin account |
+| `workspace_template_save` | `POST /api/workspace/templates/save` | any signed-in person, into their own Personal; refused to the admin account |
+
+### Who writes what, and configuration
+
+| Data | Written by |
+|---|---|
+| `_global/workspace-templates/` | the seed at boot (missing files only) and the admin account |
+| `templates/workspaces/` in a Personal workspace | `workspace_template_save`, for that person only |
+| a new workspace's pages | `workspace_create`, once, in the new workspace |
+
+The image's seed directory is `/app/behavior/workspace-templates`; `VEXA_WORKSPACE_TEMPLATES_DIR`
+points it elsewhere. With no company templates in `_global`, the list falls back to the image's copy.
+
+## Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| **P23** one writer per carrier | company templates are written only by the admin account (through `_global`'s page door) and by the additive seed; a person's own templates only by save, into their own Personal | ungated: reviewed; tests below |
+| **P6** one front door | three agent-api routes, each an MCP tool on the existing edge rows | `gate:domain-doors`, gateway `test_route_manifests.py` |
+| **P18** fail closed and soft | `_global` without templates falls back to the image's seeds; an unknown template is refused by name before anything is created | tests below |
+| **P20** authorize every access | create and save act on the caller's own workspaces only; the admin account is refused both | `admin_account_scope`, tests below |
+
+**Tests.** `core/agent/tests/test_workspace_templates.py` (the four seeds parse, seeds reach `_global`
+without overwriting an edit, list, create with answers, unknown template, yours over the company's,
+save then create from it, focus on the new workspace);
+`clients/terminal/src/minutes/__tests__/proposals.test.ts` (the starter).
+
+### Security
+
+**Who can do what.** Any signed-in person lists templates and creates a workspace from one, which
+starts private and theirs. Saving reads a workspace the person can read and writes only into their
+own Personal workspace. The admin account is refused both create and save. An agent acting for a
+person is held to its chat's workspace scope when it names a workspace to save.
+
+**Protections.**
+
+- Answers are capped in length, and template markers inside an answer are removed before they are
+  filled in.
+- Template pages are read and written through the workspace path guard, so a template cannot write
+  outside the new workspace.
+- Saving skips entity records, history, settings, flows and skills.
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_delegation_ceiling_verbs.py` · `test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes` (the `templates/save` case) | a delegated run saves no workspace outside its ceiling |
+| `core/agent/tests/test_workspace_templates.py` · `test_create_with_unknown_template_names_the_ones_there_are`, `test_seeds_reach_global_additively_and_an_edit_is_never_overwritten` | nothing is created from an unknown template; an edited company template is never overwritten |
+| `core/agent/tests/test_admin_account.py` · `test_every_refused_door_is_a_route_this_app_serves` | the admin account's refusal list names routes this app serves |
+
+## Related
+
+- [Workspaces](/minutes/workspaces)
+- [Admin account](/minutes/admin-account)

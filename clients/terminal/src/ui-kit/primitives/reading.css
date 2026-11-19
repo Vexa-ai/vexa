@@ -1,0 +1,63 @@
+/* READING — chat answers and pages, made comfortable to read (founder 2026-10-15: "work on better
+ * and comfy readability for chat and pages"). Layered over prose.css; every value is a token or a
+ * proportion of the reading size, so the Appearance font and text-size choices carry through.
+ *
+ *   measure   a column of about 70 characters, centred, in chat and on a page
+ *   body      16px, line-height 1.6, paragraphs 0.8em apart, a step softer than the headings
+ *   headings  a clear scale, balanced wrapping, tight leading, more room above than below
+ *   chips     sit on the text's baseline and never make a line taller than its neighbours */
+
+/* ── the column ─────────────────────────────────────────────────────────────────────────────── */
+.vx-read-col { max-width: calc(var(--read-measure) + var(--space-8)); margin-inline: auto; }
+.vx-doc-body > .vx-prose, .vx-doc-body > .c-1, .vx-doc-body .vx-pagehead, .vx-doc-body .vx-backlinks { max-width: var(--read-measure); margin-inline: auto; }
+.vx-doc-body { padding-inline: var(--space-6); }
+
+/* ── body ───────────────────────────────────────────────────────────────────────────────────── */
+.vx-prose { font-size: var(--read-size); line-height: var(--read-leading); color: var(--text-body); font-family: var(--font-reading, var(--font-sans));
+  text-rendering: optimizeLegibility; font-kerning: normal; hanging-punctuation: first; }
+.vx-prose p { margin: 0 0 0.8em; line-height: var(--read-leading); }
+.vx-prose p:last-child { margin-bottom: 0; }
+.vx-prose strong { color: var(--text-1); font-weight: var(--weight-semibold); }
+:root:not([data-theme="light"]) .vx-prose { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+/* ── headings: the scale, balanced, tight, more room above than below ──────────────────────── */
+.vx-prose-h { color: var(--text-1); line-height: 1.25; text-wrap: balance; letter-spacing: -0.005em; margin: 1.6em 0 0.5em; }
+.vx-prose > .vx-prose-h:first-child, .vx-prose > :first-child .vx-prose-h:first-child { margin-top: 0; }
+.vx-prose-h[data-level="1"] { font-size: 1.6em; letter-spacing: -0.012em; margin-top: 1.2em; }
+.vx-prose-h[data-level="2"] { font-size: 1.3em; letter-spacing: -0.008em; }
+.vx-prose-h[data-level="3"] { font-size: 1.1em; }
+.vx-prose-h[data-level="4"] { font-size: 1em; color: var(--text-2); }
+.vx-pagehead-title { font-size: 1.85rem; line-height: 1.2; text-wrap: balance; letter-spacing: -0.015em; }
+
+/* ── lists ─────────────────────────────────────────────────────────────────────────────────── */
+.vx-prose ul, .vx-prose ol { margin: 0 0 0.8em; padding-left: 1.4em; gap: 0.3em; }
+.vx-prose li { line-height: var(--read-leading); padding-left: 0.15em; }
+.vx-prose li::marker { color: var(--text-3); }
+.vx-prose li > ul, .vx-prose li > ol { margin: 0.3em 0 0.1em; }
+
+/* ── tables: room, row separators, numbers that line up, scroll inside the table only ───────── */
+.vx-prose-table { margin: 0.4em 0 1em; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); }
+.vx-prose table { font-size: 0.92em; line-height: 1.45; font-variant-numeric: tabular-nums; }
+.vx-prose th { background: var(--surface-2); border: 0; border-bottom: 1px solid var(--border); padding: 0.55em 0.8em; color: var(--text-1); white-space: nowrap; }
+.vx-prose td { border: 0; border-bottom: 1px solid var(--border-subtle); padding: 0.55em 0.8em; color: var(--text-body); }
+.vx-prose tr:last-child td { border-bottom: 0; }
+.vx-prose tbody tr:nth-child(even) td { background: var(--surface-2); }
+
+/* ── code ──────────────────────────────────────────────────────────────────────────────────── */
+.vx-prose .vx-code, .vx-prose :not(pre) > code { font-size: 0.88em; padding: 0.1em 0.35em; border-radius: var(--radius-sm); background: var(--surface-2); }
+.vx-prose .vx-code-block, .vx-prose pre { font-size: 0.86em; line-height: 1.5; margin: 0.4em 0 1em; padding: 0.85em 1em; }
+
+/* ── chips and links: on the baseline, never taller than the line ──────────────────────────── */
+.vx-prose .vx-inline-chip, .vx-bubble .vx-inline-chip { line-height: 1.25; padding-block: 0; height: auto; vertical-align: baseline;
+  font-size: 0.9em; border-width: 0; box-shadow: inset 0 0 0 1px var(--border); }
+.vx-prose .vx-inline-chip svg, .vx-bubble .vx-inline-chip svg { width: 0.95em; height: 0.95em; }
+.vx-prose a { text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
+
+/* ── quotes and callouts: calm ─────────────────────────────────────────────────────────────── */
+.vx-prose blockquote { border-left: 2px solid var(--border); padding-left: 1em; margin: 0.4em 0 1em; color: var(--text-2); }
+.vx-prose .vx-callout { margin: 0.4em 0 1em; }
+
+/* ── the chat: room between turns, the steps line quiet ────────────────────────────────────── */
+.vx-read-col .vx-turn { margin-bottom: var(--space-6); }
+.vx-read-col .vx-turn-steps, .vx-read-col .vx-turn-meta { opacity: 0.85; }
+.vx-bubble { font-size: calc(var(--read-size) - 1px); line-height: 1.5; font-family: var(--font-reading, var(--font-sans)); }

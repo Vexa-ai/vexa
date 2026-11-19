@@ -7,8 +7,8 @@ The Vexa runtime is modeled as code using **[FINOS CALM](https://calm.finos.org/
 Language Model). There is **one chart** — the repo-root
 [`architecture.calm.json`](https://github.com/Vexa-ai/vexa/blob/main/architecture.calm.json) — the
 single source of truth; [`calm/`](https://github.com/Vexa-ai/vexa/tree/main/calm) holds the governance
-controls and the reusable pattern that validate it. Two CI gates keep it honest: `pnpm gate:calm` (FINOS
-pattern conformance) and `pnpm gate:dataflow` (model↔disk completeness, ownership enforcement, and a
+controls and the reusable pattern that validate it. Two CI gates keep it honest: `pnpm gate:calm` (CALM 1.2
+validity, control requirements and pattern conformance, on the pinned calm-cli) and `pnpm gate:dataflow` (model↔disk completeness, ownership enforcement, and a
 reality diff against the code) — so the architecture description can't silently drift from the system.
 
 ## What's modeled
@@ -32,14 +32,18 @@ stores (postgres, object storage), and the **first-party, self-hostable STT** bo
 
 ## Controls (governance, machine-checked)
 
-The model carries [governance](/architecture/governance) controls, each backed by a JSON-Schema
-requirement in `calm/controls/`:
+The model carries [governance](/architecture/governance) controls. Each one names its requirement by
+repository path (`calm/controls/<control>.requirement.json`, a JSON Schema built on the CALM 1.2
+control-requirement), so `calm validate` run from the repository root checks every control's
+configuration against its schema with no URL mapping and no network. `gate:calm` fails when a
+requirement does not resolve:
 
-- **single-writer (P23)** — every data carrier declares exactly one producer; readers never re-derive a
-  producer's data.
+- **single-writer (P23)** — every data carrier declares the producers allowed to write it (one, or a
+  named shared set); readers never re-derive a producer's data.
 - **render-only** — the terminal renders transcript and cards; it never re-derives or republishes.
-- **data-egress** — the `bot → transcription` edge declares its egress posture. Default is
-  **tenant-hosted**, so meeting audio need not leave the tenant.
+- **data-egress** — every edge that carries tenant data to another system declares its posture: audio to
+  `transcription` (**tenant-hosted** by default), transcript lines to the signal model, agent turns to the
+  model provider, and webhook deliveries to customer URLs.
 
 ## The pattern
 
@@ -50,7 +54,8 @@ omits the egress control or the render-only client is rejected:
 
 ```bash
 pnpm gate:calm
-# = calm validate -p calm/patterns/meeting-intelligence.pattern.json -a architecture.calm.json
+# = calm-cli 1.65.0: calm validate -a architecture.calm.json
+#                    calm validate -p calm/patterns/meeting-intelligence.pattern.json -a architecture.calm.json
 ```
 
 Because the model is standard CALM, you can also `calm generate` a conformant starter architecture from the

@@ -1,0 +1,12 @@
+{
+  "actions": [
+    "acknowledge",
+    "deliver",
+    "decline"
+  ],
+  "card": "fc8e39a6-ed25-484f-9afc-5f3333b90937",
+  "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expires_at": "2026-10-17T09:15:00+00:00",
+  "nonce": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+  "revision": 1
+}

@@ -1,0 +1,30 @@
+/* THE TAG CARD (0.13.4 S4, D21) and the switch consent card: one inline card face (7g). Tokens only;
+   light and dark come from the theme. One primary per card face (ui-design §4, D33). */
+.vx-tagcards { display: flex; flex-direction: column; gap: var(--space-2); margin: 0 0 var(--space-2); }
+.vx-tagcards-row { position: relative; }
+.vx-tagcards-close { position: absolute; top: var(--space-2); right: var(--space-2); min-width: 24px; min-height: 24px;
+  display: inline-grid; place-items: center; border: 0; background: none; color: var(--text-3); border-radius: var(--radius-sm); cursor: pointer; }
+.vx-tagcards-close:hover { background: var(--surface-2); color: var(--text-1); }
+.vx-tagcards-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.vx-tagcard { container-type: inline-size; display: flex; flex-direction: column; gap: var(--space-2); min-width: 0;
+  padding: var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+  background: var(--surface-1); color: var(--text-2); font-size: var(--text-sm); }
+.vx-tagcard[data-folded] { flex-direction: row; align-items: center; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+.vx-tagcard[data-folded] > svg { flex: none; color: var(--text-3); }
+.vx-tagcard-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); padding-right: var(--space-6); min-width: 0; }
+.vx-tagcard-k { font-size: var(--text-xs); color: var(--text-3); }
+.vx-tagcard-title { color: var(--text-1); font-weight: var(--weight-semibold); min-width: 0; overflow-wrap: break-word; }
+.vx-tagcard-only { font-size: var(--text-xs); color: var(--text-3); margin-left: auto; }
+.vx-tagcard-fold { flex: 1; min-width: 0; color: var(--text-2); overflow-wrap: break-word; }
+.vx-tagcard-fields { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-3); margin: 0; }
+.vx-tagcard-fields dt { color: var(--text-3); font-size: var(--text-xs); }
+.vx-tagcard-fields dd { margin: 0; min-width: 0; overflow-wrap: break-word; color: var(--text-1); }
+/* the decision row wraps; the rule never sits inside a button (7q; PRD §11.2 F2) */
+.vx-tagcard-acts { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.vx-tagcard-note { display: flex; align-items: center; gap: var(--space-1); margin: 0; font-size: var(--text-xs); color: var(--text-3); }
+.vx-tagcard-err { margin: 0; font-size: var(--text-xs); color: var(--danger-text); }
+@container (max-width: 400px) {
+  .vx-tagcard-fields { grid-template-columns: 1fr; }
+  .vx-tagcard-acts > .vx-btn { flex: 1 1 100%; justify-content: center; }
+  .vx-tagcard-only { margin-left: 0; }
+}

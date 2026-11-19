@@ -12,7 +12,8 @@
 #   deploy/lite/tests/concurrent-bots.sh # then prove N bots launch concurrently
 #
 # PASS = all N bots reach `joining` and their browsers stay alive through the
-# window, each on its OWN profile dir, zero SingletonLock signatures.
+# window, each on its OWN profile dir and its OWN X display (no bot can capture
+# another's screen), zero SingletonLock signatures.
 #
 # Posting the attestation (optional, from a checkout with `gh` authed):
 #   POST_STATUS=1 GIT_SHA=<released sha> deploy/lite/tests/concurrent-bots.sh
@@ -84,7 +85,7 @@ done
 # the spawn is (correctly) refused with 503 by the STT-config gate, since the lite
 # smoke env wires no transcription backend. (The real fresh-install STT-gate defect
 # a user hits with the default transcribe_enabled=true is a product issue, #502/#504.)
-X bash -c 'rm -f /tmp/vexa-workloads/*.log 2>/dev/null; true'
+X bash -c 'rm -f /var/lib/vexa-runtime/logs/*.log 2>/dev/null; true'
 ids=()
 for i in $(seq 1 "$N_BOTS"); do
   mid=$(printf 'aaa-smk%02d-bot' "$i")
@@ -98,7 +99,7 @@ sleep "$WINDOW"
 
 # ── assertions ──
 # 1) zero SingletonLock signatures in any workload log
-if X bash -c 'grep -l "Opening in existing browser session" /tmp/vexa-workloads/*.log 2>/dev/null' | grep -q .; then
+if X bash -c 'grep -l "Opening in existing browser session" /var/lib/vexa-runtime/logs/*.log 2>/dev/null' | grep -q .; then
   die "SingletonLock signature present — shared profile dir regression (#478)"
 fi
 # 2) every bot's meeting is alive in joining/awaiting/active (not failed)
@@ -116,6 +117,12 @@ done
 dirs=$(X bash -c 'ls -d /tmp/browser-data-* 2>/dev/null | wc -l')
 [ "$dirs" -ge "$N_BOTS" ] || die "expected ≥$N_BOTS per-bot profile dirs, found $dirs"
 echo "per-bot profile dirs: $dirs ✓"
+# 3b) each bot on its OWN X display, served by its own Xvfb as its own uid; no bot can open or capture
+#     another's screen, and a uid without a cookie opens none (tests/bot_displays.py, run as root inside)
+docker exec -i "$APP" python3 - < "$(dirname "$0")/bot_displays.py" || die "bots' X displays are not isolated"
+# 3c) each bot's browser sandboxed, holding none of the bot's environment; only bots (and the runtime
+#     that starts them) may create user namespaces (tests/bot_browsers.py)
+docker exec -i "$APP" python3 - < "$(dirname "$0")/bot_browsers.py" || die "bots' browsers are not sandboxed"
 
 # 4) the live-transcript SSE stream AUTHORIZES for the meeting's OWNER (#585 regression).
 #    agent-api owner-scopes /agent/meeting/stream by calling meeting-api GET /meetings/{id}; on lite

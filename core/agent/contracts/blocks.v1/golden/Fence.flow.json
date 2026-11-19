@@ -1,0 +1,11 @@
+{
+ "v": 1,
+ "people": {},
+ "blocks": [
+  {"type": "title", "text": "What this routine would do"},
+  {"type": "flow", "flow": {"name": "unanswered-inbox-sweep",
+   "trigger": {"kind": "schedule", "cron": "*/15 * * * *"},
+   "steps": ["agent_run"],
+   "instruction": "Check every source for items awaiting a reply and rebuild inbox/unanswered.md."}}
+ ]
+}

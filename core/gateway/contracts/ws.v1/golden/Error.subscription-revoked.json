@@ -1,0 +1,1 @@
+{ "type": "error", "error": "subscription_revoked", "details": { "platform": "google_meet", "native_id": "abc-defg-hij" } }

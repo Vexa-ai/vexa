@@ -57,6 +57,11 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/sessions"             # list sess
 curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/sessions/<id>/history"
 ```
 
+In the terminal, the chat list has its own controls: rename, reorder, reopen history, copy a
+meeting transcript and delete. See [Manage your chats](/how-to/chat-controls). With the
+`openai-agent` harness, a turn that needs many tool calls keeps going past its first 40; see
+[Long agent turns](/agent-tool-calls).
+
 ## Build a cross-source briefing
 
 The agent grounds its answer in everything the workspace holds, so you can ask it to pull a topic together
@@ -68,9 +73,115 @@ across past meetings and emails:
 
 This is the **knowledge agent** pattern — the output is anchored in
 accumulated context, and each run leaves the workspace a little more complete.
+To fill a new workspace from your own mail and the web in one go, see
+[Onboarding research and Extend](/how-to/onboarding-research).
 
 <Note>
 A `rejected` frame means governance blocked the write. Trusted chat may write; untrusted triggers (email,
 web) are propose-only — see [Governance](/architecture/governance) and
 [Troubleshooting](/troubleshooting#agent-write-was-rejected).
 </Note>
+
+## Import a repository
+
+Ask the chat to import a repository URL as a new workspace, or use **Load an existing
+repository**. The repository's files and Git history stay at its root; Personal and
+other workspaces remain available. A repository does not need a `CLAUDE.md` file.
+
+For a private repository, register the displayed deploy key on the repository first.
+When that key is configured, a GitHub HTTPS URL can use it without changing the URL
+by hand. A saved or explicitly selected HTTPS token takes precedence for HTTPS URLs.
+
+Large imports report progress while cloning. Only **completed** confirms success;
+then **Open workspace** opens the imported workspace. If the browser connection fails,
+retry the same URL and branch to recover the existing operation. An interrupted
+operation requires checking the workspace before retrying.
+
+The chat uses `workspace_import` and `workspace_import_status`. A public web page's
+404 is not an access check for a private repository.
+
+
+## Drop a folder
+
+Drag a folder from your computer onto the app (the chat list, a chat, or an empty chat) and it
+becomes a workspace. On a phone, or anywhere you cannot drag, open the workspace menu in the chat
+header and choose **New workspace from folder…**. Files dropped into a chat are still attached, as
+before; only a folder becomes a workspace.
+
+Before anything is uploaded, a sheet shows:
+
+- the name, which is the folder's name until you change it;
+- how many files will be imported and how large they are;
+- what is left out and why;
+- where the files go. By default this is a new workspace that only you can see. You can share it
+  later from the workspace's page.
+
+**What is never imported:** `.git` internals; dependency and build folders (`node_modules`,
+`.venv`, `__pycache__`, `.next` and the like); system files such as `.DS_Store`; anything the
+folder's own `.gitignore` files exclude; `.env` and every `.env.*` file; private keys and other
+credential files. A file whose contents contain a private key or a token is also left out when it
+arrives, even if its name looks harmless. The sheet names every one of these, so nothing is dropped
+without you seeing it.
+
+**Limits.** By default a folder can hold up to 200 MB and 10,000 files, and no single file can be
+larger than 25 MB. The administrator sets these with three keys in `_global/POLICIES.md`:
+`folder_import_max_mb`, `folder_import_max_files` and `folder_import_file_max_mb`. A folder over
+either total limit is refused before anything is uploaded. A file over the per-file limit is listed
+and left out.
+
+**A git repository.** If the folder is a git repository with a remote, the sheet first offers
+**Link to &lt;remote&gt;**. This is the same import as [Import a repository](#import-a-repository): the
+history and the remote are kept, and pull and push work. Copying the files instead is the second
+choice.
+
+**Onto a workspace.** Drop the folder on a workspace chip in the chat header, or on a chat that
+writes to a workspace other than Personal, and the sheet offers **Add into &lt;workspace&gt;/&lt;folder&gt;**
+first. A folder already in that workspace with the same name is kept; the new one is stored as
+`<folder>-2`. You need contributor access to add files to a shared workspace.
+
+The files are saved in one commit, with you as its author. When the import finishes, the chat shows
+one line with a link to the new workspace. If you ask the agent about the import, it can read it
+with `workspace_folder_import_status`. Only the browser uploads files.
+
+## How it works
+
+1. **Gateway.** `POST /agent/chat` is a `stream` route in `core/agent/routes.v1.json`. The gateway
+   relays it as server-sent events to agent-api's `/api/chat` with the signed caller identity.
+2. **Who asks.** agent-api takes you from that identity and ignores any `subject` in the body. A
+   worker acting under a delegation token cannot start a chat turn.
+3. **Dispatch.** The turn becomes one `unit.v1` envelope (`core/agent/shared/units.py`). The trigger
+   is `message`, so your workspace is mounted `rw`; event and transcription triggers get `ro`.
+4. **The turn.** The worker runs the harness and writes its frames (`message-delta`, `tool-call`,
+   `tool-result`, `done`) to the Redis stream `unit:<id>:out`. agent-api relays them; each event's
+   `id:` is a cursor, and a reconnect with `Last-Event-ID` re-attaches to the same turn without
+   running it twice.
+5. **Write-back.** When the turn ends, every mounted workspace that changed is committed and a
+   `commit` frame carries the sha. `POST /agent/chat/reset` drops the session from your index and
+   deletes its continuity file.
+6. **A dropped folder.** The browser walks the folder without entering dependency folders and sends
+   only paths, sizes and `.gitignore` text to `POST /agent/workspace/folder/plan`. agent-api
+   (`control_plane/folder_import.py`) applies every skip rule and the limits from `_global/POLICIES.md`,
+   then stores the plan under the caller's own `.imports/<subject>/folders`. The bytes follow in batches
+   of at most 8 MB (`…/folder/{plan_id}/files`, because the gateway buffers each request). On each
+   batch, agent-api checks every path against the plan again, applies the per-file and total limits, and
+   scans the contents for keys and tokens. `…/finish` creates the workspace with the same
+   `create_workspace` that **New workspace** uses, or writes into an existing workspace through the same
+   `_write_dir` rule every workspace write uses. Then it commits once, authored by the person, with the
+   platform as the committer.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P4 — sealed contracts | The dispatch is `unit.v1`; the route is a row in `routes.v1.json`. | `gate:schema`, `gate:contract-version` |
+| P23 — one writer per carrier | The worker alone writes `unit:<id>:out`; agent-api only relays it. | `gate:dataflow` |
+| P20 — authorize every access | The subject comes only from the gateway's signed identity; naming nobody is `401`. | `test_identity_guard.py`: `test_an_unsigned_identity_is_refused`, `test_naming_nobody_is_401_and_there_is_no_fallback_subject` |
+| Trust decides write access | Chat and schedules write; external input is propose-only. | `test_events.py`: `test_event_with_inline_plan_maps_to_conformant_unit_with_opaque_ref` |
+| Person in the loop | A delegated worker is refused with reason `delegated_dispatch`. | `test_person_in_the_loop.py`: `test_refuse_delegated_refuses_every_regime_with_its_own_reason` |
+| No double turn | A reconnect resumes the same unit. | `test_api.py`: `test_chat_resume_reattaches_without_a_second_dispatch` |
+| Never import secrets silently | `.env*`, key and credential names are refused at the plan; key and token contents are refused when the bytes arrive; each is listed on the sheet. | `test_folder_import.py`: `test_an_env_file_is_refused_even_when_uploaded_against_the_plan`, `test_a_private_key_inside_an_innocent_name_is_caught_by_content` |
+| Limits enforced by the server | The caps are read from `_global/POLICIES.md` on every plan and checked again on every batch; an unreadable value refuses the import. | `test_folder_import.py`: `test_limits_come_from_policy_and_are_enforced_on_the_plan_and_the_bytes`, `test_an_unreadable_policy_refuses_the_import_naming_the_key` |
+| P20 — authorize every access to a folder import | The plan belongs to the signed subject; another person's plan answers `404`; adding into a workspace needs write access there. | `test_folder_import.py`: `test_a_plan_belongs_to_the_person_who_made_it`, `test_an_import_into_a_workspace_you_cannot_write_is_refused` |
+| Person in the loop for a folder import | The three folder writes are `person: true` verbs. | `test_folder_import.py`: `test_the_status_tool_is_declared_for_agents_and_the_writes_need_a_person` |
+
+Tests are in `core/agent/tests/` and run under `gate:python`.

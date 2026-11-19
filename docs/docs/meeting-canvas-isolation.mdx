@@ -1,0 +1,100 @@
+---
+title: "Meeting Canvas isolation"
+description: "Serve the Meeting Canvas frame from an origin of its own, so a canvas view can carry nothing it was shown to the terminal or anywhere else."
+---
+
+A Meeting Canvas view is code an agent wrote. The terminal runs it in a sandboxed frame that holds
+none of the reader's cookies and connects nowhere, and hands it the meeting by `postMessage`. One
+thing a sandbox cannot stop is the frame **navigating itself**, and a navigation can carry what the
+view was shown in its URL.
+
+So the frame gets an origin of its own: a second host name (`canvas.vexa.example`) or the terminal's
+host on a second port (`localhost:3002`). The same terminal server answers it. On that origin it serves
+the frame document and the build's own files and nothing else, and the terminal's pages let a frame
+load from that origin alone.
+
+## Which deployments get full isolation
+
+| Deployment | Canvas origin set | Isolation |
+|---|---|---|
+| Helm | `terminal.canvasHost` + `terminal.publicUrl` | **Full.** |
+| Compose | `TERMINAL_CANVAS_ORIGIN` (+ `NEXTAUTH_URL`) | **Full.** |
+| Lite | `-p 3002:3002 -e TERMINAL_CANVAS_ORIGIN=…` | **Full.** |
+| Any | not set | **Partial.** The frame shares the terminal's origin. The terminal refuses the requests the frame can make to it, but only when the browser labels them (HTTPS, or `localhost`). The terminal logs a warning at every start. |
+
+"Full" means a view cannot get the data it was given to any server except the canvas host's front
+door, which refuses the request before any route or log sees it. Your reverse proxy's access log still
+records the request line, as it does for any request.
+
+What holds on every deployment, with or without a canvas origin:
+
+- A script a view creates loads only from the frame's own origin.
+- The frame's policy refuses fetch, beacons, WebSockets, pictures, forms, popups, workers and
+  navigation of the top page.
+- The terminal refuses to be loaded into a frame by another origin. It serves no script, stylesheet
+  or font to another origin, except its own build files.
+
+## Set it up
+
+The terminal's public origin must be configured too (`NEXTAUTH_URL`, or `terminal.publicUrl` on Helm).
+The canvas frame lets only that origin frame it, and the terminal refuses to start with a canvas
+origin and no public origin. People must reach the terminal at that address: a page opened under any
+other address cannot show a canvas.
+
+### Helm
+
+```yaml
+terminal:
+  publicUrl: https://vexa.example.com
+  canvasHost: canvas.vexa.example.com
+ingress:
+  enabled: true
+  host: vexa.example.com
+  tls:
+    - hosts: [vexa.example.com, canvas.vexa.example.com]
+      secretName: vexa-tls
+```
+
+- **DNS:** point `canvas.vexa.example.com` at the same ingress as the terminal.
+- **TLS:** add the host to your certificate. The chart does not edit `ingress.tls`.
+- The chart sets `TERMINAL_CANVAS_ORIGIN` on the terminal (with `publicUrl`'s scheme). It also adds an
+  ingress rule for the host that routes `/canvas-frame` and `/_next/static` to the terminal, and
+  nothing else.
+- With your own ingress or load balancer, route the host to the terminal Service yourself. The
+  terminal tells the canvas host apart by the `Host` header, so the proxy must keep it.
+
+### Compose
+
+In `deploy/compose/.env`:
+
+```bash
+NEXTAUTH_URL=http://localhost:13000
+TERMINAL_CANVAS_ORIGIN=http://localhost:13002
+```
+
+The terminal listens for the canvas on container port 3002, published at `TERMINAL_CANVAS_HOST_PORT`
+(13002 by default, on loopback). Behind a reverse proxy, send a second host to that port and name it:
+`TERMINAL_CANVAS_ORIGIN=https://canvas.vexa.example.com`.
+
+### Lite
+
+```bash
+docker run … -p 3001:3001 -p 3002:3002 -e TERMINAL_CANVAS_ORIGIN=http://localhost:3002 vexaai/vexa-lite:…
+```
+
+The terminal listens for the canvas on 3002 only when `TERMINAL_CANVAS_ORIGIN` is set.
+`TERMINAL_PUBLIC_URL` (the terminal's own address, `http://localhost:3001` by default) must be the
+address people use.
+
+## Check it
+
+- The terminal's log no longer prints `TERMINAL_CANVAS_ORIGIN is unset` at start. It prints the
+  canvas origin it serves.
+- `curl -sI https://canvas.vexa.example.com/api/version` answers `404` with `x-vexa-refused: canvas-host`.
+- `curl -sI https://vexa.example.com/canvas-frame` answers `404` with
+  `x-vexa-refused: canvas-on-its-own-origin`.
+- A page's `Content-Security-Policy` names the canvas host in `frame-src`, and not `'self'`.
+
+`clients/terminal/scripts/canvas-isolation.mjs` is the full proof in a browser. It mounts a canvas,
+tries 28 ways out (navigation, top navigation, `window.open`, forms, fetch, scripts, stylesheets,
+fonts and more), and fails if any of them delivers the meeting's data.

@@ -1,0 +1,14 @@
+{
+  "setup": {
+    "endpoint": "https://api.example.test/v2/data",
+    "oauth": {
+      "authorization_url": "https://login.example.test/authorize",
+      "token_url": "https://api.example.test/token",
+      "scopes": [
+        "read"
+      ],
+      "token_auth": "client_secret_post"
+    },
+    "fields": []
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "why": "a '..' segment never names a profile file",
+  "body": {
+    "files": [
+      {
+        "path": "Default/Local Storage/leveldb/../../../../../etc/cron.d/x",
+        "data": "eA=="
+      }
+    ]
+  }
+}

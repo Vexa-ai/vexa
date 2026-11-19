@@ -1,0 +1,5 @@
+{
+  "action": "gmail.search",
+  "query": "from:person@example.test",
+  "limit": 10
+}

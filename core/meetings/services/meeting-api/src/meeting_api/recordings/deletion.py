@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .ports import RecordingRepo, Storage
+from .jsonb import signal_meeting_prefix
+from .ports import MeetingErased, RecordingRepo, Storage
 
 
 class MeetingNotTerminal(Exception):
@@ -78,7 +79,12 @@ async def delete_owned_recording(
         remaining = [r for r in current if r.get("id") != recording_id]
         return remaining, len(remaining) != len(current)
 
-    await repo.mutate_recordings(meeting_id, _remove)
+    try:
+        await repo.mutate_recordings(meeting_id, _remove)
+    except MeetingErased:
+        # The whole meeting's recordings are being deleted too. That delete owns the metadata now
+        # and removes this entry with the rest; this recording's objects are already gone.
+        pass
     return {
         "status": "deleted",
         "recording_id": recording_id,
@@ -86,3 +92,12 @@ async def delete_owned_recording(
         "objects_deleted": len(deleted_keys),
         "scope": "primary_object_storage",
     }
+
+
+async def delete_meeting_fixtures(storage: Storage, *, user_id: int, meeting_id: int) -> list[str]:
+    """Erase all session tapes and promotion markers belonging to this owned meeting."""
+    prefix = signal_meeting_prefix(user_id=int(user_id), meeting_id=int(meeting_id))
+    keys = [key for key in await storage.list(prefix) if key.startswith(prefix)]
+    for key in keys:
+        await storage.delete(key)
+    return keys

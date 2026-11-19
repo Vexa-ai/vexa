@@ -27,7 +27,7 @@
  * and the name is resolved per TRACK, not per turn. There is NO speaker clustering on either.
  */
 export { ChunkedTranscriber } from './chunked-transcriber.js';
-export type { ChunkedTranscriberCallbacks, ChunkSegment, BoundarySource, TurnSourceObservation, LaneClock } from './chunked-transcriber.js';
+export type { ChunkedTranscriberCallbacks, ChunkSegment, BoundarySource, TurnSourceObservation, LaneClock, MissingRange } from './chunked-transcriber.js';
 export { PyannoteTurnSource, CsrcTurnSource, CSRC_HYSTERESIS_MS, CSRC_DEATH_MS } from './turn-source.js';
 export type {
   TurnSource, TurnSourceCallbacks, TurnSourceHealth, TransportEvent, TurnCloseReason,

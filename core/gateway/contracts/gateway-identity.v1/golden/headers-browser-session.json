@@ -1,0 +1,10 @@
+{
+  "claims_golden": "claims-browser-session.json",
+  "headers": {
+    "x-user-id": "42",
+    "x-user-email": "ada@example.com",
+    "x-user-scopes": "bot,tx,browser",
+    "x-user-limits": "3",
+    "x-user-credential-class": "session"
+  }
+}

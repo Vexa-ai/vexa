@@ -1,0 +1,17 @@
+# truth sidecar — the synthetic fixture that ships with the harness.
+# Written with the transcript, so it is the ONE sidecar that is true by construction.
+unvalidated: false
+date: 2026-01-15
+present: ["Ada Okonjo", "Bo Lindqvist", "Chi Nakamura"]
+hand_notes: "synthetic — authored alongside the transcript"
+decided:
+  - "The ingest rewrite does not ship in this release · Ada Okonjo"
+  - "The two pilot customers are told only after the load numbers exist · Ada Okonjo"
+committed:
+  - "Chi Nakamura · run the load test above 10k events/s · Thursday"
+  - "Bo Lindqvist · hand Chi the staging cluster · after Wednesday standup"
+  - "Bo Lindqvist · bring back a retirement date for the old ingest path · next week"
+open:
+  - "When the old ingest path is retired — no date yet"
+  - "The on-call rota for release week — deliberately not decided with three people"
+notes: "The harness ships one synthetic meeting so it is runnable and testable without the private corpus."

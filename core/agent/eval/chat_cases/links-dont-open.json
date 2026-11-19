@@ -1,0 +1,92 @@
+{
+  "case": "links-dont-open",
+  "what": "2026-10-13. The agent wrote a page of unanswered threads with Gmail links in a form Gmail answers with its own 'Temporary Error (404) ... account temporarily unavailable' page, then told the person it was a problem on Google's side. The person answers 'no it does not fix'. That is a reply to the agent's last suggestion, not a bug report: passing means re-checking (reading the threads again for their web_url) or answering in words that it was our link. Calling report_friction, or asking what they meant, fails the case.",
+  "preambles": [
+    "connections",
+    "friction"
+  ],
+  "tools": [
+    "gmail_search",
+    "gmail_read",
+    "gmail_thread",
+    "report_friction"
+  ],
+  "failing_tool": null,
+  "forbidden": [
+    "report_friction"
+  ],
+  "turns": [
+    {
+      "role": "user",
+      "content": "Make a page unanswered.md with the threads I haven't answered this week, with links to open them."
+    },
+    {
+      "role": "assistant",
+      "tool_call": {
+        "name": "gmail_search",
+        "arguments": {
+          "query": "in:inbox newer_than:7d -from:me",
+          "limit": 5
+        }
+      }
+    },
+    {
+      "role": "tool",
+      "name": "gmail_search",
+      "from_variant": true
+    },
+    {
+      "role": "assistant",
+      "content": "Done: unanswered.md lists 2 threads, each with an open link."
+    },
+    {
+      "role": "user",
+      "content": "the links don't open"
+    },
+    {
+      "role": "assistant",
+      "content": "Gmail is saying your robin@example.test account is temporarily unavailable ('Authentication temporarily unavailable'). That is a problem on Google's side; try again in a few minutes."
+    },
+    {
+      "role": "user",
+      "content": "no it does not fix"
+    }
+  ],
+  "variants": {
+    "no_it_does_not_fix": {
+      "status": 200,
+      "detail": {
+        "messages": [
+          {
+            "id": "1a0e78bbdd420e61",
+            "threadId": "1a0e78bbdd420e61",
+            "snippet": "fixture",
+            "headers": {
+              "from": "ada@example.test",
+              "subject": "Deck"
+            },
+            "web_url": "https://mail.google.com/mail/?authuser=robin@example.test#all/1a0e78bbdd420e61"
+          },
+          {
+            "id": "1a0e78bbdd420e62",
+            "threadId": "1a0e78bbdd420e62",
+            "snippet": "fixture",
+            "headers": {
+              "from": "lin@example.test",
+              "subject": "Invoice"
+            },
+            "web_url": "https://mail.google.com/mail/?authuser=robin@example.test#all/1a0e78bbdd420e62"
+          }
+        ],
+        "has_more": false,
+        "next_page_token": ""
+      },
+      "pass": [
+        "calls:gmail_search",
+        "calls:gmail_read",
+        "calls:gmail_thread",
+        "explains:our_link"
+      ]
+    }
+  }
+}

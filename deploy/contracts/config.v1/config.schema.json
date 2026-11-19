@@ -178,7 +178,7 @@
           "type": "object",
           "required": ["path_key"],
           "additionalProperties": false,
-          "description": "Verifies a credentials FILE as visible to THIS service. Skipped (not failed) when `path_key` is unset — e.g. a mode:any capability satisfied by an API key instead. Verdict: a regular, readable, non-empty JSON file ⇒ passes; a DIRECTORY (docker's bind-mount of a missing host path), unreadable, or non-JSON content ⇒ FAILS (misconfigured). `fallback_paths` lets a containerized service check a mirror mount of a docker-HOST path it cannot see directly.",
+          "description": "Verifies a credentials FILE as visible to THIS service. Skipped (not failed) when `path_key` is unset — e.g. a mode:any capability satisfied by an API key instead. Verdict: a regular, readable, non-empty JSON file ⇒ passes; a DIRECTORY (docker's bind-mount of a missing host path), unreadable, or non-JSON content ⇒ FAILS (misconfigured); a permission error (a service running as an unprivileged uid, a file its host owner keeps private) passes as `unverified`, since the workers that use the file read it themselves. `fallback_paths` lets a containerized service check a mirror mount of a docker-HOST path it cannot see directly.",
           "properties": {
             "path_key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "the declared key holding the path (HOST-path semantics documented on the key)" },
             "fallback_paths": {

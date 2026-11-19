@@ -1,0 +1,17 @@
+{
+  "claims_golden": "claims-workspace.json",
+  "headers": {
+    "x-user-id": "1042",
+    "x-user-email": "ws-1042@principal.invalid",
+    "x-user-scopes": "bot,tx",
+    "x-user-limits": "0",
+    "x-user-regime": "human",
+    "x-user-delegation-workspaces": "team-ws",
+    "x-user-delegation-unit": "agent-ws-team-ws-room-s-room1",
+    "x-user-delegation-shared": "1",
+    "x-user-principal-kind": "workspace",
+    "x-user-principal-workspace": "team-ws",
+    "x-user-delegation-on-behalf-of": "43",
+    "x-user-bills-to": "42"
+  }
+}

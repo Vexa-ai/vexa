@@ -12,7 +12,8 @@ builtins, so the package is provably standalone).
 ## Surface (front door — `src/index.ts`, P6)
 - `joinMeeting(page, opts): Promise<{admitted, state}>` — the main entry; infers platform from the URL or takes `opts.platform`.
 - `resolvePlatform(url)`, per-platform `join*/waitFor*Admission/leave*/start*RemovalMonitor`.
-- `JOIN_BROWSER_ARGS` / `getJoinBrowserArgs()` — the canonical launch flags (so join↔bot flags never drift).
+- `JOIN_BROWSER_ARGS` / `getJoinBrowserArgs()` — the canonical launch flags (so join↔bot flags never drift), including the English pin (`--lang=en-US`, `--accept-lang=en-US,en`).
+- `PINNED_UI_LOCALE`, `checkUiLocale`, `UiLocaleMismatchError` (`UI_LOCALE_MISMATCH`) — the bot's UI is pinned to English and checked after the meeting page loads; a failed join on a non-English page is typed `ui_locale_mismatch` (`src/shared/ui-locale.ts`).
 - `setHooks`, `startDebugView`; types `BotConfig`, `Hooks`, `JoinState`, `JoinOptions`, `JoinResult`.
 
 ## Depends on
@@ -36,3 +37,7 @@ walker cannot drift between the injected hook and the direct leave.
 ## Prove it
 - `pnpm --filter @vexa/join build` · `pnpm --filter @vexa/join test` (L1/L2 admission oracle — DOM fixtures, no browser)
 - Live smoke (on a VM): `Dockerfile.debug` + noVNC — see `scripts/` and the `Makefile`.
+
+## Native backend
+
+`@vexa/join/node` exports `createSdkJoinSession(runtime, config, options)` and its port/types. Inject a `NativeJoinPort` from the host. The module resolves admission only on `in_meeting`, observes waiting/failure/removal, applies the admission deadline and supports cancellation and idempotent leave. It owns no native process and never disposes the shared session. The host stops capture, leaves through join, then disposes its runtime. SDK capture is a separate responsibility and is not implemented here. The existing browser API remains compatible.

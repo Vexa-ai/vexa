@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
-import { editedOnlyByAuthor, evaluatePullRequest, mergedDeclaration, registeredStanding, run } from "./contribution-rights-gate.mjs";
+import { editedOnlyByAuthor, evaluatePullRequest, mergedDeclaration, rangeVerdict, registeredStanding, run } from "./contribution-rights-gate.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const sha = "a".repeat(40);
 const oldSha = "b".repeat(40);
@@ -111,7 +117,7 @@ test("corporate path requires a designated current-head receipt", () => {
 test("verifier identity is case-insensitive but receipt format is strict", () => {
   const corporate = pr({ body: body("corporate") });
   assert.equal(evaluatePullRequest(corporate, [decision({ login: "RIGHTS-VERIFIER" })], config).ok, true);
-  assert.equal(evaluatePullRequest(corporate, [decision({ receipt: "sony-email" })], config).ok, false);
+  assert.equal(evaluatePullRequest(corporate, [decision({ receipt: "corp-email" })], config).ok, false);
 });
 
 test("a decision for another PR cannot authorize this PR", () => {
@@ -197,6 +203,29 @@ test("issue-comment event re-evaluates the current PR head", async () => {
   }
 });
 
+test("a run re-reads before publishing, so a decision posted while it ran is not lost (L1)", async () => {
+  // Runs for one pull request can finish out of order. This run first reads no decision; by the time it
+  // publishes, a verifier's decision is on the PR. It must publish the verdict the decision gives.
+  const event = { repository: { full_name: "Vexa-ai/vexa" }, pull_request: pr({ body: body("corporate") }) };
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  let commentReads = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    let payload = {};
+    if (url.includes("/issues/101/comments")) payload = commentReads++ === 0 ? [] : [decision()];
+    else if (url.endsWith("/pulls/101")) payload = pr({ body: body("corporate") });
+    return { ok: true, status: options.method === "POST" ? 201 : 200, json: async () => payload, text: async () => "" };
+  };
+  try {
+    assert.equal(await run({ event, config, token: "test", apiBase: "https://example.test" }), true);
+    const publish = calls.find((call) => call.url.endsWith("/check-runs"));
+    assert.equal(JSON.parse(publish.options.body).conclusion, "success");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("ordinary DCO App success produces the no-override success check", async () => {
   const event = {
     repository: { full_name: "Vexa-ai/vexa" },
@@ -235,6 +264,213 @@ test("DCO App manual override is rejected", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// The DCO App gives up past 250 commits. Only that report is decided again, from git history.
+const incompleteSummary = "The DCO check could not be evaluated because the complete pull request commit list could not be retrieved.\n\nGitHub returned 250 commits from the REST API, so the app attempted to retrieve the full list through GraphQL before evaluating the pull request. That fallback did not complete, so the DCO verdict is unknown.";
+
+function dcoEvent(conclusion, summary) {
+  return {
+    repository: { full_name: "Vexa-ai/vexa" },
+    check_run: {
+      name: "DCO", app: { slug: "dco" }, head_sha: sha, conclusion, output: { summary },
+      pull_requests: [{ number: 1863, base: { sha: "b".repeat(40) } }],
+    },
+  };
+}
+
+async function publishedFor(event, dcoRange) {
+  const originalFetch = globalThis.fetch;
+  let published;
+  globalThis.fetch = async (_url, options = {}) => {
+    published = JSON.parse(options.body);
+    return { ok: true, status: 201, json: async () => ({}), text: async () => "" };
+  };
+  try {
+    const ok = await run({ event, config, token: "test", apiBase: "https://example.test", dcoRange });
+    return { ok, published };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+const allSigned = { ok: true, checked: 254, merges: 20, failing: [] };
+
+test("an incomplete DCO App list passes when every commit in the git range is signed off", async () => {
+  const seen = [];
+  const { ok, published } = await publishedFor(dcoEvent("failure", incompleteSummary), (pr, head) => {
+    seen.push([pr.number, head]);
+    return allSigned;
+  });
+  assert.equal(ok, true);
+  assert.deepEqual(seen, [[1863, sha]]);
+  assert.equal(published.name, "dco-no-override");
+  assert.equal(published.conclusion, "success");
+  assert.match(published.output.summary, /254 commits checked, 20 merge commits skipped, 0 failing/);
+});
+
+test("an incomplete DCO App list still fails when a commit in the git range is not signed off", async () => {
+  const failing = [{ sha: "d".repeat(40), author: { name: "A", email: "a@example.test" }, detail: "no Signed-off-by" }];
+  const { ok, published } = await publishedFor(dcoEvent("failure", incompleteSummary), () => ({ ok: false, checked: 3, merges: 0, failing }));
+  assert.equal(ok, false);
+  assert.equal(published.conclusion, "failure");
+  assert.match(published.output.summary, /`dddddddddddd` A <a@example.test>: no Signed-off-by/);
+});
+
+test("an incomplete DCO App list fails closed when git cannot read the range", async () => {
+  const { ok, published } = await publishedFor(dcoEvent("failure", incompleteSummary), () => { throw new Error("fetch failed"); });
+  assert.equal(ok, false);
+  assert.equal(published.conclusion, "failure");
+  assert.match(published.output.summary, /fails closed[\s\S]*fetch failed/);
+});
+
+test("a manual override is never re-decided from git, even when the range is signed off", async () => {
+  let called = false;
+  const recheck = () => { called = true; return allSigned; };
+  for (const [conclusion, summary] of [
+    ["success", "Commit sign-off was manually approved."],
+    ["failure", "There is one commit incorrectly signed off."],
+    ["success", incompleteSummary],
+  ]) {
+    const { ok, published } = await publishedFor(dcoEvent(conclusion, summary), recheck);
+    assert.equal(ok, false, summary);
+    assert.equal(published.conclusion, "failure");
+  }
+  assert.equal(called, false);
+});
+
+test("rangeVerdict reads the pull request's commits from git, excluding the base and the checkout", () => {
+  const root = mkdtempSync(join(tmpdir(), "dco-range-"));
+  const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const origin = join(root, "origin");
+  git(root, "init", "-q", "-b", "main", origin);
+  git(origin, "config", "user.name", "Ada");
+  git(origin, "config", "user.email", "ada@example.test");
+  git(origin, "commit", "-q", "--allow-empty", "-m", "base (unsigned, already on main)");
+  const base = git(origin, "rev-parse", "HEAD");
+  git(origin, "checkout", "-q", "-b", "feature");
+  git(origin, "commit", "-q", "--allow-empty", "-s", "-m", "signed");
+  const signedHead = git(origin, "rev-parse", "HEAD");
+  git(origin, "update-ref", "refs/pull/7/head", signedHead);
+  const clone = join(root, "clone");
+  git(root, "clone", "-q", "--branch", "main", origin, clone);
+
+  const pr = { number: 7, base: { sha: base } };
+  const signed = rangeVerdict(pr, signedHead, clone);
+  assert.equal(signed.ok, true);
+  assert.equal(signed.checked, 1);
+
+  git(origin, "commit", "-q", "--allow-empty", "-m", "unsigned");
+  const unsignedHead = git(origin, "rev-parse", "HEAD");
+  git(origin, "update-ref", "refs/pull/7/head", unsignedHead);
+  const unsigned = rangeVerdict(pr, unsignedHead, clone);
+  assert.equal(unsigned.ok, false);
+  assert.equal(unsigned.failing.length, 1);
+  assert.equal(unsigned.failing[0].sha, unsignedHead);
+});
+
+// The DCO App runs on the merge-queue commit too, where check_run.pull_requests is empty. Case: the
+// #2008 queue commit 089bdd61 (313 commits), where dco-no-override fell to "not an ordinary success".
+const queueBase = "e".repeat(40);
+function queueDcoEvent(summary, headBranch = `gh-readonly-queue/main/pr-2008-${queueBase}`) {
+  return {
+    repository: { full_name: "Vexa-ai/vexa" },
+    check_run: {
+      name: "DCO", app: { slug: "dco" }, head_sha: sha, conclusion: "failure", output: { summary },
+      pull_requests: [], check_suite: { head_branch: headBranch },
+    },
+  };
+}
+
+test("an incomplete DCO App list on a merge-queue commit is re-decided from the queued PR's range", async () => {
+  const seen = [];
+  const { ok, published } = await publishedFor(queueDcoEvent(incompleteSummary), (pr, head) => {
+    seen.push([pr, head]);
+    return { ok: true, checked: 288, merges: 27, failing: [] };
+  });
+  assert.equal(ok, true);
+  assert.deepEqual(seen, [[{ number: 2008, base: { sha: queueBase }, queue: true }, sha]]);
+  assert.equal(published.head_sha, sha);
+  assert.equal(published.conclusion, "success");
+  assert.match(published.output.summary, /288 commits checked, 27 merge commits skipped, 0 failing/);
+});
+
+test("a merge-queue commit with a failing range, a manual override, or no queue branch still fails", async () => {
+  const failing = [{ sha: "d".repeat(40), author: { name: "A", email: "a@example.test" }, detail: "no Signed-off-by" }];
+  const unsigned = await publishedFor(queueDcoEvent(incompleteSummary), () => ({ ok: false, checked: 1, merges: 0, failing }));
+  assert.equal(unsigned.ok, false);
+  assert.equal(unsigned.published.conclusion, "failure");
+
+  let called = false;
+  const recheck = () => { called = true; return allSigned; };
+  for (const event of [
+    queueDcoEvent("Commit sign-off was manually approved."),
+    queueDcoEvent(incompleteSummary, "main"),
+    queueDcoEvent(incompleteSummary, "gh-readonly-queue/main/pr-2008-notasha"),
+  ]) {
+    const { ok, published } = await publishedFor(event, recheck);
+    assert.equal(ok, false);
+    assert.equal(published.conclusion, "failure");
+  }
+  assert.equal(called, false);
+});
+
+// A line of `total` commits, of which the first `onMain` are already on main; the queue commit is a
+// GitHub-written squash on main's head. Returns the clone a trusted job would read.
+function queueFixture({ total, onMain, unsignedTip = false, unsignedOld = true }) {
+  const root = mkdtempSync(join(tmpdir(), "dco-queue-"));
+  const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const origin = join(root, "origin");
+  git(root, "init", "-q", "-b", "main", origin);
+  git(origin, "config", "user.name", "Ada");
+  git(origin, "config", "user.email", "ada@example.test");
+  git(origin, "commit", "-q", "--allow-empty", "-m", "root");
+  const tree = git(origin, "rev-parse", "HEAD^{tree}");
+  let tip = git(origin, "rev-parse", "HEAD");
+  const line = [];
+  for (let i = 1; i <= total; i += 1) {
+    const unsigned = (i <= onMain && unsignedOld && i % 50 === 0) || (unsignedTip && i === total);
+    const message = unsigned ? `commit ${i}` : `commit ${i}\n\nSigned-off-by: Ada <ada@example.test>`;
+    tip = git(origin, "commit-tree", tree, "-p", tip, "-m", message);
+    line.push(tip);
+  }
+  const base = onMain ? line[onMain - 1] : git(origin, "rev-parse", "main");
+  git(origin, "update-ref", "refs/heads/main", base);
+  git(origin, "update-ref", "refs/pull/9/head", tip);
+  const queue = git(origin, "commit-tree", tree, "-p", base, "-m", "squash written by GitHub (#9)");
+  git(origin, "update-ref", `refs/heads/gh-readonly-queue/main/pr-9-${base}`, queue);
+  const clone = join(root, "clone");
+  git(root, "clone", "-q", "--branch", "main", origin, clone);
+  return { clone, base, queue, line, git, origin };
+}
+
+test("rangeVerdict on a 313-commit queued line judges only the commits new since main's head", () => {
+  const { clone, base, queue } = queueFixture({ total: 313, onMain: 290 });
+  const verdict = rangeVerdict({ number: 9, base: { sha: base }, queue: true }, queue, clone);
+  // Commits 50..250 on main are unsigned; they passed main's gates already and are not judged again.
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.checked, 23);
+});
+
+test("rangeVerdict on a queued line fails a new commit without a sign-off", () => {
+  const { clone, base, queue, line } = queueFixture({ total: 313, onMain: 290, unsignedTip: true });
+  const verdict = rangeVerdict({ number: 9, base: { sha: base }, queue: true }, queue, clone);
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.checked, 23);
+  assert.deepEqual(verdict.failing.map((r) => r.sha), [line.at(-1)]);
+});
+
+test("rangeVerdict on a queued line with no new commits checks nothing and finds nothing uncertified", () => {
+  const { clone, base, queue } = queueFixture({ total: 5, onMain: 5, unsignedOld: false });
+  const verdict = rangeVerdict({ number: 9, base: { sha: base }, queue: true }, queue, clone);
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.checked, 0);
+  assert.deepEqual(verdict.failing, []);
+});
+
+test("rangeVerdict refuses a queue commit that does not sit on the queue base", () => {
+  const { clone, queue, line } = queueFixture({ total: 10, onMain: 8 });
+  assert.throws(() => rangeVerdict({ number: 9, base: { sha: line[2] }, queue: true }, queue, clone), /not on the queue base/);
 });
 
 test("merge-group run resolves its PR from the queue ref and publishes on the group head", async () => {

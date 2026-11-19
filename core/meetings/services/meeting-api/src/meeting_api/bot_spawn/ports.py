@@ -51,6 +51,15 @@ class MeetingRepo(Protocol):
         the caller de-duplicates on the ``stop_requested`` flag rather than on status."""
         ...
 
+    async def find_active_rows_bound(
+        self, platform: str, native_meeting_id: str, workspace_ids: list[str]
+    ) -> list[dict]:
+        """Every non-terminal row for ``(platform, native_id)`` bound (``data.workspace_id``) to one
+        of ``workspace_ids``, whoever owns it, newest first. The live language change reads it to
+        find a meeting a workspace editor may change; the caller checks the role, this only scopes
+        the rows to workspaces the caller is a member of."""
+        ...
+
     async def find_active_by_userdata(self, userdata_s3_path: str) -> Optional[dict]:
         """Any user's ACTIVE meeting whose spawn carried this ``userdata_s3_path``
         (``meeting.data.auth_userdata_path``), or ``None``. The per-identity serialization
@@ -59,6 +68,14 @@ class MeetingRepo(Protocol):
         (→ HTTP 409, ``AuthSessionBusy``) — running one identity from N containers/IPs at
         once is both an account-risk signal and a write-back race. Cross-user by design:
         the identity is deployment-scoped, not per-user."""
+        ...
+
+    async def latest_auth_session(self, userdata_s3_path: str) -> Optional[dict]:
+        """The NEWEST bot session (by session start) of any meeting whose spawn carried this
+        ``userdata_s3_path``, any status, as ``{meeting_id, session_uid, status, end_time,
+        updated_at}`` — or ``None``. The session write-back's binding: only this session may
+        replace the stored browser session, so a bot whose run was superseded by a later
+        authenticated spawn can no longer write. Cross-user, like ``find_active_by_userdata``."""
         ...
 
     async def find_latest(self, user_id: int, platform: str, native_meeting_id: str) -> Optional[dict]:

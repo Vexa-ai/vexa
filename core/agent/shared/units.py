@@ -14,8 +14,32 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
-RUNNER = "claude-code"
+DEFAULT_RUNNER = "claude-code"
+
+
+def deployment_runner() -> str:
+    """The deployment's default harness, resolved AT CALL TIME (F92).
+
+    This used to be a module constant frozen into ``make_dispatch``'s default argument, which is the
+    exact pattern ``control_plane/config_test.py`` documents at length as a 32-hour outage: a value
+    decided ONCE at import cannot follow the environment, so an operator who changes ``VEXA_RUNNER``
+    sees nothing happen until the container is recreated, and every test that sets the variable is
+    reading whatever the interpreter saw first. The per-subject overlay (Settings → Models) stamps
+    the runner into the worker env; this is only the floor under it."""
+    return (os.environ.get("VEXA_RUNNER") or "").strip() or DEFAULT_RUNNER
+
+# The harness names a dispatch may carry. `llm/registry.HARNESS_RUNNERS` is the AUTHORITY — it maps
+# each name to the class that implements it — but `llm/` ships only in the WORKER image: the
+# control plane cannot import it (`ModuleNotFoundError: No module named 'llm'` inside
+# vexa-dogfood-agent-api-1), and it is the control plane that has to decide whether a subject's
+# stored runner preference is a name this deployment knows.
+#
+# So the list lives here, in `shared/`, which both images carry — and `llm/tests/test_registry.py`
+# asserts the two agree exactly. That is the difference between one authority with a proven mirror
+# and two copies that drift: the mirror cannot go stale without a red test naming both files.
+RUNNERS = ("claude-code", "codex", "openai-agent")
 
 
 def launcher_for(trigger: str, subject: str, *, ref: str | None = None) -> str:
@@ -26,12 +50,14 @@ def launcher_for(trigger: str, subject: str, *, ref: str | None = None) -> str:
         return f"schedule:{ref or subject}"
     if trigger == "transcription":
         return "integration:meetings"
+    if trigger == "signal":
+        return "integration:signals"
     return f"integration:{ref or 'event'}"  # event
 
 
 def mode_for(trigger: str) -> str:
     """Input-trust → write access (governance). Trusted triggers (you, in chat; your own schedule) write
-    ``rw``; untrusted external input (event/web/transcription) is ``ro`` → propose-only."""
+    ``rw``; untrusted external input (event/web/transcription/signal) is ``ro`` → propose-only."""
     return "rw" if trigger in ("message", "scheduled") else "ro"
 
 
@@ -58,7 +84,7 @@ def make_dispatch(
     tools: list[str] | tuple[str, ...] = (),
     context: dict | None = None,
     launcher: str | None = None,
-    runner: str = RUNNER,
+    runner: str = "",
     token: str | None = None,
     principal: dict | None = None,
 ) -> dict:
@@ -68,7 +94,7 @@ def make_dispatch(
     dispatch stamps it as the git author (see dispatch.py D4)."""
     inv: dict = {
         "identity": {"subject": subject, "launcher": launcher or launcher_for(trigger, subject)},
-        "runner": runner,
+        "runner": runner or deployment_runner(),
         "workspaces": workspaces or [{"id": subject, "mode": mode_for(trigger)}],
         "trigger": trigger,
         "start": start,
@@ -96,22 +122,111 @@ def chat_session(inv: dict) -> str:
 
 
 def dispatch_id(inv: dict) -> str:
-    """A stable workload id for the dispatch. A live meeting keys on its ``session_uid`` (one dispatch
-    per meeting); chat on (subject, session) so every turn of a conversation thread touches its own warm
+    """A stable workload id for the dispatch. A live meeting keys on its ``session_uid`` and the
+    subject (one warm unit per person per meeting: a worker's model route is fixed at spawn for the
+    person it was dispatched for, so two people never share one); chat on (subject, session) so every turn of a conversation thread touches its own warm
     unit while distinct threads stay isolated; others on a digest of (subject, trigger, start)."""
     ctx = inv.get("context") or {}
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
-    if meeting and meeting.get("session_uid"):
-        return f"agent-meet-{meeting['session_uid']}"
     subject = inv["identity"]["subject"]
+    if ctx.get("room_unit"):
+        # A ROOM'S TURN RUNS AS ITS WORKSPACE'S AGENT (C1, R1): one warm unit per room, whoever
+        # spoke — named by agent-api from the room (`room_principal.room_unit_id`), never a body.
+        return str(ctx["room_unit"])
+    if meeting and meeting.get("session_uid"):
+        return f"agent-meet-{meeting['session_uid']}-{subject}"
+    if inv["trigger"] == "scheduled" and ctx.get("session") and ctx.get("flow_kind") == "mail":
+        # A MAIL-TRIGGERED TURN (D25): untrusted text from an inbox woke it, so it runs on its own
+        # read-only sibling — never the routine's `-auto` worker, which writes. Its tools write the
+        # one reply file (`signal_scope`) and propose everything else.
+        return mail_unit_id(subject, chat_session(inv), ctx.get("mount_gen"))
+    if inv["trigger"] == "scheduled" and ctx.get("session"):
+        # A ROUTINE'S TURN IN ITS OWN CHAT THREAD (ADR-0046 decision 12). Same thread, same
+        # per-session history as the person's turns — continuity is the session file — but its
+        # own warm unit, because a worker's regime is fixed when it is spawned: the person's
+        # replies run `human`, the routine's runs `autonomous`, never in one container.
+        return routine_unit_id(subject, chat_session(inv), ctx.get("mount_gen"))
+    if inv["trigger"] == "signal" and ctx.get("session"):
+        # A MEETING SIGNAL WAKES THE AGENT IN THE MEETING'S CHAT (transcript signals, 2026-10-15):
+        # the same thread and conversation as the person's turns, on a sibling unit of its own.
+        # Not the routine's `-auto` unit: a worker's mounts and token are fixed when it is spawned,
+        # and a routine's warm `-auto` worker writes, while a signal's turn is untrusted and may
+        # write only the meeting's page. Two regimes, two warm units, one conversation.
+        return signal_unit_id(subject, chat_session(inv), ctx.get("mount_gen"))
     if inv["trigger"] == "message":
         # One warm chat unit per (person, conversation thread), TTL-reaped; continuity = the per-session
         # file. ``session`` defaults to ``"main"`` so a dispatch with no session keeps the legacy id.
-        return f"agent-{subject}-chat-{chat_session(inv)}"
+        #
+        # …AND PER MOUNT GENERATION (Vexa-ai/vexa#1603). A worker is spawned with its mount table and
+        # keeps it for the whole warm window — the runtime's create is an idempotent TOUCH that
+        # discards the spec env — so a workspace created mid-conversation was unreachable to the
+        # agent for the rest of it: *"the new workspace isn't in my native mount stack"*. The chat's
+        # focus generation rides the id, so the turn after a create addresses a DIFFERENT warm unit
+        # and is therefore spawned, with the new stack. Nothing is stopped: the old worker finishes
+        # its background jobs and idles out on its own clock.
+        #
+        # ABSENT MEANS THE ID IT ALWAYS HAD. Generation 0 — every chat that has never made a
+        # workspace, and every session record written before the field existed — is byte-identical
+        # to the previous id, so a deploy does not re-spawn a single live conversation.
+        return chat_unit_id(subject, chat_session(inv), ctx.get("mount_gen"))
     digest = hashlib.sha1(
         f"{subject}|{inv['trigger']}|{json.dumps(inv['start'], sort_keys=True)}".encode()
     ).hexdigest()[:10]
     return f"agent-{subject}-{inv['trigger']}-{digest}"
+
+
+#: The suffix that names a chat thread's AUTONOMOUS sibling unit (ADR-0046 decision 12).
+ROUTINE_UNIT_SUFFIX = "-auto"
+
+
+def routine_unit_id(subject: str, session: str, mount_gen=None) -> str:
+    """The warm unit a routine's scheduled turns run on in a chat thread — the chat's own id plus
+    `-auto`. Spelled once, beside `chat_unit_id`, so the busy check and the dispatcher agree."""
+    return chat_unit_id(subject, session, mount_gen) + ROUTINE_UNIT_SUFFIX
+
+
+#: The suffix that names a chat thread's SIGNAL sibling unit: a meeting.signal's untrusted turn in the
+#: meeting's chat (transcript signals). Read-only mounts; its tools write the meeting's page only.
+SIGNAL_UNIT_SUFFIX = "-signal"
+
+
+def signal_unit_id(subject: str, session: str, mount_gen=None) -> str:
+    """The warm unit a meeting signal's turns run on in a chat thread — the chat's own id plus
+    `-signal`. Spelled once, beside `routine_unit_id`, so the busy check and the dispatcher agree."""
+    return chat_unit_id(subject, session, mount_gen) + SIGNAL_UNIT_SUFFIX
+
+
+def is_signal_unit(unit_id: str) -> bool:
+    """Is this unit a chat's signal sibling? Read off the id the delegation token carries."""
+    return str(unit_id or "").endswith(SIGNAL_UNIT_SUFFIX)
+
+
+#: The suffix that names a chat thread's MAIL sibling unit: a turn an inbound email started (D25).
+#: Read-only mounts; its tools write the thread's reply file (`mail_outbox/<session>.md`) only.
+MAIL_UNIT_SUFFIX = "-mail"
+
+
+def mail_unit_id(subject: str, session: str, mount_gen=None) -> str:
+    """The warm unit an inbound mail's turns run on in a chat thread — the chat's own id plus
+    `-mail`."""
+    return chat_unit_id(subject, session, mount_gen) + MAIL_UNIT_SUFFIX
+
+
+def is_mail_unit(unit_id: str) -> bool:
+    """Is this unit a chat's mail sibling? Read off the id the delegation token carries."""
+    return str(unit_id or "").endswith(MAIL_UNIT_SUFFIX)
+
+
+def chat_unit_id(subject: str, session: str, mount_gen=None) -> str:
+    """The warm chat unit for a (person, conversation thread) — the id ``dispatch_id`` derives above.
+
+    SPELLED ONCE so a reader holding no invocation can address the same unit (Vexa-ai/vexa#1610: the
+    inbox route answers "what is still queued for this chat" and has only a subject and a session).
+    Two spellings of a unit id is the one-writer-per-fact failure with a stream on the end of it —
+    the reader would look in a topic nobody writes and honestly report an empty inbox."""
+    gen = str(mount_gen or "").strip()
+    base = f"agent-{subject}-chat-{session or DEFAULT_CHAT_SESSION}"
+    return f"{base}-g{gen}" if gen and gen != "0" else base
 
 
 def output_topic(unit_id: str) -> str:
@@ -122,3 +237,52 @@ def output_topic(unit_id: str) -> str:
 def input_topic(unit_id: str) -> str:
     """The per-dispatch input Stream — interactive messages to a live dispatch (the duplex evolution)."""
     return f"unit:{unit_id}:in"
+
+
+def delegation_key(unit_id: str) -> str:
+    """WHERE A LIVE UNIT'S CURRENT DELEGATION TOKEN IS PUBLISHED for its worker.
+
+    agent-api replaces a warm unit's token before it expires (``control_plane.delegation_refresh``)
+    and writes the new one here; the worker reads it before each turn and rewrites its MCP
+    attachment, so a unit alive past one token's life keeps its tools without a restart. The
+    worker's Redis user may read this key and not write it (``control_plane.workload_redis``)."""
+    return f"unit:{unit_id}:delegation"
+
+
+def unit_of_topic(topic: str) -> str:
+    """The unit id inside ``unit:<id>:in`` / ``unit:<id>:out`` — the inverse of the two above.
+
+    The worker is handed its topics and never its unit id, and it is the one process that knows how
+    far it has read. Deriving the id back out of the topic keeps that fact addressable without a new
+    environment variable for something both sides can already compute."""
+    t = str(topic or "")
+    if t.startswith("unit:") and (t.endswith(":in") or t.endswith(":out")):
+        return t[len("unit:"):t.rindex(":")]
+    return ""
+
+
+def send_now_key(unit_id: str) -> str:
+    """WHERE A PERSON ASKS FOR ONE QUEUED MESSAGE TO RUN NOW: the entry id of the message; the
+    worker stops the running turn and runs that message next (agent-api writes, the worker clears)."""
+    return f"unit:{unit_id}:send-now"
+
+
+def stop_key(unit_id: str) -> str:
+    """WHERE A PERSON'S STOP REACHES THE RUNNING TURN (live app.dev 2026-10-15): the moment Stop was
+    pressed, epoch milliseconds. The worker's stop watcher kills the running turn's whole process
+    tree — the CLI and every tool it started — and the turn ends, said (agent-api writes, the worker
+    clears)."""
+    return f"unit:{unit_id}:stop"
+
+
+def inbox_cursor_key(unit_id: str) -> str:
+    """WHERE THE WORKER SAYS HOW FAR IT HAS READ ITS INBOX (Vexa-ai/vexa#1610).
+
+    The in-topic is the chat's inbox: everything submitted is XADD'd to it the moment it is
+    submitted, and the worker takes entries off it in order. "What is still queued" is therefore
+    exactly "the entries after this cursor", and this key is how the worker publishes it — one
+    writer (the worker, which owns the cursor), one reader (the pending route, which owns nothing).
+
+    A key rather than an event on the out-topic because it has to be answerable on a cold load, when
+    nobody is streaming anything and the answer is the first thing the chat needs."""
+    return f"unit:{unit_id}:cursor"

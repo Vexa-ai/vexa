@@ -24,7 +24,7 @@ describe("LiveTranscriptEngine — processed v2 inline rendering", () => {
   it("renders exact contested words like an ordinary unresolved tail without leaking wire metadata", () => {
     const contested = [{
       id: "s-contested",
-      speaker: "Tom Dean",
+      speaker: "Ray Collins",
       text: "before ⟦shared words⟧{CSRC 201↔CSRC 840} after",
       completed: true,
     }];

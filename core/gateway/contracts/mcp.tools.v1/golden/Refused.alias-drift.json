@@ -1,0 +1,48 @@
+{
+  "why": "an alias takes exactly its target's arguments, so the two cannot drift into two tools on one door",
+  "manifest": {
+    "contract": "mcp.tools.v1",
+    "domain": "agent",
+    "source": "oss",
+    "depends_on": [
+      "identity"
+    ],
+    "base_url_env": "AGENT_API_URL",
+    "tools": [
+      {
+        "name": "a",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "agent"
+        ],
+        "route": {
+          "method": "GET",
+          "path": "/api/t"
+        },
+        "arguments": [
+          "x"
+        ]
+      },
+      {
+        "name": "b",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "agent"
+        ],
+        "route": {
+          "method": "GET",
+          "path": "/api/t"
+        },
+        "arguments": [
+          "x",
+          "y"
+        ],
+        "alias_of": "a"
+      }
+    ]
+  }
+}

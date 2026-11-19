@@ -1,0 +1,20 @@
+{
+  "request_id": "fixture-draft-0003",
+  "draft_id": "r-fixture-draft",
+  "recipient": "person@example.test",
+  "subject": "Re: fixture",
+  "body": "Revised fixture body.",
+  "policy": {
+    "unattended": false,
+    "notify_attendees": false,
+    "attendee_domains": null,
+    "calendars": [
+      "primary"
+    ],
+    "recipient_domains": [
+      "example.test"
+    ],
+    "attachments": true,
+    "attachment_max_bytes": 5242880
+  }
+}

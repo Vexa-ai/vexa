@@ -17,6 +17,7 @@ a library — keeps the import-boundary gate clean across domains).
 | `span` | | per-hop/operation id within the trace |
 | `user_id` | | the end user (post-auth), string or int |
 | `meeting_id` | | the meeting/session, when applicable |
+| `session` | | the **agent unit** (a chat or a background job) that caused the line — set only from a signed source (the delegation token's `unit` claim, via identity's validate answer or the gateway's signed identity), never from a client header; equals the credential broker's `audit.session` |
 | `audience` | ✓ | **`user`** (end-user-facing) or **`system`** (operator/debug) |
 | `event` | ✓ | stable low-cardinality snake_case name |
 | `fields` | | free-form structured context (method, path, status, error, …) |
@@ -24,9 +25,24 @@ a library — keeps the import-boundary gate clean across domains).
 ## The trace
 A request enters the **gateway** (the edge). The trace middleware reads `X-Trace-Id`; if
 absent it **mints one**, binds it to a `contextvars` ContextVar, and **forwards it
-downstream** via the `X-Trace-Id` header. `meeting-api` and `runtime` read that header and
-bind the same id. Result: a single request's log lines across gateway → meeting-api →
-runtime **all carry the same `trace_id`**, so a bug is traceable precisely across services.
+downstream** via the `X-Trace-Id` header. Every service behind it reads that header, binds
+the same id, and forwards it on its own outbound calls. Result: a single request's log lines
+across every hop **all carry the same `trace_id`**.
+
+The hops that carry it: gateway · meeting-api · runtime · agent-api · the agent worker ·
+the MCP service · the credential broker · identity (admin-api) · flows-api · flows-worker ·
+the mailbox. agent-api hands a dispatched turn's trace id to its worker (on the signed
+input-stream entry, or `VEXA_TRACE_ID` at a cold spawn); the worker sends it as `X-Trace-Id`
+on its MCP attachment, so the worker's tool calls continue the trace that started the turn.
+
+## The session
+A trace is one request. An agent **session** — one chat thread, or one background job — is
+many: every turn and every tool call. agent-api mints each worker's delegation token
+(`delegation.v1`) with the unit id as its `unit` claim; identity answers it, and the gateway
+signs it into the identity it forwards (`gateway-identity.v1` `delegation.unit` →
+`x-user-delegation-unit`). Services that hold a verified identity log it as `session`, and
+the credential broker records it as `audit.session`. A worker cannot name another session:
+the claim is inside a token only agent-api can mint.
 
 > **One remaining hop (follow-on):** the **bot/pipeline** leg is owned by the concurrent
 > telemetry stream and is OUT OF SCOPE here. Propagating `trace_id` into the bot (over the
@@ -36,8 +52,10 @@ runtime **all carry the same `trace_id`**, so a bug is traceable precisely acros
 - `user-bot-joined.json` — a **user-facing** event (`audience=user`).
 - `system-downstream-forwarded.json` — a **system/debug** event (`audience=system`, `level=debug`).
 - `error-downstream-unreachable.json` — an **error** event (`audience=system`, `level=error`).
+- `system-worker-tool-call.json` — a worker's tool call reaching the gateway, carrying the
+  agent `session` it belongs to.
 
-All three share one `trace_id` to illustrate a cross-hop trace.
+All share one `trace_id` to illustrate a cross-hop trace.
 
 ## Gates
 - `node validate.mjs --check` (rides **gate:schema**) — every golden conforms to `LogEvent`,

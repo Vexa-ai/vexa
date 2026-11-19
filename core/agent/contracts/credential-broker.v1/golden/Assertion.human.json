@@ -1,0 +1,10 @@
+{
+  "role": "human",
+  "actor": "42",
+  "session": "5d41402abc4b2a76b9719d911017c592ae2f3bd8f0a1c4e6b7d9e2f3a4b5c6d7",
+  "at": 1760000000,
+  "nonce": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "method": "POST",
+  "path": "/api/setup",
+  "body": "2e561092c01a3379935c01beb9fc3fb515c54eb884fbbbc65a56fe66c678969f"
+}

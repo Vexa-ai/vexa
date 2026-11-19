@@ -51,6 +51,11 @@ from typing import Optional
 
 EVENT_MEETING_STARTED = "meeting.started"
 EVENT_MEETING_COMPLETED = "meeting.completed"
+#: The owner invited somebody, by address, to read this meeting (the terminal's Share dialog).
+#: flows' `meeting_share` mails them the link. Published by `collector/app.py`'s by-id share mint,
+#: and only when the owner asked for the mail (`notify`), so the attendee fan-out — which mints its
+#: own restricted grants and mails them itself — never sends a second mail.
+EVENT_MEETING_SHARED = "meeting.shared"
 
 log = logging.getLogger("meeting_api.events")
 
@@ -122,6 +127,65 @@ async def publish(event_type: str, source_event_id: str, refs: dict,
         return False
 
 
+# ── the subject ticket each fact carries ────────────────────────────────────────────────────────
+#: The signing key meeting-api's tickets are made with (Ed25519, PKCS#8 PEM). Held by meeting-api
+#: alone; the gateway's service door holds its public half and refuses a flows call that acts for a
+#: person unless a ticket names that person for that call.
+TICKET_KEY_ENV = "VEXA_SUBJECT_TICKET_KEY_FILE"
+#: What a meeting fact lets flows do for the meeting's owner: read the transcript (and share it),
+#: run the autonomous post-meeting turn, write the desks, name who pays for the room.
+TICKET_CLASSES = ("transcript.read", "chat.autonomous", "desk.write", "room.bills_to")
+#: Post-meeting processing, its retries and its fan-out.
+TICKET_TTL_SEC = 3 * 86400
+
+_ticket_signer_cache: dict = {}
+
+
+def _ticket_signer():
+    """`key.sign` for the configured key, loaded once per path; None (with one warning per path)
+    when no key is configured or it cannot be read."""
+    path = (os.getenv("VEXA_SUBJECT_TICKET_KEY_FILE") or "").strip()
+    if path in _ticket_signer_cache:
+        return _ticket_signer_cache[path]
+    signer = None
+    if not path:
+        log.warning("subject_ticket_key_missing: %s is not set; meeting facts are published "
+                    "without a subject ticket and the gateway door will refuse the flows calls "
+                    "they cause (subject_ticket_required)", TICKET_KEY_ENV)
+    else:
+        try:
+            from .identity_token import read_signing_key
+            signer = read_signing_key(path).sign
+        except Exception as e:  # noqa: BLE001 — a publish never fails over its ticket
+            log.warning("subject_ticket_key_unreadable: %s=%s could not be loaded (%s); meeting "
+                        "facts are published without a subject ticket and the gateway door will "
+                        "refuse the flows calls they cause (subject_ticket_required)",
+                        TICKET_KEY_ENV, path, type(e).__name__)
+    _ticket_signer_cache[path] = signer
+    return signer
+
+
+def with_ticket(refs: dict, source_event_id: str, *, uid, meeting_id, platform="",
+                native="") -> dict:
+    """`refs` plus `_tickets`: one meetings event ticket naming the meeting's owner (`uid`), this
+    meeting and the fact it came from. `refs` unchanged when no key is configured or the mint
+    fails — the fact is still published."""
+    sign = _ticket_signer()
+    if sign is None:
+        return refs
+    from . import subject_ticket
+    try:
+        ticket = subject_ticket.mint(
+            sign, iss=subject_ticket.MEETINGS, kind=subject_ticket.EVENT, sub=uid,
+            cls=TICKET_CLASSES, evt=source_event_id, ttl=TICKET_TTL_SEC, mid=meeting_id,
+            native=subject_ticket.native_of(platform, native))
+    except Exception as e:  # noqa: BLE001 — a publish never fails over its ticket
+        log.warning("subject_ticket_mint_failed: %s for %s (%s); published without a ticket",
+                    source_event_id, uid, e)
+        return refs
+    return {**refs, subject_ticket.REFS_KEY: [ticket]}
+
+
 def meeting_started_source_id(meeting_id) -> str:
     """Matches `invite_intake`'s own `emit_started` id exactly — see the module docstring."""
     return f"live-{meeting_id}"
@@ -151,13 +215,56 @@ def meeting_completed_refs(meeting_id, native, platform, uid, completion_reason)
 
 async def publish_meeting_started(meeting_id, native, platform, uid,
                                   *, timeout: Optional[float] = None) -> bool:
-    return await publish(EVENT_MEETING_STARTED, meeting_started_source_id(meeting_id),
-                         meeting_started_refs(meeting_id, native, platform, uid), timeout=timeout)
+    sid = meeting_started_source_id(meeting_id)
+    refs = with_ticket(meeting_started_refs(meeting_id, native, platform, uid), sid, uid=uid,
+                       meeting_id=meeting_id, platform=platform, native=native)
+    return await publish(EVENT_MEETING_STARTED, sid, refs, timeout=timeout)
 
 
 async def publish_meeting_completed(meeting_id, native, platform, uid, completion_reason,
                                     *, timeout: Optional[float] = None) -> bool:
-    return await publish(
-        EVENT_MEETING_COMPLETED, meeting_completed_source_id(meeting_id),
-        meeting_completed_refs(meeting_id, native, platform, uid, completion_reason),
-        timeout=timeout)
+    sid = meeting_completed_source_id(meeting_id)
+    refs = with_ticket(meeting_completed_refs(meeting_id, native, platform, uid, completion_reason),
+                       sid, uid=uid, meeting_id=meeting_id, platform=platform, native=native)
+    return await publish(EVENT_MEETING_COMPLETED, sid, refs, timeout=timeout)
+
+
+def meeting_shared_source_id(grant_id, email) -> str:
+    """Keyed to (grant, address): ONE MAIL PER INVITE. A redelivery dedupes at the intake; inviting
+    the same person again mints a new grant, which is a new invite and mails again — what pressing
+    Invite a second time means. The address is hashed so the id itself carries no address."""
+    import hashlib
+    return f"share-{grant_id}-{hashlib.sha256(str(email).lower().encode()).hexdigest()[:12]}"
+
+
+#: The longest meeting title a share mail carries; longer titles are cut (R1801-2).
+SHARE_MAIL_TITLE_MAX = 200
+
+
+def share_mail_title(title) -> str:
+    """The owner's meeting title as ONE line of plain text, bounded — it goes into a subject line
+    and a body a stranger reads. Control characters (CR/LF included) become spaces."""
+    import re as _re
+    t = _re.sub(r"[\x00-\x1f\x7f]+", " ", str(title or "")).strip()
+    t = _re.sub(r"\s{2,}", " ", t)
+    return t if len(t) <= SHARE_MAIL_TITLE_MAX else t[:SHARE_MAIL_TITLE_MAX - 1].rstrip() + "…"
+
+
+def meeting_shared_refs(meeting_id, uid, email, grant_id, *, title="", inviter="") -> dict:
+    """The refs `mail_meeting_share` reads. `uid` is the OWNER (the inviter), the one subject this
+    deployment can read `_global` through and the identity flows mints the recipient's link as; the
+    recipient is `email`, never `uid`. `grant_id` names the owner's grant for the record. NO TOKEN:
+    flows mints the recipient's own restricted link at send time (R1801-5)."""
+    return {"uid": str(uid), "meeting_id": str(meeting_id), "email": str(email),
+            "grant_id": str(grant_id or ""), "title": share_mail_title(title),
+            "inviter": str(inviter or "")}
+
+
+async def publish_meeting_shared(meeting_id, uid, email, grant_id, *, title="", inviter="",
+                                 timeout: Optional[float] = None) -> bool:
+    # The ticket names the OWNER: flows mints the recipient's link as `uid`.
+    sid = meeting_shared_source_id(grant_id, email)
+    refs = with_ticket(
+        meeting_shared_refs(meeting_id, uid, email, grant_id, title=title, inviter=inviter), sid,
+        uid=uid, meeting_id=meeting_id)
+    return await publish(EVENT_MEETING_SHARED, sid, refs, timeout=timeout)

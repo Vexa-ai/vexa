@@ -50,6 +50,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 
 from ..collector.meeting_link import find_meeting_link
+from ..meeting_url_redaction import strip_host_tokens, strip_host_tokens_in
 from ..lifecycle import may_dispatch_again
 
 # How far ahead the importer looks (events beyond it import on a later sweep) and how far back a
@@ -154,7 +155,9 @@ def _ical_text(value: Any, redact_values: tuple[str, ...] = ()) -> str:
     for secret in redact_values:
         if secret:
             text = text.replace(secret, "[REDACTED_FEED_URL]")
-    return text
+    # A host's own calendar carries Zoom START links (`?zak=`, the host token); the snapshot is
+    # stored, so the token is dropped from every URL in it.
+    return strip_host_tokens_in(text)
 
 
 def _component_metadata(comp, *, include_components: bool = True,
@@ -218,7 +221,7 @@ def parse_ics(text: str, *, now: datetime,
     # of RECURRENCE-ID override instances sharing the UID, in ARBITRARY feed order. The next
     # occurrence must be resolved across the WHOLE group — first-component-wins silently dropped
     # a series whenever a past override happened to precede its master in the walk (observed live:
-    # the OeNB bi-weekly vanished while its siblings imported fine).
+    # one customer's bi-weekly vanished while its siblings imported fine).
     cal = Calendar.from_ical(text)
     calendar_metadata = _component_metadata(
         cal, include_components=False, redact_values=redact_values,
@@ -279,6 +282,9 @@ def parse_ics(text: str, *, now: datetime,
                 break
         # no recognizable link → import LINK-LESS (fail loud; the terminal shows "no link")
         platform, native_id, url = link if link else (None, None, None)
+        # the joinable link is stored and handed to the bot, which joins as a guest: a host-only
+        # token (`zak`) on it would be stored for nothing and echoed by everything that reads it
+        url = strip_host_tokens(url) if url else url
         event_metadata = {
             "resolved_start": occurrence.isoformat(),
             "calendar": calendar_metadata,
@@ -488,7 +494,8 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                     calendar_name: Optional[str] = None,
                     bot_name: Optional[str] = None,
                     legacy: bool = False,
-                    rows: Optional[list] = None) -> dict:
+                    rows: Optional[list] = None,
+                    writable_workspaces: "Optional[set[str]]" = None) -> dict:
     """Upsert one user's parsed feed against their meeting rows. Returns
     ``{"created": [...], "updated": [...], "cancelled": [...], counts...}`` where each list entry
     is ``{id, native, status, when}`` for the caller to fan out as WS frames.
@@ -682,6 +689,14 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             continue
 
         inherited_ws = series_ws.get(ev["uid"])  # None = no binding OR tombstoned — both mean "don't"
+        # A NEW OCCURRENCE INHERITS THE SERIES' WORKSPACE ONLY WHILE ITS OWNER MAY STILL WRITE THERE
+        # (R1801-3). Binding publishes the meeting to every member, which takes edit access on every
+        # other path (`workspace_write`); a person demoted to viewer, or removed, since they bound
+        # an earlier occurrence must not keep publishing future ones into it. Unknown (identity did
+        # not answer, or no door is wired) is "may write nowhere": the occurrence is created
+        # private, and the owner can bind it by hand.
+        if inherited_ws and inherited_ws not in (writable_workspaces or set()):
+            inherited_ws = None
         # A spent auto-join attempt on THIS occurrence rides onto the new row, so the sweep sees the
         # backoff it already earned instead of a virgin row that is due on sight.
         spent = _spent_attempt(terminal_attempts[ev["uid"]], ev) \

@@ -55,3 +55,11 @@ finalizes only a transcript that covers every buffered sample, and otherwise sub
 window as the final one. Its segment and window times come from each frame's own stamp,
 so a turn whose frames cover only part of its wall time keeps its timeline; at the 30 s cap the
 window up to its quietest late frame is finalized from its own request and the rest stays buffered.
+
+## Native participant reuse
+
+The bot can inject `speakerSource: null` and a native `channelKey` into the same
+channel engine. Named transcripts then omit the optional browser source value and
+carry meeting-scoped participant identity in `speaker_key`. Browser defaults
+remain `glow-bound` and `ch-<channel>:<turn>`. Capture, SDK runtime, and STT hosting
+remain separate from this module.

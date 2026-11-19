@@ -1,6 +1,6 @@
 """Lifecycle-callback durability + WS-status publish proofs.
 
-Both behaviours live in the lifecycle-callback nexus (``meeting_api.app._mount_lifecycle``), driven
+Both behaviours live in the lifecycle-callback nexus (``meeting_api.lifecycle.mount.mount_lifecycle``), driven
 here over the unified ``create_app`` via FastAPI ``TestClient`` — the SAME shipped handler prod runs,
 with in-process fakes (no DB, no real redis, no bot). Asserts:
 
@@ -53,7 +53,7 @@ def test_rehydration_terminal_after_restart_is_200(goldens):
     repo = InMemoryMeetingRepo()
     m = _seed_active_meeting(repo)
     # Brand-new app → brand-new EMPTY MeetingStore (simulates the post-restart empty in-memory FSM).
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     r = client.post(ENDPOINT, json=goldens["completed-stopped"])
 
@@ -79,7 +79,7 @@ def test_rehydration_preserves_admission_timestamp_for_runtime_billing(goldens):
         "source": "bot_callback",
     }
     repo._meetings[m["id"]]["data"]["status_transition"] = [admitted]
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     terminal = {
         **goldens["completed-stopped"],
         "timestamp": "2026-07-28T10:25:10.000Z",
@@ -107,7 +107,7 @@ def test_rehydration_emits_status_change_and_no_409(goldens):
     signal that never fired while stuck at 409)."""
     repo = InMemoryMeetingRepo()
     _seed_active_meeting(repo)
-    app = create_app(meeting_repo=repo)
+    app = create_app(open_callbacks=True, meeting_repo=repo)
     client = TestClient(app)
 
     r = client.post(ENDPOINT, json=goldens["completed-stopped"])
@@ -124,7 +124,7 @@ def test_rehydration_seeds_stopping_as_active(goldens):
     repo = InMemoryMeetingRepo()
     m = _seed_active_meeting(repo)
     repo.set_status(m["id"], "stopping")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     r = client.post(ENDPOINT, json=goldens["completed-stopped"])
     assert r.status_code == 200, r.text
@@ -137,7 +137,7 @@ def test_idempotent_terminal_redelivery_is_200(goldens):
     """POST 'completed' twice (the bot's 3x retry) → BOTH 200, not a 409 on the redelivery."""
     repo = InMemoryMeetingRepo()
     _seed_active_meeting(repo)
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     r1 = client.post(ENDPOINT, json=goldens["completed-stopped"])
     r2 = client.post(ENDPOINT, json=goldens["completed-stopped"])
@@ -155,7 +155,7 @@ def test_idempotent_same_status_replay_is_200():
 
     m = asyncio.run(repo.create_meeting(user_id=1, platform="google_meet", native_meeting_id="m1", data={}))
     asyncio.run(repo.create_session(meeting_id=m["id"], session_uid="sess-uid"))
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert client.post(ENDPOINT, json={"connection_id": "sess-uid", "status": "joining"}).status_code == 200
     assert client.post(ENDPOINT, json={"connection_id": "sess-uid", "status": "joining"}).status_code == 200
@@ -167,7 +167,7 @@ def test_genuinely_illegal_transition_still_409_after_reconcile():
     repo = InMemoryMeetingRepo()
     m = _seed_active_meeting(repo)
     repo.set_status(m["id"], "completed")  # already terminal in the DB
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     # active→...→completed already; now a DIFFERENT terminal `failed` on a completed record.
     r = client.post(ENDPOINT, json={"connection_id": "sess-uid", "status": "failed", "exit_code": 1})
@@ -185,7 +185,7 @@ def test_ws_status_published_on_advance(goldens):
     repo = InMemoryMeetingRepo()
     m = _seed_active_meeting(repo)
     redis = _RecordingRedis()
-    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, redis=redis))
 
     r = client.post(ENDPOINT, json=goldens["completed-stopped"])
     assert r.status_code == 200, r.text
@@ -207,7 +207,7 @@ def test_ws_status_frame_matches_010_6_contract(goldens):
     repo = InMemoryMeetingRepo()
     _seed_active_meeting(repo)
     redis = _RecordingRedis()
-    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, redis=redis))
     client.post(ENDPOINT, json=goldens["completed-stopped"])
 
     # The legacy per-meeting frame (bm:meeting:{id}:status) carries the nested 0.10.6 shape. A second

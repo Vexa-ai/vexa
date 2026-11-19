@@ -1,0 +1,279 @@
+{
+ "spec": "home-card.v1",
+ "composed_at": "2026-10-13T06:50:00Z",
+ "greeting": {
+  "title": "Good morning",
+  "text": "Tue 13 Oct · Two meetings before noon. The first is in 38 min and prepped; the second isn't."
+ },
+ "left_out": "not shown now: things to try, recent chats. They come back once the morning clears.",
+ "people": {
+  "mira": {
+   "name": "Mira Chen",
+   "initials": "MC",
+   "role": "Operations",
+   "last": "Standup today, 09:05",
+   "reach": "Direct chat",
+   "vexa": true,
+   "account_id": "acct-mira"
+  },
+  "lena": {
+   "name": "Lena Novak",
+   "initials": "LN",
+   "role": "Beta tester",
+   "last": "Email 3 days ago",
+   "reach": "Direct chat",
+   "vexa": true,
+   "account_id": "acct-lena"
+  },
+  "jonas": {
+   "name": "Jonas Weber",
+   "initials": "JW",
+   "role": "Engineering lead",
+   "last": "Product sync yesterday",
+   "reach": "Email · Discord",
+   "vexa": false,
+   "email": "jonas@example.com"
+  },
+  "paul": {
+   "name": "Paul Okafor",
+   "initials": "PO",
+   "role": "Open source funding",
+   "last": "Call 9 days ago",
+   "reach": "Email",
+   "vexa": false,
+   "email": "paul@example.org"
+  }
+ },
+ "cards": [
+  {
+   "type": "card",
+   "id": "m-dev-checkin",
+   "kind": "meeting",
+   "meta": "09:30 · Meet · in 38 min",
+   "wide": true,
+   "controls": false,
+   "rank": {
+    "pos": 1,
+    "score": 0.95,
+    "signal": "starts <1h, prep exists"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Weekly dev check-in"
+    },
+    {
+     "type": "person",
+     "people": [
+      "jonas",
+      "mira"
+     ],
+     "extra": [
+      "+3 guests"
+     ]
+    },
+    {
+     "type": "text",
+     "tone": "ok",
+     "text": "Prep ready · 2 open items from last week"
+    },
+    {
+     "type": "action",
+     "label": "Open prep",
+     "prompt": "Open my prep for the weekly dev check-in at 09:30."
+    },
+    {
+     "type": "action",
+     "label": "Send bot",
+     "prompt": "Send the Vexa bot to the weekly dev check-in at 09:30."
+    },
+    {
+     "type": "action",
+     "label": "Join call",
+     "prompt": "Join the weekly dev check-in now with the bot recording.",
+     "primary": true
+    },
+    {
+     "type": "attach",
+     "card": {
+      "type": "card",
+      "id": "s-commitments",
+      "kind": "suggestion",
+      "blocks": [
+       {
+        "type": "text",
+        "tone": "why",
+        "text": "One promise from last week has no trace: “confirm build host”. Check it before you join."
+       },
+       {
+        "type": "action",
+        "label": "Check commitments",
+        "prompt": "List my commitments from last week's dev check-in and which are done, with evidence."
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "m-pilot-review",
+   "kind": "meeting",
+   "meta": "11:00 · Teams · in 2 h",
+   "controls": false,
+   "rank": {
+    "pos": 2,
+    "score": 0.88,
+    "signal": "in 2h, not prepped"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Northwind: pilot review"
+    },
+    {
+     "type": "person",
+     "people": [
+      "mira"
+     ],
+     "extra": [
+      "Northwind ×3"
+     ]
+    },
+    {
+     "type": "text",
+     "tone": "warn",
+     "text": "Not prepared"
+    },
+    {
+     "type": "evidence",
+     "items": [
+      {
+       "text": "2 earlier Northwind calls this week",
+       "source": "calendar"
+      }
+     ]
+    },
+    {
+     "type": "action",
+     "label": "Prepare",
+     "prompt": "Prepare me for the Northwind pilot review at 11:00 using this week's two earlier calls.",
+     "primary": true
+    },
+    {
+     "type": "action",
+     "label": "Send bot",
+     "prompt": "Send the Vexa bot to the Northwind pilot review at 11:00."
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "s-workspace",
+   "kind": "suggestion",
+   "rank": {
+    "pos": 3,
+    "score": 0.71,
+    "signal": "3 calls, notes in 5 chats"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Give Northwind one shared workspace"
+    },
+    {
+     "type": "text",
+     "tone": "why",
+     "text": "You see them at 11:00, and their notes are spread over five chats."
+    },
+    {
+     "type": "evidence",
+     "items": [
+      {
+       "text": "3 Northwind meetings this week",
+       "source": "calendar"
+      },
+      {
+       "text": "11 notes across 5 chats",
+       "source": "flows"
+      }
+     ]
+    },
+    {
+     "type": "action",
+     "label": "Create workspace",
+     "prompt": "Create a Northwind workspace from the 5 related chats and this week's transcripts.",
+     "primary": true
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "w-replies",
+   "kind": "waiting",
+   "label": "Waiting on you · 2 replies",
+   "meta": "grouped",
+   "rank": {
+    "pos": 4,
+    "score": 0.64,
+    "signal": "oldest 9d"
+   },
+   "blocks": [
+    {
+     "type": "list",
+     "rows": [
+      {
+       "type": "row",
+       "person": "paul",
+       "text": "Re: funding reference model",
+       "age": "9d",
+       "hot": true,
+       "action": {
+        "type": "action",
+        "label": "Draft",
+        "prompt": "Draft a reply to Paul Okafor about the funding reference model.",
+        "needs_go": true
+       }
+      },
+      {
+       "type": "row",
+       "person": "lena",
+       "text": "Zoom re-test results",
+       "age": "3d",
+       "hot": true,
+       "action": {
+        "type": "action",
+        "label": "Draft",
+        "prompt": "Draft a reply to Lena Novak on the Zoom re-test.",
+        "needs_go": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "r-check-emails",
+   "kind": "result",
+   "meta": "07:30 · routine",
+   "controls": false,
+   "rank": {
+    "pos": 5,
+    "score": 0.3
+   },
+   "blocks": [
+    {
+     "type": "row",
+     "icon": "mail",
+     "text": "check-emails: 2 important, 14 skimmed",
+     "action": {
+      "type": "action",
+      "label": "Open",
+      "prompt": "Open this morning's check-emails result."
+     }
+    }
+   ]
+  }
+ ]
+}

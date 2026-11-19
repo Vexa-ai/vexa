@@ -1,0 +1,5 @@
+{
+  "status": "refused",
+  "reason": "shared_conversation",
+  "instruction": "Other people read this conversation, so its answer may use only what every one of them can read. Say you cannot use it here, and offer to answer in the person's private chat; do not retry it another way."
+}

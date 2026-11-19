@@ -1,0 +1,123 @@
+---
+title: "Design your company's mail"
+description: "The admin account decides which mails Vexa sends, to whom, and in which words. Edit, preview, test-send and switch on each kind of mail from the chat."
+---
+
+Vexa ships the way mail is sent and a starter template for every kind of mail. What your company
+actually sends is decided by the deployment's **admin account**, from the chat in Company mode.
+Each mail is designed and test-sent before anyone else receives it.
+
+## The kinds of mail
+
+Ask the agent *"list our mail kinds"* (`mail_templates_list`). Each kind has a switch:
+
+- `on`: sent to everyone it concerns;
+- `off`: never sent; each attempt is recorded as `off`;
+- `admins`: sent only to the admin account and the instance admins, so you can try a kind out first.
+
+| Kind | What it is | Starts as |
+|---|---|---|
+| `sign-in` | The emailed sign-in link | **always on**: the wording can be edited, the switch cannot be turned off |
+| `workspace-invite` | Someone shared a workspace with an address | on |
+| `meeting-share` | Someone shared a meeting or call | on |
+| `chat-share` | Someone shared a chat | on |
+| `call-invite` | An invitation to a call | on |
+| `reply`, `rsvp` | Answers to a person's own mail, and calendar acceptances | on |
+| `bot-scheduled`, `bot-joined`, `bot-failed` | Bot notices | off |
+| `prepare` | The prepare note before a meeting | off |
+| `minutes`, `attendee-report`, `recording` | After a meeting | off |
+| `report-daily`, `report-weekly`, `digest` | Reports and the notification digest | off |
+| `quarantine-reply` | One line back to an unknown sender | off |
+
+`mail_templates_list` also shows, for each kind:
+
+- its template's current version, and whether that version was test-sent;
+- the variables the template may use;
+- what sends it today. A kind with no sender yet is a template ready for a flow to use.
+
+## Design one mail
+
+1. **Edit.** *"Change the workspace invite to say …"* (`mail_template_edit`). A template is the
+   subject line, `---`, then the body. Use the `{{variables}}` the kind lists. Never write a URL:
+   Vexa appends the one link itself. The template is saved to `_global/mail/<template>.md` as a
+   commit by the admin account.
+2. **Preview.** *"Show me how it reads"* (`mail_preview`). It renders with sample values, which
+   you can override, and sends nothing.
+3. **Test-send.** *"Send me a test"* (`mail_test_send`). The mail goes to your own address and
+   nowhere else, with `[test]` in the subject.
+4. **Switch on.** *"Turn the workspace invite on"* (`mail_kind_set`). This writes
+   `mail.workspace-invite: on` into `_global/POLICIES.md`. It is refused until the current
+   version of the template has been test-sent. If you edit the template after the test, test it
+   again.
+
+`mail_caps` in `_global/POLICIES.md` sets a daily cap per kind, for example
+`mail_caps: minutes=50, *=500`. The operator's own ceiling, `VEXA_MAIL_MAX_PER_DAY`, applies
+under it.
+
+Everyone can ask for Vexa's invite address (`mail_address`): add it to a calendar event with a
+meeting link, and the bot joins.
+
+## How it works
+
+- `flows_steps/mailkinds.py` lists every kind: its template, variables, sample values and default
+  switch.
+- `flows_steps/outbound.py` sends every mail:
+  1. reads the kind's switch and cap from `_global/POLICIES.md`;
+  2. renders the template;
+  3. hands the mail to the transport, which applies the sender identity and the relay switch;
+  4. writes one `mail_send` row: kind, template version, recipient domain and result.
+- The terminal's sign-in link goes through the same path, via flows-api `POST /mail/sign-in`. If
+  flows cannot answer, the terminal sends its own built-in mail, so signing in never depends on
+  it.
+- `flows_integrations/mail_admin.py` implements the five tools. Templates and switches are written
+  through agent-api's own `_global` door, as the admin account.
+
+**Who owns which data.** flows writes `mail_send` (one row per attempt) and `mail_test_send`
+(which template version reached the admin's inbox); nothing else writes them. Templates and
+switches are files in `_global`, written through agent-api's workspace door. The terminal keeps no
+mail state of its own.
+
+**Configuration.** The sender, the relay switch and the operator's ceiling are environment keys,
+listed in [Shared mailbox](/flows/mailbox#a-mailbox-people-read-too-and-one-sender-for-every-mail).
+`VEXA_MAIL_RELAY` unset keeps the relay a deployment already had; `capture` is for development and
+staging stacks that run the capture double.
+
+## Upgrading an existing deployment
+
+- **Mails that used to go out may stop.** Minutes, recordings, attendee reports, bot notices and the
+  prepare note now start **off** until the admin account switches each one on. To keep every mail
+  the deployment sent before, set `VEXA_MAIL_KINDS_DEFAULT=on` (Docker Compose), or write
+  `mail.<kind>: on` lines into `_global/POLICIES.md`.
+- **Plain mail to the bot's mailbox is no longer routed.** Only invitations and replies to Vexa's own
+  mail become events. Set `VEXA_MAIL_INBOUND_FILTER=all` to keep the earlier behaviour on a mailbox
+  that is Vexa's alone.
+- **The mailbox is read without a trace.** It is opened with `EXAMINE`, so messages stay unread for
+  the people who share it.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How it is met | Enforced by |
+|---|---|---|
+| P11 (mechanism, not policy) | every kind's switch, cap and wording live in `_global`; the code holds starter text only | `test_outbound_mail.py::test_the_shipped_switches_are_conservative`, `::test_switching_a_kind_on_sends_it` |
+| One outbound path | no flows step module sends mail past `outbound.send` | `test_outbound_mail.py::test_no_step_module_sends_past_the_outbound_path` |
+| P14 (config is a validated contract) | the mail keys are declared in flows' and the terminal's `config.v1.json` | `gate:config-contract` |
+| P23 (one writer per carrier) | `mail_send` and `mail_test_send` are written by flows only | `gate:dataflow`, `gate:db-schema` (schema seal) |
+| P18 (fail loud) | a transport failure is audited and raised; an unknown `VEXA_MAIL_RELAY` value is refused | `test_outbound_mail.py::test_a_transport_failure_is_audited_and_raised`, `::test_an_unknown_relay_mode_is_refused` |
+| P21 (report from evidence) | a mail sent to the capture double is reported `captured`, never as delivered | `test_outbound_mail.py::test_a_sent_mail_says_whether_it_was_captured`, `test_mail_admin.py::test_the_delivery_route_answers_captured_or_delivered` |
+
+Test files without a path are in `core/flows/tests/`.
+
+### Authorization at each hop
+
+| Hop | What is checked | Deny tests |
+|---|---|---|
+| Your MCP client → flows-api (`mail_template_edit`, `mail_test_send`, `mail_kind_set`, `mail_templates_list`) | only the deployment's admin account; any other person is refused; the sign-in kind cannot be switched off; a template may not carry a URL | `test_mail_admin.py::test_refusals` |
+| A worker with nobody in the loop → the same routes | refused every editing and sending verb | `test_subject_bearer.py::test_a_worker_with_nobody_in_the_loop_is_refused_every_person_only_verb` |
+| `mail_test_send` | the only recipient is the caller's own address | `test_mail_admin.py::test_the_admin_account_designs_a_kind_end_to_end` |
+| Terminal → flows-api `POST /mail/sign-in` | internal tier only; the sign-in kind is always on | `test_mail_admin.py::test_the_sign_in_door_is_internal_tier_and_cannot_be_switched_off` |
+| A platform service → flows-api `POST /mail/send` | internal tier only; only kinds a platform producer may send; the company's switch applies | `test_mail_admin.py::test_a_platform_producer_sends_a_kind_through_the_same_path` |
+| Any person → `mail_address` | read-only, the invite address only | `test_mail_admin.py::test_every_person_reads_the_invite_address` |
+| flows → the shared mailbox | read-only: `EXAMINE` and `BODY.PEEK[]`; dropped mail leaves no row | `test_mail_transport.py::test_the_reader_examines_the_folder_and_peeks_never_marking_or_moving`, `test_mail_sensor.py::test_a_dropped_message_emits_nothing_and_leaves_no_row_but_the_cursor_moves` |
+| flows → the relay | test domains are never relayed under `relay`; the audit holds the recipient's domain, never the address | `test_outbound_mail.py::test_relay_mode_never_relays_a_test_domain`, `::test_the_audit_never_holds_the_address` |

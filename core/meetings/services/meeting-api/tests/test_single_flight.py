@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import types
 
 import pytest
 
@@ -181,18 +182,23 @@ async def test_pg_advisory_lock_issues_single_arg_bigint_sql():
         def scalar(self):
             return True
 
-    class _Session:
-        async def __aenter__(self):
+    class _Conn:
+        async def execution_options(self, **kw):
+            executed.append(f"isolation_level={kw.get('isolation_level')}")
             return self
-
-        async def __aexit__(self, *a):
-            return False
 
         async def execute(self, stmt, *a, **k):
             executed.append(str(stmt))
             return _Result()
 
-    lock = PgAdvisoryLock(lambda: _Session())
+        async def close(self):
+            return None
+
+    class _Engine:
+        async def connect(self):
+            return _Conn()
+
+    lock = PgAdvisoryLock(types.SimpleNamespace(kw={"bind": _Engine()}))
     key = sweep_lock_key("calendar-sync")
     assert await lock.try_lock(key) is True
     await lock.unlock(key)
@@ -200,6 +206,7 @@ async def test_pg_advisory_lock_issues_single_arg_bigint_sql():
     assert "pg_try_advisory_lock(cast(:key as bigint))" in sql, f"not single-arg bigint: {sql}"
     assert "pg_advisory_unlock(cast(:key as bigint))" in sql
     assert ":cls" not in sql and ":obj" not in sql, "the two-arg (classid, objid) form must be gone"
+    assert executed[0] == "isolation_level=AUTOCOMMIT", "the guard must hold no transaction open"
 
 
 @pytest.mark.skipif(

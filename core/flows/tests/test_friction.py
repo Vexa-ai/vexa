@@ -119,8 +119,8 @@ def test_extra_context_carries_only_the_keys_that_were_present():
 # ── B1/B2/B4 · the real route, through TestClient ────────────────────────────────────────────────
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-friction",
-       "INTERNAL_API_SECRET": "test-internal-secret",
-       "VEXA_FLOWS_DB_URL": "postgresql+psycopg://friction:unreachable@127.0.0.1:1/flows"}
+       "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
+       "VEXA_FLOWS_DB_URL": "postgresql+pg8000://friction:unreachable@127.0.0.1:1/flows"}
 
 
 @pytest.fixture(scope="module")
@@ -349,7 +349,7 @@ def test_an_extra_field_cannot_re_address_the_report_to_someone_else(api):
 #
 # The other half of F-D26: the route was lenient nowhere and instructive nowhere either. What the
 # MCP edge publishes as `report_friction` is DERIVED from this route's OpenAPI (see
-# `core/meetings/services/mcp/src/vexa_mcp/bind.py`), so the vocabulary and the instructions have to
+# `core/gateway/services/mcp/src/vexa_mcp/bind.py`), so the vocabulary and the instructions have to
 # be here or they do not exist anywhere an agent can read them.
 
 def _friction_op(flows_api, method="post"):

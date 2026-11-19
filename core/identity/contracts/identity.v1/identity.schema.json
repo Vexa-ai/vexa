@@ -73,6 +73,65 @@
         "exp": { "type": "integer", "description": "expiry (unix seconds) — short-lived" }
       }
     },
+    "ValidateRequest": {
+      "description": "The body of POST /internal/validate, the authz oracle the gateway, flows and the terminal's server call on the internal tier (X-Internal-Secret = INTERNAL_API_SECRET). `token` is an API key or a worker's delegation token (delegation.v1, prefix `vxd_`). Failures: 503 when INTERNAL_API_SECRET is unset outside dev mode, and 503 `Delegation revocation store unavailable` for a delegation token whose revocation (delegation.v1 jti, revoked when its unit ends) cannot be checked, which never applies to an API key; 403 on a wrong internal secret; 401 with detail `Missing token`, `Invalid token`, `Token expired`, `Delegation tokens are not accepted on this deployment` (no VEXA_MCP_DELEGATION_SECRET), `Invalid delegation: <delegation.v1 RefusalReason>`, `Invalid delegation: scope` (a verified token whose `scope` is not a delegation.v1 Scope) or `Invalid delegation: no such user`. A delegation token is answered only to a caller that sends AcceptsDelegationHeader; to any other caller it is `Invalid token`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token"],
+      "properties": {
+        "token": { "type": "string", "minLength": 1 }
+      }
+    },
+    "AcceptsDelegationHeader": {
+      "const": "x-vexa-internal-accepts-delegation",
+      "description": "The request header a caller of POST /internal/validate sends, with the value `1`, to declare that it reads `delegation` and `person_is_admin` and enforces the ceiling. Identity answers a delegation token (`vxd_`) 200 ONLY to a caller that sends it; to any other caller the token is refused exactly like a bearer nobody answers to (401 `Invalid token`), so a resolver that predates delegation fails closed instead of taking a worker for its person. A value other than `1` is no declaration. An API key is answered the same with or without it. Callers that send it: the gateway (from v0.13.2) and flows-api. The header is in the x-vexa-internal- family, which the gateway never forwards from a client. Header names are case-insensitive."
+    },
+    "ValidateDelegation": {
+      "description": "The ceiling a delegation token's dispatch was granted (delegation.v1 `scope`, plus its `target`), passed on for the services behind the gateway to enforce, and the agent `unit` (session) the token was minted for, passed on for correlation. It becomes gateway-identity.v1 `delegation`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["regime", "workspaces"],
+      "properties": {
+        "regime": { "enum": ["human", "autonomous"] },
+        "workspaces": { "oneOf": [ { "const": "*" }, { "type": "array", "items": { "type": "string" } } ] },
+        "target": { "type": "string" },
+        "unit": { "type": "string", "description": "the delegation token's signed `unit` claim (delegation.v1): the agent unit — a chat thread or a background job — the worker runs as. Correlation only, never a grant; logged as logevent.v1 `session` and recorded as the credential broker's audit.session. Absent when the token carries none" },
+        "shared": { "const": true, "description": "delegation.v1 `scope.shared`: the turn answers into a conversation other people read. Present only then" },
+        "audience": { "const": "cross_org", "description": "delegation.v1 `scope.audience`: some readers of the shared turn are outside the org; crm-api answers public fields only. Present only then" },
+        "grants": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["bot.request", "bot.stop", "flow.retire_self"] }, "description": "delegation.v1 `scope.grants`: the unattended verbs a routine's person granted it. Present only on that routine's autonomous turn, beside `flow`" },
+        "flow": { "type": "string", "minLength": 1, "description": "delegation.v1 `scope.flow`: the routine the grants belong to (`user:<uid>/<name>`). Present only beside `grants`" },
+        "principal_kind": { "const": "workspace", "description": "D2 (0.13.4): the token named a WORKSPACE principal (a room's turn, the workspace's agent). `user_id` is then that principal's own numeric id (identity's `principals`), an account that owns nothing of a person's; `person_is_admin` is always false. Present only beside `shared`" },
+        "principal_workspace": { "type": "string", "minLength": 1, "description": "D2: the workspace that principal is the agent of, from identity's table. Present only beside `principal_kind`" },
+        "on_behalf_of": { "type": "string", "minLength": 1, "description": "D2: the person a workspace principal's turn answered (the token's claim). Present only beside `principal_kind`" },
+        "bills_to": { "type": "integer", "description": "D2: the account a workspace principal's spend debits (the workspace owner's pool), from identity's table. Metering only, never a grant. Present only beside `principal_kind`" }
+      },
+      "dependentRequired": { "principal_kind": ["shared", "principal_workspace", "on_behalf_of", "bills_to"], "principal_workspace": ["principal_kind"], "on_behalf_of": ["principal_kind"], "bills_to": ["principal_kind"] }
+    },
+    "ValidateResponse": {
+      "description": "The 200 answer of POST /internal/validate: who the bearer is. For an API key, `scopes` are the key's (`legacy` for a key minted before scopes) and `is_admin` is identity's admin test for its owner. For a delegation token, `scopes` are exactly [bot, tx], `is_admin` is always false (a worker is never the admin), `delegation` carries the dispatch's ceiling and `person_is_admin` says whether the person it acts for is the instance admin; the gateway treats a worker as the admin only when that is true AND the regime is human. `delegation` and `person_is_admin` appear together and only for a delegation token. `admin_account` says whether the bearer is the deployment's dedicated admin account, the only identity that writes `_global` — never the same question as `is_admin` (the instance admin is a person); `person_admin_account` asks it of a worker's person. The admin account's `max_concurrent` is always 0: it launches no bot. `credential_class` is always stated: `session` for the terminal's signed-in browser, `key` for every other API key, `delegation` for a worker.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_id", "scopes", "max_concurrent", "email", "is_admin", "credential_class"],
+      "properties": {
+        "user_id": { "type": "integer", "description": "becomes gateway-identity.v1 `sub`" },
+        "scopes": { "type": "array", "items": { "enum": ["bot", "tx", "browser", "legacy"] } },
+        "max_concurrent": { "type": "integer", "minimum": 0, "description": "max concurrent bots" },
+        "email": { "type": "string" },
+        "is_admin": { "type": "boolean" },
+        "webhook_url": { "type": "string" },
+        "webhook_secret": { "type": "string", "description": "present only with webhook_url" },
+        "webhook_events": { "type": "object", "additionalProperties": { "type": "boolean" }, "description": "present only with webhook_url" },
+        "workspaces": { "type": "array", "items": { "type": "string" }, "description": "shared-workspace memberships; for a delegation token, only the person's memberships inside the dispatch's ceiling (delegation.v1 ceiling_reads)" },
+        "writable_workspaces": { "type": "array", "items": { "type": "string" }, "description": "the subset of workspaces the caller may write into (role contributor or owner); for a delegation token, bounded by the same ceiling as workspaces" },
+        "delegation": { "$ref": "#/$defs/ValidateDelegation" },
+        "person_is_admin": { "type": "boolean" },
+        "admin_account": { "type": "boolean", "description": "Is the bearer the deployment's dedicated ADMIN ACCOUNT — the one identity that writes the company layer `_global` (admin-api app/admin_account.py: created as one while VEXA_ADMIN_ACCOUNT names its address, and still named)? Always stated for an API key; always false for a delegation token. A resolver reads a missing field as false." },
+        "person_admin_account": { "type": "boolean", "description": "Delegation tokens only: whether the person the worker acts for is the admin account." },
+        "email_verified": { "type": "boolean", "description": "Was `email` proven by a sign-in: an emailed link the person redeemed, or an identity provider that vouched for the address (Google's email_verified, a pinned Microsoft tenant, a generic OIDC token that says email_verified: true)? Identity keeps the proof with the address it proves, so an account made with an API call, or one whose address changed since, is false. Always stated, positive evidence: a resolver that finds it missing (an older identity) reads false. For a delegation token it is the person's. Anything keyed by the address alone — a CRM Person claim — asks for true." },
+        "credential_class": { "enum": ["session", "key", "delegation"], "description": "The bearer's credential class (PRD 0.13.4 D13, admin-api MIGRATION-0010), always stated — positive evidence. `session`: the terminal's signed-in browser, minted only by identity's POST /internal/sessions (internal tier AND the terminal's own session secret). `key`: every other API key — self-serve, admin-minted or legacy; a `browser` scope on a key proves nothing about who is at the keyboard. `delegation`: a worker's vxd_ token. A decision that must be a person's own act asks for `session`; the gateway carries it on as gateway-identity.v1 `credential_class`." }
+      },
+      "dependentRequired": { "delegation": ["person_is_admin"], "person_is_admin": ["delegation"], "person_admin_account": ["delegation"], "webhook_secret": ["webhook_url"], "webhook_events": ["webhook_url"] }
+    },
     "AccessDecision": {
       "description": "The verdict canAccess(subject, resource, action) returns. Default-deny: `allow=false` unless a policy explicitly grants. `reason` is a stable machine code, not free text.",
       "type": "object",

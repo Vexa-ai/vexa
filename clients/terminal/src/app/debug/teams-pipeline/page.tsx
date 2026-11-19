@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import "../debug.css";
 import { LiveTranscriptEngine, type EngineSegment } from "../../../canvas/LiveTranscriptEngine";
 
 type PipelineRow = {
@@ -18,6 +19,10 @@ const clock = (seconds: number): string => `${Math.floor(seconds / 60).toString(
 const latency = (milliseconds: number | null): string => milliseconds == null ? "—" : `+${(milliseconds / 1000).toFixed(1)}s`;
 
 export default function TeamsPipelineWitness(): React.ReactElement {
+  // Live and client-only: the server renders a blank frame, never this page's style attributes
+  // (the page's policy refuses them, app/contentSecurityPolicy.ts).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const [segments, setSegments] = useState<EngineSegment[]>([]);
   const [status, setStatus] = useState("Ready");
   const [callPosition, setCallPosition] = useState(60);
@@ -224,6 +229,7 @@ export default function TeamsPipelineWitness(): React.ReactElement {
     ? Math.max(0, cutStartAt.current + (Date.now() - startedAt.current) - transcriptEdgeMs)
     : null;
 
+  if (!mounted) return <div className="vx-debug-blank" />;
   return (
     <div style={{ minHeight: "100vh", color: "var(--t1)", background: "var(--bg)" }}>
       <header style={{ position: "sticky", top: 0, zIndex: 5, background: "var(--bg)", borderBottom: "1px solid var(--line2)", padding: "12px 18px" }}>

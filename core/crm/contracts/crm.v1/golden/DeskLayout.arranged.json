@@ -1,0 +1,63 @@
+{
+  "columns": {
+    "desktop": 1,
+    "phone": 1
+  },
+  "filters": {},
+  "groups": {
+    "agents": {
+      "named": [
+        {
+          "ids": [
+            "agent:r1"
+          ],
+          "title": "Daily"
+        }
+      ]
+    },
+    "files": {
+      "by": "workspace"
+    }
+  },
+  "order": {
+    "workspaces": [
+      "workspace:sales",
+      "workspace:new",
+      "workspace:ops"
+    ]
+  },
+  "sections": [
+    {
+      "collapsed": false,
+      "column": 1,
+      "hidden": false,
+      "id": "cards",
+      "size": "normal",
+      "span": 1
+    },
+    {
+      "collapsed": false,
+      "column": 1,
+      "hidden": false,
+      "id": "workspaces",
+      "size": "normal",
+      "span": 1
+    },
+    {
+      "collapsed": false,
+      "column": 1,
+      "hidden": false,
+      "id": "agents",
+      "size": "normal",
+      "span": 1
+    },
+    {
+      "collapsed": false,
+      "column": 1,
+      "hidden": false,
+      "id": "files",
+      "size": "normal",
+      "span": 1
+    }
+  ]
+}

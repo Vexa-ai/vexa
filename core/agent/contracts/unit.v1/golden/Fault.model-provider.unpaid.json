@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "unpaid",
+  "provider": "openrouter.ai",
+  "model": "anthropic/claude-sonnet-4",
+  "status": 402,
+  "detail": "Insufficient credits. Add more using https://openrouter.ai/settings/credits",
+  "remedy": "Add credit at openrouter.ai, or choose another model under Settings → Models."
+}

@@ -6,8 +6,14 @@
  *  (a cached 404 would make find-or-create fabricate duplicate users).
  */
 
+import { cookies } from "next/headers";
+import { type AdmittedReason, type ClaimReason, isAdmittedReason, isClaimReason } from "./signinWire";
+
 export const AUTH_COOKIE = process.env.VEXA_AUTH_COOKIE_NAME || "vexa-token";
 export const USER_INFO_COOKIE = process.env.VEXA_USER_INFO_COOKIE_NAME || "vexa-user-info";
+/** The admin claim code a visitor typed on the claim screen (`claim-code/route.ts`), carried to the
+ *  sign-in that follows. httpOnly, scoped to /api/auth, short-lived; the code itself works once. */
+export const CLAIM_COOKIE = "vexa-claim-code";
 
 export interface AdminUser {
   id: string | number;
@@ -65,6 +71,11 @@ export function createUser(email: string): Promise<AdminResult<AdminUser>> {
   return adminRequest<AdminUser>(`/admin/users`, { method: "POST", body: JSON.stringify({ email }) });
 }
 
+/** The accounts on the reserved `example.test` domain (#1783 dev tooling, "Test users…"). */
+export function listTestUsers(): Promise<AdminResult<AdminUser[]>> {
+  return adminRequest<AdminUser[]>(`/admin/users/test-users`, { method: "GET" });
+}
+
 export function createUserToken(userId: string | number): Promise<AdminResult<{ token: string }>> {
   return adminRequest<{ token: string }>(
     `/admin/users/${encodeURIComponent(String(userId))}/tokens?scopes=bot,tx,browser`,
@@ -79,7 +90,10 @@ export function createUserToken(userId: string | number): Promise<AdminResult<{ 
 //    security-relevant may ever be derived from it.
 
 export type ValidatedUser =
-  | { ok: true; userId: string | number; email: string; isAdmin: boolean }
+  | { ok: true; userId: string | number; email: string; isAdmin: boolean; adminAccount: boolean;
+      /** identity.v1 `credential_class`: `session` (a signed-in browser, D13), `key`, `delegation`;
+       *  null when an older admin-api does not say. */
+      credentialClass?: "session" | "key" | "delegation" | null }
   | { ok: false; status: number; error: string };
 
 export async function validateAuthToken(token: string): Promise<ValidatedUser> {
@@ -100,25 +114,30 @@ export async function validateAuthToken(token: string): Promise<ValidatedUser> {
     });
     if (res.status === 401) return { ok: false, status: 401, error: "Not authenticated" };
     if (!res.ok) return { ok: false, status: 503, error: `Token validation failed (admin-api returned ${res.status})` };
-    const data = (await res.json()) as { user_id?: string | number; email?: string; is_admin?: boolean };
+    const data = (await res.json()) as {
+      user_id?: string | number; email?: string; is_admin?: boolean; admin_account?: boolean;
+      credential_class?: unknown;
+    };
     if (data.user_id === undefined || data.user_id === null || !data.email) {
       return { ok: false, status: 502, error: "Token validation returned no identity" };
     }
-    return { ok: true, userId: data.user_id, email: data.email, isAdmin: data.is_admin === true };
+    // `adminAccount` — the deployment's dedicated ADMIN ACCOUNT (identity.v1 `admin_account`): the
+    // only account that writes `_global`, and that has nothing else. Positive evidence only: a
+    // missing field (an older admin-api) is no.
+    const cc = data.credential_class;
+    return { ok: true, userId: data.user_id, email: data.email, isAdmin: data.is_admin === true,
+             adminAccount: data.admin_account === true,
+             credentialClass: cc === "session" || cc === "key" || cc === "delegation" ? cc : null };
   } catch (err) {
     const e = err as Error;
     return { ok: false, status: 503, error: e.name === "TimeoutError" ? "Token validation timed out" : "Token validation unavailable" };
   }
 }
 
-// ── first-run bootstrap admin — a fresh instance has NO admin; the first successful sign-in
-//    claims the role (admin-api serializes concurrent claims). A configured VEXA_ADMIN_EMAILS
-//    allowlist means the instance ALREADY has admins → the claim machinery stays off entirely,
-//    which also keeps existing deployments (allowlist-run) from handing admin to the next login.
-
-function allowlistConfigured(): boolean {
-  return (process.env.VEXA_ADMIN_EMAILS || "").split(",").some((e) => e.trim());
-}
+// ── the admin claim — a fresh instance has NO admin unless the deployment names them; whether a
+//    sign-in may take the role is admin-api's decision (`signin_allow.may_claim`), never this
+//    process's. admin-api serializes concurrent claims and holds every input: the claimed role,
+//    VEXA_ADMIN_EMAILS and the allow-list. The terminal reads none of them.
 
 async function internalRequest<T>(path: string, init: RequestInit = {}): Promise<AdminResult<T>> {
   const url = (process.env.VEXA_ADMIN_API_URL || "").replace(/\/$/, "");
@@ -144,26 +163,352 @@ async function internalRequest<T>(path: string, init: RequestInit = {}): Promise
   }
 }
 
-/** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins).
- *  FAIL-SAFE towards true: if the probe can't answer, the login surface shows plain sign-in
- *  rather than dangling a claim screen that can't succeed. */
-export async function instanceHasAdmin(): Promise<boolean> {
-  if (allowlistConfigured()) return true;
-  const res = await internalRequest<{ admin_exists?: boolean }>("/internal/instance", { method: "GET" });
-  if (!res.ok || !res.data) return true;
-  return res.data.admin_exists === true;
+// ── OAuth sign-ins: the account's bound provider subject ───────────────────────────────────────
+
+/** Bind account `userId` to the OAuth subject signing in to it (`PUT
+ *  /internal/users/{id}/provider-subject`, signin.v1 `ProviderSubjectBindRequest`). The first sign-in
+ *  through a provider records the subject; a later one must carry the same.
+ *
+ *  `bound` only on a 200 that says `first` or `same`; a 409 is `mismatch` (the account belongs to
+ *  another identity of that provider); anything else is `unavailable`, which refuses the sign-in. */
+export async function bindProviderSubject(
+  userId: string | number,
+  subject: string,
+): Promise<"bound" | "mismatch" | "unavailable"> {
+  const res = await internalRequest<{ bound?: unknown }>(
+    `/internal/users/${encodeURIComponent(String(userId))}/provider-subject`,
+    { method: "PUT", body: JSON.stringify({ subject }) },
+  );
+  if (res.ok) return res.data?.bound === "first" || res.data?.bound === "same" ? "bound" : "unavailable";
+  return res.status === 409 ? "mismatch" : "unavailable";
 }
 
-/** Claim the admin role for this user IF the instance has none — the "first sign-in = admin"
- *  step, called on every successful login (admin-api makes it a no-op once an admin exists).
- *  BEST-EFFORT: a failure must never block sign-in; the claim screen simply reappears. */
-async function bootstrapAdminClaim(userId: string | number): Promise<void> {
-  if (allowlistConfigured()) return; // allowlist-run instance → role claims stay off
-  const res = await internalRequest<{ claimed?: boolean }>("/internal/bootstrap-admin", {
+// ── the person's photo, from a sign-in (UI 15g) ─────────────────────────────────────────────────
+
+/** Tell identity what this sign-in carried about the person's photo (`PUT
+ *  /internal/users/{id}/signin-photo`): identity fetches, checks, stores and re-checks it. True on a
+ *  200; never throws. Callers do not await it — a photo never holds up a sign-in. */
+export async function putSigninPhoto(userId: string | number, body: Record<string, string>): Promise<boolean> {
+  const res = await internalRequest(`/internal/users/${encodeURIComponent(String(userId))}/signin-photo`,
+    { method: "PUT", body: JSON.stringify(body) });
+  return res.ok;
+}
+
+// ── a verified address: proven at sign-in (R4) ───────────────────────────────────────────────────
+
+/** Record that the account's address was proven at this sign-in (`PUT /internal/users/{id}/
+ *  email-verified`): `magic_link` after an emailed link was redeemed, `oidc:<provider>` when the
+ *  provider vouched for the address. Identity keeps it with the address, so a company domain can be
+ *  verified through an admin email on it. Best-effort: a failure never blocks the sign-in. */
+export async function recordEmailVerified(userId: string | number, via: string): Promise<boolean> {
+  const res = await internalRequest<{ verified?: unknown }>(
+    `/internal/users/${encodeURIComponent(String(userId))}/email-verified`,
+    { method: "PUT", body: JSON.stringify({ via }) },
+  );
+  return res.ok;
+}
+
+// ── emailed sign-in links: the shared single-use record ─────────────────────────────────────────
+
+/** Record that the sign-in link `jti` is being redeemed (`POST /internal/signin-links/redeem`,
+ *  signin.v1 `SigninLinkRedeemRequest`). admin-api keeps the record in the service Redis until
+ *  `expiresAt`, for every terminal replica at once.
+ *
+ *  `first` only on a 200 whose body says `first: true`; a 409 is `used` (a replay, or a link past its
+ *  expiry); anything else — no internal edge configured, admin-api unreachable, its store down — is
+ *  `unavailable`, which the caller must treat as a refusal. */
+export async function redeemSigninLink(jti: string, expiresAt: number): Promise<"first" | "used" | "unavailable"> {
+  const res = await internalRequest<{ first?: unknown }>("/internal/signin-links/redeem", {
     method: "POST",
-    body: JSON.stringify({ user_id: userId }),
+    body: JSON.stringify({ jti, expires_at: expiresAt }),
   });
-  if (res.ok && res.data?.claimed) {
+  if (res.ok) return res.data?.first === true ? "first" : "unavailable";
+  return res.status === 409 ? "used" : "unavailable";
+}
+
+// ── instance state ──────────────────────────────────────────────────────────────
+//    admin-api owns the truth and answers it over the SAME internal door `internalRequest()` already
+//    uses (VEXA_ADMIN_API_URL + X-Internal-Secret). There used to be a second fact here, the
+//    company-layer gate (`global_setup`), which kept a fresh instance closed to everyone but its
+//    admin until `_global` was written. Founder ruling 2026-10-08 removed it: "let's remove global
+//    setup at all so that there is no need to setup global at all - let it be empty with no data -
+//    it's fine." No door asks about `_global` any more.
+
+/** What admin-api says about this instance, in one read. */
+export interface InstanceState {
+  admin_exists: boolean;
+}
+
+/** Has an admin been claimed?
+ *
+ *  Fails towards TRUE. A claim screen that cannot succeed is a dead end (it invites somebody to
+ *  become the admin of an instance whose bootstrap edge is unreachable), so when the probe cannot
+ *  answer we show plain sign-in. */
+export async function instanceState(): Promise<InstanceState> {
+  const res = await internalRequest<{ admin_exists?: boolean }>("/internal/instance", { method: "GET" });
+  if (!res.ok || !res.data) return { admin_exists: true };
+  // admin-api counts the addresses VEXA_ADMIN_EMAILS names as admins; this process has no list.
+  return { admin_exists: res.data.admin_exists === true };
+}
+
+/** An arrival as a SERVER record (PRD §5.5): who it is for, which workspaces it mounts, which
+ *  preset opens it, which tabs it shows. The door mints it and the client follows the returned
+ *  `url` — so a second browser, a cleared browser, and a reload all arrive at the SAME chat, because
+ *  the id is in the URL and the record is on the server.
+ *
+ *  Minting is INTERNAL-TIER on agent-api (a scaffold names mounts and composes an opening, so a
+ *  caller who could mint one for another address could drive that person's agent). This server
+ *  holds that secret; a browser never does. Failure is REPORTED, never swallowed. */
+export interface MintedScaffold { id: string; url: string }
+
+/** Mint the `first-visit` arrival. Its opening preset body lives in `_global/asks/first-visit.md`,
+ *  so what it says is admin-editable and no prompt text is ever composed here. There used to be a
+ *  second kind minted from here, `admin-setup` (the setup-global conversation the first admin was
+ *  put into); it went with the company-layer gate (founder ruling 2026-10-08). */
+async function mintArrivalScaffold(
+  email: string,
+  userId: string | number,
+  provenance: { flow: string; step: string },
+): Promise<AdminResult<MintedScaffold>> {
+  const url = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!url || !secret) {
+    return { ok: false, status: 503, error: "Scaffold minting is not configured (AGENT_API_URL / VEXA_INTERNAL_API_SECRET)" };
+  }
+  try {
+    const res = await fetch(`${url}/internal/scaffolds`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Secret": secret },
+      // `workspaces` is deliberately ABSENT, not `[]`: the server derives the mount set from the
+      // address — the workspaces already shared with it plus the meetings it is invited to.
+      // Deriving it there keeps one rule in one place rather than two that drift, and it is the half
+      // a client could not compute anyway. `tabs`/`focus` likewise come from the preset's own
+      // frontmatter.
+      body: JSON.stringify({
+        who: email,
+        kind: "first-visit",
+        opening: "first-visit",
+        provenance: { ...provenance, minted_by: String(userId) },
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 500);
+      return { ok: false, status: res.status, error: detail || `agent-api returned ${res.status}` };
+    }
+    return { ok: true, status: res.status, data: (await res.json()) as MintedScaffold };
+  } catch (err) {
+    const e = err as Error;
+    return { ok: false, status: 0, error: e.name === "TimeoutError" ? "scaffold mint timed out" : e.message };
+  }
+}
+
+/** AN ORDINARY SIGN-IN'S ARRIVAL (F42, founder ruling 2026-09-02).
+ *
+ *  Signed in as a new user, the founder got a seeded "Personal" chat on the generic greeting, an
+ *  ADMIN-ONLY "Organisation setup" card offered to a plain member, and his empty desk's README
+ *  template rendered as a page — *"(unset) — this workspace has not been set up yet…"*. His words:
+ *  *"i logged as new user, that's what i see - not happy about that."*
+ *
+ *  Every one of those was the product composing a landing out of whatever happened to be lying
+ *  around, which is the exact failure the scaffold exists to end: a sign-in that carries no `?s=`
+ *  now MINTS its own arrival, so a first visit is a record — who it is for, which workspaces are
+ *  already shared with that address, which meetings it is invited to — rather than a guess.
+ *
+ *  ⚠ A FAILED MINT MUST NOT COST SOMEBODY THEIR SIGN-IN. It is logged and the visitor lands on `/`
+ *  as before. That is the OPPOSITE trade from the admin claim, and deliberately so: there, the role
+ *  had already changed by the time the mint ran, so a silent failure would have left a person who IS
+ *  the administrator with no way into the conversation that says so — it had to be surfaced. Here
+ *  nothing has changed except that they are signed in, which is what they asked for. */
+/** WHAT THIS ADDRESS HAS TO COME BACK TO — asked of agent-api, never guessed here.
+ *
+ *  `has` is true when they hold a chat thread OR a desk past `new`; `probed` says whether we got an
+ *  answer at all, so a caller can tell "they are new" from "we could not ask".
+ *
+ *  Two evidences rather than one because they fail in opposite directions. A person who has talked
+ *  to their agent has threads. A person a colleague put in a meeting has a desk with a report in it
+ *  and may never have typed a word — and greeting THEM as a stranger is the same defect wearing a
+ *  different hat. */
+export async function hasHistory(email: string): Promise<{ has: boolean; probed: boolean; why: string }> {
+  const url = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!url || !secret) return { has: false, probed: false, why: "not configured" };
+  try {
+    const res = await fetch(`${url}/internal/has-history?who=${encodeURIComponent(email)}`, {
+      headers: { "X-Internal-Secret": secret },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return { has: false, probed: false, why: `agent-api returned ${res.status}` };
+    const body = (await res.json()) as { has_history?: unknown; sessions?: unknown; desk?: unknown };
+    return {
+      has: body?.has_history === true,
+      probed: true,
+      why: `sessions=${String(body?.sessions ?? "?")} desk=${String(body?.desk ?? "?")}`,
+    };
+  } catch (err) {
+    return { has: false, probed: false, why: (err as Error).message };
+  }
+}
+
+/** A FIRST VISIT IS FOR SOMEBODY WITH NO FIRST VISIT BEHIND THEM (Vexa-ai/vexa#1591).
+ *
+ *  This used to mint on every sign-in that named no destination, so the admin who had spent a
+ *  morning on this instance signed in again and was introduced to the product: *"i logged in again
+ *  and now see no chats and it's starting over again while it has the context"*. F42's rule was
+ *  right and its condition was wrong — "the link named nowhere" is not the same question as "there
+ *  is nowhere to go".
+ *
+ *  THE GUARD LIVES HERE, not at one door, because all four doors — magic link, direct login, OAuth,
+ *  the admin claim — are the same moment and would otherwise drift.
+ *
+ *  IT FAILS TOWARDS NOT MINTING, and that costs almost nothing: a probe that cannot answer is
+ *  talking to the same agent-api the mint itself needs one line later, so an outage lands the person
+ *  on `/` either way. What it buys is that a blip can never re-commit the reported defect — a
+ *  returning person told, again, that we have never met.
+ *
+ *  THE ADMINISTRATOR IS NOT AN EXCEPTION ANY MORE. This used to mint nothing while `_global` was
+ *  unwritten, because the first admin's arrival was the setup-global conversation (#1607). There is
+ *  no such conversation at first run now (founder ruling 2026-10-08), so the admin's first sign-in
+ *  gets a first visit like anybody else's. */
+export async function mintFirstVisitScaffold(
+  email: string,
+  userId: string | number,
+): Promise<AdminResult<MintedScaffold>> {
+  const history = await hasHistory(email);
+  if (history.has || !history.probed) {
+    return {
+      ok: false,
+      status: 409,
+      error: history.has
+        ? `no arrival minted — ${email} has history to return to (${history.why})`
+        : `no arrival minted — could not ask whether ${email} has history (${history.why})`,
+    };
+  }
+  return mintArrivalScaffold(email, userId, { flow: "sign-in", step: "first-visit" });
+}
+
+// ── who may sign in (Vexa-ai/vexa#1783) ─────────────────────────────────────────────────────────
+//    Removing the company-layer gate removed the only thing that controlled who could sign in, and
+//    every door ends in find-or-create: whoever finished one got an account, an API token, agent
+//    turns on this instance's model credentials and bot launches. A self-hosted instance must not
+//    be open to anyone with an email address by default.
+
+/** The verdict on one address. `why` is a reason for logs and tests, never shown to the person.
+ *  The reasons are signin.v1's (core/identity/contracts/signin.v1), generated into `signinWire.ts`
+ *  from the same schema admin-api's are, so this process knows every reason admin-api can give. */
+export type SigninAdmission =
+  | { admitted: true; why: AdmittedReason }
+  | { admitted: false; why: "not-allowed" | "unavailable"; detail?: string };
+
+/** The claim code this request carries, if the visitor entered one on the claim screen. Read from
+ *  the request's cookies; outside a request (a test, a script) there is none. */
+async function claimCodeFromRequest(): Promise<string | undefined> {
+  try {
+    return (await cookies()).get(CLAIM_COOKIE)?.value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** MAY THIS ADDRESS SIGN IN? Every door asks this BEFORE it creates or sends anything — the
+ *  emailed link's request and redeem halves, OAuth, the dev login — and the last three ask it
+ *  through `findOrCreateUserToken`, so a door added later cannot reach an account without it.
+ *
+ *  THE WHOLE DECISION IS ADMIN-API'S (`POST /internal/signin-admission`, rule in
+ *  `signin_allow.decide`): an admin (claimed, or named by `VEXA_ADMIN_EMAILS`), an existing user, an
+ *  address on the allow-list (`VEXA_SIGNIN_ALLOW` + the `signin.allow` setting the admin edits in
+ *  Settings), or — on an instance nobody has claimed and nothing has been configured for — the
+ *  sign-in that carries the one-time admin claim code, because it will claim the instance. This
+ *  process passes the code along when the visitor entered one, asks once, and obeys; it holds no
+ *  list of its own.
+ *
+ *  ⚠ FAILS CLOSED, the opposite direction from `instanceState()`. An unreachable or unconfigured
+ *  admin-api, a non-2xx (an older admin-api has no such route and answers 404), or a body that does
+ *  not literally say `admitted: true` with a reason we know — all refuse. Admission is positive
+ *  evidence or nothing. Sessions that already exist never pass through here, so an outage stops
+ *  new sign-ins and nothing else. */
+export async function signinAdmission(email: string, opts: { viaInvite?: boolean } = {}): Promise<SigninAdmission> {
+  const normalized = (email || "").trim().toLowerCase();
+  const claimCode = await claimCodeFromRequest();
+  // `via_invite` (PRD 0.13.4 S2) is said ONLY by the join POST, after agent-api spent the sign-in
+  // half of an invite this deployment mailed to this exact address. admin-api decides what it means.
+  const body: Record<string, unknown> = { email: normalized };
+  if (claimCode) body.claim_code = claimCode;
+  if (opts.viaInvite) body.via_invite = true;
+  const res = await internalRequest<{ admitted?: unknown; why?: unknown }>("/internal/signin-admission", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok || !res.data) {
+    return { admitted: false, why: "unavailable", detail: res.error || `admin-api returned ${res.status}` };
+  }
+  const why = res.data.why;
+  if (res.data.admitted !== true || !isAdmittedReason(why)) return { admitted: false, why: "not-allowed" };
+  return { admitted: true, why };
+}
+
+/** Why admin-api did or did not hand over the role (signin.v1 `ClaimReason`): `claimed`,
+ *  `admin-exists` (somebody holds it, or the deployment names the admins), `bad-code` (no claim code,
+ *  a wrong one, or a spent one), `not-allowed` (this address may not be the first admin). */
+export type ClaimWhy = ClaimReason;
+
+/** Is `code` the live admin claim code? `null` when admin-api could not answer. */
+export async function checkClaimCode(code: string): Promise<boolean | null> {
+  const res = await internalRequest<{ valid?: unknown }>("/internal/admin-claim/check", {
+    method: "POST",
+    body: JSON.stringify({ claim_code: code }),
+  });
+  if (!res.ok || !res.data) return null;
+  return res.data.valid === true;
+}
+
+export type ClaimResult =
+  | { ok: true; claimed: boolean; why: ClaimWhy }
+  | { ok: false; status: number; error: string };
+
+/** Ask admin-api to make this user the instance's administrator.
+ *
+ *  ⚠ WHY THIS IS EXPORTED, AND WHAT WENT WRONG WITHOUT IT (observed live 2026-09-02, 08:48Z).
+ *  The claim used to exist ONLY inside `findOrCreateUserToken`, i.e. only on the path a sign-in
+ *  takes. That is fine on a fresh instance, where the first sign-in is imminent — and a dead end on
+ *  an instance that already has live sessions predating the gate. The founder's own browser held a
+ *  session minted before any of this existed: `admin_exists` was false, his cookie was valid, and
+ *  his cookie will never traverse a sign-in door again. So the screen said "not set up" forever and
+ *  there was nothing anywhere that could set it up. A role that can only be claimed by an event that
+ *  can no longer happen is not a role, it is a deadlock.
+ *
+ *  Hence a claim reachable by an ALREADY-SIGNED-IN subject (POST /api/auth/claim-admin). Two
+ *  properties that route depends on and that live here rather than there:
+ *    • admin-api serialises concurrent claims under an advisory lock, so two racing tabs are safe
+ *      and the loser simply learns an admin now exists;
+ *    • it is a no-op once an admin exists, so this can never TRANSFER the role.
+ *
+ *  Unlike `bootstrapAdminClaim` below, this REPORTS its outcome — a user who pressed a button that
+ *  says "claim this instance" is owed the answer, where a background step on a sign-in was not. */
+export async function claimAdminRole(userId: string | number, claimCode?: string): Promise<ClaimResult> {
+  const res = await internalRequest<{ claimed?: boolean; why?: unknown }>("/internal/bootstrap-admin", {
+    method: "POST",
+    body: JSON.stringify(claimCode ? { user_id: userId, claim_code: claimCode } : { user_id: userId }),
+  });
+  if (!res.ok) return { ok: false, status: res.status || 503, error: res.error || "admin-api refused the claim" };
+  const claimed = res.data?.claimed === true;
+  const why = res.data?.why;
+  // A refusal whose reason is not signin.v1's is still a refusal; it reads as the role being taken.
+  return { ok: true, claimed, why: claimed ? "claimed" : isClaimReason(why) && why !== "claimed" ? why : "admin-exists" };
+}
+
+/** Claim the admin role for this user IF admin-api says this sign-in may — called on every
+ *  successful login with the claim code the visitor entered, if any (admin-api answers no without
+ *  the code, once an admin exists, while the deployment names the admins, or for an address the
+ *  allow-list does not hold). BEST-EFFORT: a failure must never block sign-in; the claim screen
+ *  simply reappears. */
+async function bootstrapAdminClaim(userId: string | number): Promise<void> {
+  const code = await claimCodeFromRequest();
+  if (!code) return; // no code, no claim — nothing to ask
+  const res = await claimAdminRole(userId, code);
+  if (res.ok && res.claimed) {
     console.info(`[terminal-auth] bootstrap: user ${userId} claimed the admin role (first sign-in)`);
   } else if (!res.ok) {
     console.warn(`[terminal-auth] bootstrap-admin claim failed (sign-in continues): ${res.error}`);
@@ -209,6 +554,77 @@ export function mintUserToken(
   );
 }
 
+/** The session mint's answer (`POST /internal/sessions`, admin-api `app/sessions.py`). */
+export interface AdminMintedSession {
+  token: string;
+  id: number;
+  user_id?: number;
+  scopes?: string[];
+  credential_class: "session";
+}
+
+/** Mint the SESSION credential for a signed-in browser (PRD 0.13.4 D13): admin-api's
+ *  `POST /internal/sessions`, the one door that writes `api_tokens.kind = 'session'`. It needs the
+ *  internal tier (`VEXA_INTERNAL_API_SECRET`) AND the terminal's own second secret
+ *  (`VEXA_TERMINAL_SESSION_SECRET` as `X-Terminal-Session-Secret`), which no other service holds —
+ *  so a decision that must be the person's own act (a policy change, a routine's activation) can ask
+ *  for `credential_class == "session"` and know a self-serve key with `browser` is not one.
+ *
+ *  `unavailable` is true when this deployment cannot mint sessions yet — the secret is unset here,
+ *  or admin-api answers 404 (an older identity) or 503 (its secret is unset) — so the caller may fall
+ *  back to an ordinary key. Any other failure is a real refusal and is not marked unavailable. */
+export async function mintSessionToken(
+  userId: string | number,
+  opts: { name?: string; expiresIn?: number } = {},
+): Promise<AdminResult<AdminMintedSession> & { unavailable?: boolean }> {
+  const sessionSecret = process.env.VEXA_TERMINAL_SESSION_SECRET || "";
+  if (!sessionSecret) {
+    return { ok: false, status: 503, unavailable: true, error: "VEXA_TERMINAL_SESSION_SECRET is not set" };
+  }
+  const body: Record<string, unknown> = { user_id: Number(userId), name: opts.name ?? TERMINAL_LOGIN_TOKEN_NAME };
+  if (opts.expiresIn && opts.expiresIn > 0) body.expires_in = opts.expiresIn;
+  const res = await internalRequest<AdminMintedSession>("/internal/sessions", {
+    method: "POST",
+    headers: { "X-Terminal-Session-Secret": sessionSecret },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    return { ...res, unavailable: res.status === 404 || res.status === 503 };
+  }
+  // Positive evidence: only an answer that SAYS it is a session counts as one.
+  if (!res.data?.token || res.data.credential_class !== "session") {
+    return { ok: false, status: 502, error: "admin-api's session mint did not answer a session" };
+  }
+  return res;
+}
+
+/** The sign-in's credential: ALWAYS a SESSION on a deployment that holds the session secret
+ *  (hotfix 2026-10-18 — a browser signed in with a key cannot press a card, and never learns why).
+ *  Only a terminal with `VEXA_TERMINAL_SESSION_SECRET` UNSET — a deployment with no session concept —
+ *  falls back to the old `bot,tx,browser` login KEY, with a warning; there every decision that needs a
+ *  session is refused (fail closed). With the secret set, an admin-api that cannot mint (404/503) fails
+ *  the sign-in rather than quietly handing the browser a key. Both carry the `terminal-login` name,
+ *  so the prune bounds both, and both end when their cookie does (`LOGIN_LIFETIME_SECONDS`). */
+/** A sign-in credential lives exactly as long as the browser cookie that carries it. */
+export const LOGIN_LIFETIME_SECONDS = 60 * 60 * 24 * 30;
+
+export async function mintLoginToken(userId: string | number): Promise<AdminResult<{ token: string; id: number }>> {
+  const session = await mintSessionToken(userId);
+  if (session.ok && session.data) {
+    return { ok: true, status: session.status, data: { token: session.data.token, id: session.data.id } };
+  }
+  if (!session.unavailable || process.env.VEXA_TERMINAL_SESSION_SECRET) {
+    return { ok: false, status: session.status || 500, error: session.error || "Failed to mint the session" };
+  }
+  console.warn(`[terminal-auth] session credential unavailable (${session.error || session.status}); `
+    + "signing in with an ordinary key — decisions that need a session will be refused");
+  const minted = await mintUserToken(userId, { scopes: ["bot", "tx", "browser"], name: TERMINAL_LOGIN_TOKEN_NAME, expiresIn: LOGIN_LIFETIME_SECONDS });
+  if (!minted.ok || !minted.data?.token) {
+    return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
+  }
+  return { ok: true, status: minted.status, data: { token: minted.data.token, id: minted.data.id } };
+}
+
 export function revokeToken(tokenId: string | number): Promise<AdminResult<void>> {
   return adminRequest<void>(`/admin/tokens/${encodeURIComponent(String(tokenId))}`, { method: "DELETE" });
 }
@@ -250,12 +666,87 @@ export function terminalLoginTokenCap(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 3;
 }
 
-/** BEST-EFFORT: after a login mint, bound the user's `terminal-login` tokens to the newest N.
- *  Lists the user's tokens, keeps only those named `terminal-login`, sorts oldest→newest, and
- *  revokes everything beyond the newest cap. NEVER touches differently-named (self-serve) tokens.
- *  Every failure (list error, a 404 on a concurrently-deleted token) is logged and swallowed — a
- *  prune problem must never turn a successful sign-in into a failure (mirrors bootstrapAdminClaim /
- *  provisionUserWorkspace above). */
+/** A token last active inside this window is treated as a LIVE SESSION and is spared even when it
+ *  sits past the cap. Configurable, default 48 hours. */
+export function terminalLoginRecentUseWindowMs(): number {
+  const raw = parseFloat(process.env.VEXA_TERMINAL_LOGIN_RECENT_USE_HOURS || "");
+  const hours = Number.isFinite(raw) && raw > 0 ? raw : 48;
+  return hours * 3600_000;
+}
+
+/** The CEILING: how far live-session protection may push the count above the cap before the prune
+ *  stops honouring it. Without this the recent-use exemption is unbounded — every token in a
+ *  same-day sign-in burst is by definition recent, so nothing would ever be revoked and a looping
+ *  harness could mint indefinitely (which is the accumulation #638 existed to stop). Past the
+ *  ceiling the least-recently-used tokens go regardless; an actively-used session is the LAST
+ *  candidate in that ordering, so it survives unless there are `max` sessions more active than it.
+ *  Default cap × 5. */
+export function terminalLoginTokenMax(): number {
+  const raw = parseInt(process.env.VEXA_TERMINAL_LOGIN_TOKEN_MAX || "", 10);
+  const cap = terminalLoginTokenCap();
+  if (Number.isFinite(raw) && raw > 0) return Math.max(raw, cap);
+  return cap * 5;
+}
+
+/** admin-api serialises datetimes NAIVE-UTC — `2026-09-01T16:33:46.315228`, no zone designator
+ *  (`datetime.utcnow()` straight through Pydantic). `Date.parse` reads a zone-less DATE-TIME form
+ *  as LOCAL time, so on any host whose TZ is not UTC the value lands hours off. That skew cancels
+ *  in a relative sort (every value is shifted the same way) but NOT in the absolute
+ *  recent-use window below, which compares against a real `Date.now()`. Stamp the zone when the
+ *  string doesn't carry one. Returns NaN for absent/unparseable input. */
+export function parseAdminTimestamp(raw: string | null | undefined): number {
+  if (typeof raw !== "string" || !raw.trim()) return NaN;
+  const s = raw.trim();
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/.test(s);
+  return Date.parse(zoned ? s : `${s}Z`);
+}
+
+/** When a token was last ACTIVE: its last authenticated request, or — if it has never been used —
+ *  the moment it was issued. A freshly minted token is therefore active by construction, which is
+ *  what keeps the sign-in that just happened from pruning itself. */
+function lastActiveAt(t: AdminTokenInfo): number {
+  const used = parseAdminTimestamp(t.last_used_at);
+  if (Number.isFinite(used)) return used;
+  const made = parseAdminTimestamp(t.created_at);
+  return Number.isFinite(made) ? made : 0;
+}
+
+/** BEST-EFFORT: after a login mint, bound the user's `terminal-login` tokens — by LAST USE, never
+ *  by issue age.
+ *
+ *  ⚠ THE BUG THIS REPLACES (2026-09-01). The previous policy sorted by `created_at` and revoked the
+ *  OLDEST-ISSUED tokens over the cap. That makes the longest-lived session the first casualty of
+ *  everybody else's sign-ins: while agents redeemed magic links against this deploy all day, each
+ *  redeem minted a token, and the founder's months-old browser session was every single time the
+ *  oldest one. His tab was revoked repeatedly — every API call 401ing under a UI that still
+ *  rendered. Issue age is exactly backwards as a proxy for "who needs this least".
+ *
+ *  THE POLICY NOW, in order:
+ *   1. Rank the login tokens by LAST ACTIVITY (`last_used_at`, falling back to `created_at` for a
+ *      token that has never authenticated anything) — least-recently-used first. This alone fixes
+ *      the founder: a tab making requests is always at the newest end of that order, so it never
+ *      lands in the eviction slice at all.
+ *   2. Everything past the cap, taken from the least-recently-used end, is a candidate.
+ *   3. A candidate last active inside the recent-use window is SPARED — the case where the tab has
+ *      been idle for a few hours while somebody else signs in repeatedly. A live session outranks
+ *      the cap; the cap exists to stop unbounded accumulation, not to evict somebody mid-sentence.
+ *   4. …but only up to the CEILING. Past `terminalLoginTokenMax()` the exemption stops applying and
+ *      the least-recently-used go anyway, because every token in a same-day burst is "recent" and
+ *      an unconditional exemption would mean nothing is ever revoked. Note what the ordering buys
+ *      here: even under ceiling pressure the ACTIVE session is the last thing considered.
+ *
+ *  The deliberate trade this leaves: between the cap and the ceiling, a burst of sign-ins inside one
+ *  window does exceed the cap. That set drains on its own — the first sign-in after those tokens go
+ *  quiet revokes them. An over-cap set that converges is worth strictly more than the alternative,
+ *  which is what broke the founder.
+ *
+ *  admin-api stamps `last_used_at` on every `POST /internal/validate`, which is the same oracle
+ *  every proxied terminal request and `/api/auth/me` goes through — so "used" here means genuine
+ *  traffic, and no new write path was needed to learn it.
+ *
+ *  NEVER touches differently-named (self-serve) tokens. Every failure (list error, a 404 on a
+ *  concurrently-deleted token) is logged and swallowed — a prune problem must never turn a
+ *  successful sign-in into a failure (mirrors bootstrapAdminClaim / provisionUserWorkspace above). */
 async function pruneLoginTokens(userId: string | number): Promise<void> {
   try {
     const listed = await listUserTokens(userId);
@@ -264,17 +755,30 @@ async function pruneLoginTokens(userId: string | number): Promise<void> {
       return;
     }
     const cap = terminalLoginTokenCap();
+    const max = terminalLoginTokenMax();
+    const windowMs = terminalLoginRecentUseWindowMs();
+    const now = Date.now();
+
     const loginTokens = listed.data
       .filter((t) => t.name === TERMINAL_LOGIN_TOKEN_NAME)
-      // oldest first: prefer created_at, fall back to numeric id
+      // LEAST-RECENTLY-ACTIVE first; ties (and unparseable timestamps) fall back to numeric id,
+      // which is monotonic in admin-api, so the order is always total and deterministic.
       .sort((a, b) => {
-        const ta = a.created_at ? Date.parse(a.created_at) : NaN;
-        const tb = b.created_at ? Date.parse(b.created_at) : NaN;
-        if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
+        const da = lastActiveAt(a);
+        const db = lastActiveAt(b);
+        if (da !== db) return da - db;
         return Number(a.id) - Number(b.id);
       });
 
-    const overflow = loginTokens.slice(0, Math.max(0, loginTokens.length - cap));
+    const candidates = loginTokens.slice(0, Math.max(0, loginTokens.length - cap));
+    // How many of the candidates the ceiling forces out no matter how recently they were used —
+    // taken from the least-recently-used end, so an active session is the last one reached.
+    const forced = Math.max(0, loginTokens.length - max);
+    const overflow = candidates.filter(
+      (t, i) => i < forced || now - lastActiveAt(t) >= windowMs,
+    );
+    const spared = candidates.filter((t) => !overflow.includes(t));
+
     for (const tok of overflow) {
       const revoked = await revokeToken(tok.id);
       if (!revoked.ok) {
@@ -282,18 +786,40 @@ async function pruneLoginTokens(userId: string | number): Promise<void> {
       }
     }
     if (overflow.length) {
-      console.info(`[terminal-auth] login-token prune: user ${userId} over cap ${cap}, revoked ${overflow.length} oldest login token(s)`);
+      console.info(`[terminal-auth] login-token prune: user ${userId} over cap ${cap}, revoked ${overflow.length} least-recently-used login token(s)`);
+    }
+    if (spared.length) {
+      console.info(`[terminal-auth] login-token prune: user ${userId} kept ${spared.length} over-cap login token(s) active within ${Math.round(windowMs / 3600_000)}h (live sessions outrank the cap, up to max ${max})`);
     }
   } catch (err) {
     console.warn("[terminal-auth] login-token prune failed (sign-in continues):", (err as Error).message);
   }
 }
 
-/** Find the user by email, creating them if they don't exist, then mint an APIToken.
- *  Returns the user + token, or an error with an HTTP-ish status for the caller to surface. */
+/** A sign-in that `findOrCreateUserToken` turned away before anything was created. `refused` tells
+ *  the door which sentence to show (signinRefusal.ts); `status` is 403 for "not allowed" and 503 for
+ *  "could not decide". */
+export type SigninRefused = { ok: false; status: number; error: string; refused: "not-allowed" | "unavailable" };
+
+/** Admit, then find the user by email (creating them if they don't exist), then mint an APIToken.
+ *  Returns the user + token, or an error with an HTTP-ish status for the caller to surface.
+ *
+ *  ADMISSION COMES FIRST, and its place is load-bearing: `createUser` below makes an account as a
+ *  side effect, so a refusal placed after it would leave a real account behind for somebody who was
+ *  never admitted — and that account would then pass as an existing user next time. Every sign-in
+ *  door reaches an account through this function, so the check here is the one a new door cannot
+ *  forget. */
 export async function findOrCreateUserToken(
   email: string,
-): Promise<{ ok: true; user: AdminUser; token: string } | { ok: false; status: number; error: string }> {
+  opts: { subject?: string; emailVerifiedVia?: string; viaInvite?: boolean } = {},
+): Promise<{ ok: true; user: AdminUser; token: string } | SigninRefused | { ok: false; status: number; error: string; refused?: undefined }> {
+  const admission = await signinAdmission(email, { viaInvite: opts.viaInvite });
+  if (!admission.admitted) {
+    return admission.why === "unavailable"
+      ? { ok: false, status: 503, error: `sign-in admission unavailable: ${admission.detail ?? "admin-api did not answer"}`, refused: "unavailable" }
+      : { ok: false, status: 403, error: "this address is not allowed to sign in here", refused: "not-allowed" };
+  }
+
   const found = await findUserByEmail(email);
 
   let user: AdminUser | undefined;
@@ -311,18 +837,39 @@ export async function findOrCreateUserToken(
     return { ok: false, status: found.status || 503, error: found.error || "Failed to look up user" };
   }
 
-  // Mint the login token with a stable `terminal-login` name so it is distinguishable from
+  // AN OAUTH SIGN-IN IS BOUND TO ITS PROVIDER SUBJECT (providerIdentity.ts), before anything is
+  // minted: the first sign-in through a provider records it on the account, and a later one with a
+  // different subject — another account the same tenant administrator gave this address — is refused.
+  if (opts.subject) {
+    const binding = await bindProviderSubject(user.id, opts.subject);
+    if (binding === "mismatch") {
+      return { ok: false, status: 403, error: "this account is bound to another identity of that provider", refused: "not-allowed" };
+    }
+    if (binding !== "bound") {
+      return { ok: false, status: 503, error: "the account's provider binding could not be checked", refused: "unavailable" };
+    }
+  }
+
+  // THE ADDRESS WAS PROVEN by this sign-in (a redeemed link, or a provider that vouches for it):
+  // identity records it. Only the callers that proved the inbox pass `emailVerifiedVia`; the direct
+  // login does not. Best-effort — never blocks the sign-in.
+  if (opts.emailVerifiedVia) {
+    try { await recordEmailVerified(user.id, opts.emailVerifiedVia); } catch { /* best-effort */ }
+  }
+
+  // Mint the login credential with a stable `terminal-login` name so it is distinguishable from
   // user-created self-serve tokens and can be bounded (find-or-create used to mint unconditionally
-  // with no name and no cap → one live token per sign-in, forever).
-  const minted = await mintUserToken(user.id, { scopes: ["bot", "tx", "browser"], name: TERMINAL_LOGIN_TOKEN_NAME });
+  // with no name and no cap → one live token per sign-in, forever). It is a SESSION (D13) when the
+  // deployment can mint one, and the old login key otherwise (`mintLoginToken`).
+  const minted = await mintLoginToken(user.id);
   if (!minted.ok || !minted.data?.token) {
     return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
   }
   // Bound the user's login tokens to the newest N (best-effort; never blocks sign-in).
   await pruneLoginTokens(user.id);
-  // First-run bootstrap: on a fresh instance the FIRST successful sign-in claims the admin role
-  // (no-op everywhere else — admin exists, or an allowlist runs the instance). Covers both the
-  // direct email login and the OAuth signIn callback, which both land here.
+  // First-run bootstrap: on a fresh instance the FIRST permitted sign-in claims the admin role
+  // (admin-api says no everywhere else). Covers both the direct email login and the OAuth signIn
+  // callback, which both land here.
   await bootstrapAdminClaim(user.id);
   // On genuine account creation ("account start"), eagerly provision the user's workspace tiers so the
   // Personal baseline + `_system` exist before their first chat. Best-effort (idempotent + lazy fallback).
@@ -330,4 +877,72 @@ export async function findOrCreateUserToken(
     await provisionUserWorkspace(minted.data.token);
   }
   return { ok: true, user, token: minted.data.token };
+}
+
+
+// ── shared rate limits (PRD 0.13.4 M6) ─────────────────────────────────────────────────────────
+/** Count one request against admin-api's shared window (`POST /internal/rate/take`, signin.v1):
+ *  `allowed`, `limited`, or `unavailable` when the store could not answer — the caller then keeps
+ *  its own process-local count, so a Redis outage never closes the sign-in door. */
+export async function rateTake(key: string, limit: number, windowSec: number): Promise<"allowed" | "limited" | "unavailable"> {
+  const res = await internalRequest<{ allowed?: unknown }>("/internal/rate/take", {
+    method: "POST",
+    body: JSON.stringify({ key, limit, window_sec: windowSec }),
+  });
+  if (!res.ok || !res.data) return "unavailable";
+  return res.data.allowed === true ? "allowed" : res.data.allowed === false ? "limited" : "unavailable";
+}
+
+// ── the mailed invite that signs its one address in (PRD 0.13.4 S2) ─────────────────────────────
+export type InviteSigninClaim =
+  | { ok: true; email: string; workspaceId: string; room: { id: string; title: string } | null }
+  | { ok: false; reason: "used" | "not-a-signin-link" | "unknown" | "unavailable" };
+
+/** Spend the sign-in half of a mailed invite, ONCE (agent-api `POST /internal/invites/signin-claim`,
+ *  internal tier). Only the join page's POST calls this — never a GET. */
+export async function claimInviteSignin(token: string): Promise<InviteSigninClaim> {
+  const base = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!base || !secret) return { ok: false, reason: "unavailable" };
+  try {
+    const res = await fetch(`${base}/internal/invites/signin-claim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Secret": secret },
+      body: JSON.stringify({ token }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.status === 410) return { ok: false, reason: "used" };
+    if (res.status === 409) return { ok: false, reason: "not-a-signin-link" };
+    if (res.status === 404) return { ok: false, reason: "unknown" };
+    if (!res.ok) return { ok: false, reason: "unavailable" };
+    const d = (await res.json().catch(() => ({}))) as { email?: unknown; workspace_id?: unknown; room?: { id?: unknown; title?: unknown } | null };
+    const email = typeof d.email === "string" ? d.email.trim().toLowerCase() : "";
+    if (!email) return { ok: false, reason: "unavailable" };
+    const room = d.room && typeof d.room.id === "string" && d.room.id
+      ? { id: d.room.id, title: typeof d.room.title === "string" ? d.room.title : "" } : null;
+    return { ok: true, email, workspaceId: typeof d.workspace_id === "string" ? d.workspace_id : "", room };
+  } catch {
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/** Redeem an invite AS the person just signed in (their own API key, through the gateway — the same
+ *  authenticated accept every other door uses, so agent-api checks their verified address itself). */
+export async function acceptInviteAs(apiToken: string, inviteToken: string): Promise<{ ok: true; workspaceId: string; room: { id: string } | null } | { ok: false; status: number }> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/agent/workspace/invites/accept`, {
+      method: "POST",
+      headers: { "X-API-Key": apiToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ token: inviteToken }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return { ok: false, status: res.status };
+    const d = (await res.json().catch(() => ({}))) as { workspace_id?: unknown; room?: { id?: unknown } | null };
+    const room = d.room && typeof d.room.id === "string" && d.room.id ? { id: d.room.id } : null;
+    return { ok: true, workspaceId: typeof d.workspace_id === "string" ? d.workspace_id : "", room };
+  } catch {
+    return { ok: false, status: 0 };
+  }
 }

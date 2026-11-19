@@ -1,0 +1,68 @@
+---
+title: "What changed in 0.13.4: auth"
+description: "How to send an API key, what is deprecated until 0.13.6, and no compatibility switches. What a refused call is told, and what to send instead."
+---
+
+From 0.13.4 there is one recommended way to authenticate and one behaviour per concern. A call in an
+older form is either refused with an answer that says what to do, or, where clients already deployed
+depend on it, still served until 0.13.6 and logged so its users can be found.
+
+## A refused call says what to do
+
+Every refusal below carries the same fields, so a client (or an agent) reading it can fix its own call:
+
+```json
+{
+  "type": "error",
+  "error": "api_key_query_removed",
+  "changed_in": "0.13.4",
+  "do_instead": "send the key in the x-api-key header, or (a browser) in the subprotocol list: new WebSocket(url, ['vexa.v1', 'vexa.key.' + key])",
+  "docs": "https://docs.vexa.ai/changes-0-13-4-auth"
+}
+```
+
+## The websocket key goes in a header or the subprotocol list
+
+A key in the URL ends up in proxy and access logs. Send it in the `X-API-Key` header instead; it works
+on 0.12 and on 0.13.
+
+| Socket | `?api_key=<API_KEY>` in the URL |
+|---|---|
+| `/ws` | **Deprecated, still accepted until 0.13.6**, so clients built on 0.12 keep their live transcript. Each use is logged (`ws_query_key_deprecated`, without the key). A header or subprotocol key, when also sent, is used first. Removed in 0.13.6. |
+| the bot-account live view (`/bot-accounts/sessions/{id}/vnc`) | `api_key_query_removed` frame, then close `4401` |
+
+Send the key one of two ways:
+
+```bash
+# a server: the X-API-Key header
+wscat -c "wss://<host>/ws" -H "X-API-Key: <API_KEY>"
+```
+
+```js
+// a browser: the key travels in Sec-WebSocket-Protocol; the server answers "vexa.v1"
+const ws = new WebSocket("wss://<host>/ws", ["vexa.v1", `vexa.key.${API_KEY}`]);
+```
+
+See [Stream a transcript](/how-to/stream-transcript).
+
+## `/ws` takes the same scopes as REST
+
+A socket opens for any key that holds `bot` or `tx`, the same keys every REST route takes. Which
+meetings it may subscribe to is decided by ownership: the meetings the key's user owns, or can see
+through a workspace. A `browser`-only key gets `insufficient_scope`, with `changed_in`, `do_instead`
+and `docs`, and the socket is closed with `4403`. `GET /auth/me` lists the scopes your key holds. See
+[Authentication → Scopes](/authentication#scopes).
+
+## The compatibility switches are gone
+
+Three settings that re-opened a 0.12 behaviour are not read any more. A service that is still given
+one prints a line naming it at start and logs `config_key_removed`; Helm refuses a values file that
+still sets `compat.*`.
+
+| Setting (Helm value) | What holds now |
+|---|---|
+| `VEXA_WS_SCOPE_MODE` (`compat.wsScopeMode`) | `/ws` takes any key holding `bot` or `tx`, as REST does; meeting ownership, workspace and share decide what it streams |
+| `VEXA_WEBHOOK_STORED_URL_POLICY` (`compat.webhookStoredUrlPolicy`) | every webhook delivery is held to the outbound-url.v1 guard: a URL that resolves into 100.64/10 or the documentation and benchmarking ranges is recorded `blocked`; save it again with a public address |
+| `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (`compat.legacyUnsignedWindowSeconds`) | a transcript entry is stored only when it is signed; upgrade from 0.12 with no meeting in flight ([Upgrade from 0.12](/upgrade-from-0-12)) |
+
+Remove them from `.env`, `docker run -e` and your Helm values.

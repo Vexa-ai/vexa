@@ -93,7 +93,7 @@ const dir = mkdtempSync(join(tmpdir(), 'vexa-teardown-'));
 // ── 3) Both parts are in the closed set the upload walks ─────────────────────────────────────────
 {
   const inv = { platform: 'teams', connectionId: 'sess-1', nativeMeetingId: 'x',
-                recordingUploadUrl: 'http://example.invalid/upload', internalSecret: 's' } as unknown as Invocation;
+                recordingUploadUrl: 'http://example.invalid/upload', token: 's' } as unknown as Invocation;
   const rec = createCaptureSignalRecorder(inv, { dir });
   check('the recorder names both new sidecars beside the tape',
     rec.botlogPath.endsWith('sess-1.botlog.txt') && rec.transcriptPath.endsWith('sess-1.transcript.jsonl'),

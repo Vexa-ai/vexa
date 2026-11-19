@@ -19,6 +19,7 @@ operator got no error and no effect.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import pathlib
@@ -32,8 +33,8 @@ import flows_config
 # supplies them around the import exactly as `test_health.py` and `test_subject_bearer.py` do —
 # whichever module imports first wins, and these tests read constants back off the LIVE module.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-preflight",
-        "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://preflight:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://preflight:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:
@@ -61,7 +62,7 @@ def _good_env() -> dict:
     for entry in _declaration()["keys"]:
         if entry.get("class") == "required-explicit":
             env[entry["key"]] = f"real-{entry['key'].lower().replace('_', '-')}"
-    env["VEXA_FLOWS_DB_URL"] = "postgresql+psycopg://flows:pw@db:5432/flows"
+    env["VEXA_FLOWS_DB_URL"] = "postgresql+pg8000://flows:pw@db:5432/flows"
     env["VEXA_FLOWS_ADMIN_API_URL"] = "http://admin-api:8057"
     return env
 
@@ -73,11 +74,48 @@ def test_the_environment_this_file_calls_good_actually_passes():
 
 
 def test_the_declaration_forbids_seven_placeholders_on_every_secret_key():
-    """The list this service's code used to re-type as four."""
+    """The list this service's code used to re-type as four. Every required secret — the flows key
+    included — carries the same seven, and none carries a longer per-key list any more: the admin
+    key that had one is no longer a flows credential."""
+    seen = set()
     for entry in _declaration()["keys"]:
         if entry.get("secret") and entry.get("class") == "required-explicit":
+            seen.add(entry["key"])
             assert len(entry["forbidden_values"]) == 7, entry["key"]
             assert "vexa-internal-secret" in entry["forbidden_values"]
+    assert "VEXA_FLOWS_SERVICE_KEY" in seen
+    assert "VEXA_FLOWS_ADMIN_KEY" not in seen and "INTERNAL_API_SECRET" not in seen
+
+
+PUBLISHED_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme", "change-me",
+                          "CHANGE-ME", "default", "secret")
+
+
+@pytest.mark.parametrize("published", PUBLISHED_PLACEHOLDERS)
+def test_a_service_key_on_a_published_literal_refuses_to_boot(published):
+    """VEXA_FLOWS_SERVICE_KEY opens the gateway's service door — flows' one way into the other
+    domains — so any placeholder this repository published for a secret refuses the boot."""
+    env = _good_env() | {"VEXA_FLOWS_SERVICE_KEY": published}
+    with pytest.raises(config_preflight.ConfigError) as e:
+        config_preflight.preflight(env)
+    assert "VEXA_FLOWS_SERVICE_KEY" in str(e.value)
+    if published not in ("secret", "default"):  # words the refusal's own prose uses
+        assert published not in str(e.value), "the refusal echoed the value"
+
+
+def test_an_unset_service_key_refuses_to_boot():
+    env = _good_env()
+    env.pop("VEXA_FLOWS_SERVICE_KEY")
+    with pytest.raises(config_preflight.ConfigError) as e:
+        config_preflight.preflight(env)
+    assert "VEXA_FLOWS_SERVICE_KEY" in str(e.value)
+
+
+def test_a_deployment_without_the_internal_secret_or_admin_key_boots():
+    """Flows holds neither: the good environment names neither, and passes."""
+    env = _good_env()
+    assert "INTERNAL_API_SECRET" not in env and "VEXA_FLOWS_ADMIN_KEY" not in env
+    assert config_preflight.preflight(env)["service"] == "flows-api"
 
 
 @pytest.mark.parametrize("placeholder", ["vexa-internal-secret", "lite-internal-secret",
@@ -117,19 +155,31 @@ def test_a_missing_required_key_names_every_one_that_is_missing_at_once():
     and `flows_config.preflight()`'s door check has only for doors."""
     env = _good_env()
     env.pop("VEXA_FLOWS_DB_URL")
-    env.pop("INTERNAL_API_SECRET")
+    env.pop("VEXA_FLOWS_SERVICE_KEY")
     with pytest.raises(config_preflight.ConfigError) as e:
         config_preflight.preflight(env)
-    assert "VEXA_FLOWS_DB_URL" in str(e.value) and "INTERNAL_API_SECRET" in str(e.value)
+    assert "VEXA_FLOWS_DB_URL" in str(e.value) and "VEXA_FLOWS_SERVICE_KEY" in str(e.value)
 
 
 # ── the call sites: both entrypoints, and the door check kept alongside ─────────────────────────
 
 def test_the_flows_api_entrypoint_calls_the_vendored_preflight():
+    """AND IT IS THE ENTRYPOINT, NEVER THE IMPORT (Vexa-ai/vexa#1629).
+
+    This used to read `main()`'s body, and `main()` used to call `contract_preflight()` directly —
+    while module scope ALSO ran the whole check through `_require_api_key`, which made
+    `import flows_integrations.flows_api` refuse without `VEXA_FLOWS_DB_URL` and broke the release's
+    identity probe. The refusals moved into `boot()`, which `main()` runs before it binds the port
+    and the ASGI lifespan runs before the first request; the import refuses nothing. Same check,
+    same message, one moment later — so this reads the boot path, and the pair of assertions holds
+    both halves of it.
+    """
     assert callable(flows_api.contract_preflight)
-    body = _src("flows_integrations/flows_api.py").split("def main(", 1)[1]
-    assert "contract_preflight()" in body.split("\ndef ", 1)[0], (
-        "flows-api's entrypoint does not run the config.v1 contract check")
+    assert callable(flows_api.boot)
+    assert "contract_preflight()" in inspect.getsource(flows_api.boot), (
+        "flows-api's boot does not run the config.v1 contract check")
+    assert "boot()" in inspect.getsource(flows_api.main), (
+        "flows-api's entrypoint does not run its own boot")
 
 
 def test_the_worker_entrypoint_calls_the_vendored_preflight():
@@ -142,8 +192,12 @@ def test_both_entrypoints_still_run_the_door_check():
     """The contract check does NOT replace it: `flows_config.preflight()` refuses a deployment that
     cannot NAME a door, which is flows' own rule (no host-port defaults: `http://localhost:18057` is
     a different deployment's admin-api on any host running two stacks) and is not in the
-    declaration. Two questions, both asked."""
-    assert "flows_config.preflight()" in _src("flows_integrations/flows_api.py")
+    declaration. Two questions, both asked.
+
+    ON THE BOOT PATH, not at module scope (#1629): flows-api asks both inside `boot()`, which the
+    ASGI lifespan and `main()` run — so this reads that function rather than the whole file, where
+    the string would also match a comment about it."""
+    assert "flows_config.preflight()" in inspect.getsource(flows_api.boot)
     assert "flows_config.preflight()" in _src("flows_worker/__main__.py")
     with pytest.raises(flows_config.ConfigError):
         import os
@@ -157,8 +211,9 @@ def test_both_entrypoints_still_run_the_door_check():
 
 def test_the_running_code_reads_the_declaration_rather_than_re_typing_it():
     """The drift is closed BY CONSTRUCTION, which is the half a boot-time call alone would not give:
-    `flows_api`'s own import-time refusal now reads `forbidden_values` off the declaration instead
-    of carrying a second, shorter copy of it."""
+    `flows_api`'s own refusal reads `forbidden_values` off the declaration instead of carrying a
+    second, shorter copy of it. (It said "import-time refusal" until #1629 moved that refusal to
+    `boot()`; the reading is the same, the moment is not.)"""
     declared = set(_declaration()["keys"][0].get("forbidden_values") or ()) or None
     for entry in _declaration()["keys"]:
         if entry["key"] == "VEXA_FLOWS_API_KEY":
@@ -167,9 +222,30 @@ def test_the_running_code_reads_the_declaration_rather_than_re_typing_it():
     assert set(flows_api._forbidden_values("VEXA_FLOWS_TIMELINE_KEY")) == declared
 
 
-def test_the_operator_key_refusal_covers_every_declared_placeholder(monkeypatch):
-    for placeholder in flows_api._forbidden_values("VEXA_FLOWS_API_KEY"):
-        monkeypatch.setenv("VEXA_FLOWS_API_KEY", placeholder)
-        with pytest.raises(RuntimeError) as e:
-            flows_api._require_api_key()
-        assert "placeholder" in str(e.value)
+def test_the_operator_key_refusal_covers_every_declared_placeholder():
+    """THE REFUSAL IS THE SHARED VALIDATOR'S, and this asserts that rather than a wording.
+
+    This test was written against a hand-rolled per-key check inside `_require_api_key` that
+    carried its own placeholder list. F-D20 (b) deleted that: `_require_api_key` now calls
+    `config_preflight.preflight()`, which validates the WHOLE declaration — so there is exactly one
+    forbidden-values list in the tree, the one `gate:config-contract` reads, and it cannot drift
+    from a second copy because there is no second copy. `tests/test_flows_api_key_refusal.py` drives
+    the refusal itself, parametrized off the declaration.
+
+    What remains worth asserting here is the property that made the duplicate list dangerous: every
+    literal the declaration forbids for the operator key is a literal the validator actually
+    refuses, and the set is not narrower than the declaration."""
+    declared = set(flows_api._forbidden_values("VEXA_FLOWS_API_KEY"))
+    assert declared, "the declaration forbids nothing for the operator key"
+    entry = next(e for e in _declaration()["keys"] if e["key"] == "VEXA_FLOWS_API_KEY")
+    assert declared == set(entry["forbidden_values"]), (
+        "the refusal list read at runtime is not the one the declaration states")
+    # A COMPLETE deployment environment, varying exactly one key — otherwise the validator reports
+    # whichever required key the test process happens to lack and says nothing about this one.
+    base = {e["key"]: f"a-real-{e['key'].lower()}" for e in _declaration()["keys"]
+            if e.get("class") == "required-explicit"}
+    for placeholder in sorted(declared):
+        with pytest.raises(config_preflight.ConfigError) as refused:
+            config_preflight.preflight(env={**base, "VEXA_FLOWS_API_KEY": placeholder})
+        assert "VEXA_FLOWS_API_KEY" in str(refused.value), (
+            f"the shared validator did not refuse {placeholder!r} for VEXA_FLOWS_API_KEY")

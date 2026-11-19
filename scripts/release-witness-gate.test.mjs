@@ -14,6 +14,9 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateReceipt } from "./release-witness-gate.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const V = "v9.9.9";
 const FULL_A = "a".repeat(64);

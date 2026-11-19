@@ -20,7 +20,8 @@ from meeting_api.bot_spawn.ports import AuthSessionBusy, AuthSessionNotConfigure
 SECRET = "test-admin-token"
 USER = 7
 
-AUTH_FIELDS = ("authenticated", "userdataS3Path", "s3Endpoint", "s3Bucket", "s3AccessKey", "s3SecretKey")
+AUTH_FIELDS = ("authenticated", "userdataS3Path", "s3Endpoint", "s3Bucket", "s3AccessKey", "s3SecretKey",
+               "sessionWritebackUrl")
 
 
 def _set_auth_env(monkeypatch, **overrides):
@@ -54,7 +55,7 @@ async def _spawn(repo, runtime, native_id="abc-defg-hij"):
 # ── unit: build_invocation carries the sealed auth block ─────────────────────────────────────────
 
 def test_build_invocation_carries_auth_block():
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     base = dict(meeting_id=1, platform="google_meet",
                 meeting_url="https://meet.google.com/abc-defg-hij", bot_name="VexaBot",
                 token=token, native_meeting_id="abc-defg-hij", connection_id="conn-1",
@@ -72,6 +73,24 @@ def test_build_invocation_carries_auth_block():
     assert not any(f in plain for f in AUTH_FIELDS)
 
 
+def test_build_invocation_carries_the_write_back_url_only_beside_authenticated():
+    """invocation.v1 sessionWritebackUrl rides only in authenticated mode: a bot older than v0.13.2
+    refuses the field, and an anonymous bot has no stored session to write back."""
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
+    base = dict(meeting_id=1, platform="google_meet",
+                meeting_url="https://meet.google.com/abc-defg-hij", bot_name="VexaBot",
+                token=token, native_meeting_id="abc-defg-hij", connection_id="conn-1",
+                redis_url="redis://redis:6379/0")
+    url = "http://meeting-api:8080/internal/browser-session/conn-1"
+    inv = build_invocation(**base, authenticated=True, userdata_s3_path="userdata/id-1",
+                           s3_endpoint="http://minio:9000", s3_bucket="vexa",
+                           s3_access_key="k", s3_secret_key="s", session_writeback_url=url)
+    conforms_invocation(inv)
+    assert inv["sessionWritebackUrl"] == url
+    with pytest.raises(ValueError, match="authenticated"):
+        build_invocation(**base, session_writeback_url=url)
+
+
 # ── flow: the deployment knob populates every spawn ──────────────────────────────────────────────
 
 async def test_knob_populates_stock_post_bots_spawn(monkeypatch):
@@ -84,6 +103,7 @@ async def test_knob_populates_stock_post_bots_spawn(monkeypatch):
     assert inv["userdataS3Path"] == "userdata/bot-identity-1"
     assert inv["s3AccessKey"] == "userdata-key"
     assert inv["s3SecretKey"] == "userdata-secret"
+    assert inv["sessionWritebackUrl"] == f"http://meeting-api:8080/internal/browser-session/{inv['connectionId']}"
 
 
 async def test_knob_off_ships_no_auth_fields(monkeypatch):

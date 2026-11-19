@@ -1,7 +1,16 @@
 # ADR 0027 — Meeting processing: one fact, one carrier (SSOT for the real-time pipeline)
 
-**Status:** accepted · 2026-07-08 · applies **P4/P8/P22/P23** to the live-meeting processing path ·
-extends ADR-0024's guarantee-teardown discipline to agent workers
+**Status:** SUPERSEDED · 2026-09-02 · was accepted 2026-07-08, applying **P4/P8/P22/P23** to the
+live-meeting processing path
+
+> **Superseded by PRD decision 34 — one intelligence.** Everything below governs a pipeline that no
+> longer exists: the per-meeting copilot dispatch, the `proc:meeting:{row}` cleaned-notes stream and
+> its `view_end` marker, the `processed-notes.v1` contract, the processing opt-in flag and its
+> cursor, and the `processed_pending` re-drain. The product runs no model calls of its own beside
+> the agent; the live view shows the raw transcript, and everything intelligent happens in the
+> chat's agent over MCP. The ADR is kept because its *reasoning* — one fact, one carrier, one
+> arbiter, and a completion MARKER rather than a quiet-poll guess — outlived its subject and is
+> still how the transcript path is built.
 
 ## Context
 

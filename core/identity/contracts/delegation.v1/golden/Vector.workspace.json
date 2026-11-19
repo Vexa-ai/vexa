@@ -1,0 +1,39 @@
+{
+  "secret": "delegation.v1-published-test-vector-key",
+  "now": 1767225600,
+  "subject": "1042",
+  "regime": "human",
+  "workspaces": [
+    "team-ws"
+  ],
+  "shared": true,
+  "unit": "agent-ws-team-ws-room-s-room1",
+  "principal_kind": "workspace",
+  "principal_workspace": "team-ws",
+  "on_behalf_of": "43",
+  "ttl_sec": 3600,
+  "jti": "vec-workspace-0001",
+  "header": {
+    "alg": "HS256",
+    "typ": "vxdlg"
+  },
+  "claims": {
+    "aud": "vexa-mcp",
+    "exp": 1767229200,
+    "iat": 1767225600,
+    "jti": "vec-workspace-0001",
+    "on_behalf_of": "43",
+    "principal_kind": "workspace",
+    "principal_workspace": "team-ws",
+    "scope": {
+      "regime": "human",
+      "shared": true,
+      "workspaces": [
+        "team-ws"
+      ]
+    },
+    "sub": "1042",
+    "unit": "agent-ws-team-ws-room-s-room1"
+  },
+  "token": "vxd_eyJhbGciOiJIUzI1NiIsInR5cCI6InZ4ZGxnIn0.eyJhdWQiOiJ2ZXhhLW1jcCIsImV4cCI6MTc2NzIyOTIwMCwiaWF0IjoxNzY3MjI1NjAwLCJqdGkiOiJ2ZWMtd29ya3NwYWNlLTAwMDEiLCJvbl9iZWhhbGZfb2YiOiI0MyIsInByaW5jaXBhbF9raW5kIjoid29ya3NwYWNlIiwicHJpbmNpcGFsX3dvcmtzcGFjZSI6InRlYW0td3MiLCJzY29wZSI6eyJyZWdpbWUiOiJodW1hbiIsInNoYXJlZCI6dHJ1ZSwid29ya3NwYWNlcyI6WyJ0ZWFtLXdzIl19LCJzdWIiOiIxMDQyIiwidW5pdCI6ImFnZW50LXdzLXRlYW0td3Mtcm9vbS1zLXJvb20xIn0.gMYACD745v8CbMvlOSXj7iZE9slQf3fXLMKaArEpNC0"
+}

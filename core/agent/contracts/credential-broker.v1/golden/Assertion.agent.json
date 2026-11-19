@@ -1,0 +1,10 @@
+{
+  "role": "agent",
+  "actor": "42",
+  "session": "mcp-request-6f1c2a9e0b7d4c3e8a5f1b2c3d4e5f60",
+  "at": 1760000000,
+  "nonce": "3b8c0d6e9f2a4b1c8d7e6f5a4b3c2d1e",
+  "method": "GET",
+  "path": "/api/connections",
+  "body": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

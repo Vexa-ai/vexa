@@ -7,8 +7,9 @@ types; transports are adapters wired at the composition root.
 
 | File | Role |
 |---|---|
-| `index.ts` | **composition root** — validates config, launches the browser, wires the REAL adapters, runs the orchestrator, exits. Speak acts are tee'd to a voice handler (orchestrator core untouched). The container entrypoint (`main`). |
+| `index.ts` | **composition root** — validates config, launches the browser, wires the REAL adapters, runs the orchestrator, exits. Speak acts are tee'd to a voice handler and `reconfigure` acts to the transcription-language control (orchestrator core untouched). The container entrypoint (`main`). |
 | `config.ts` | `invocation.v1` boot config — parse + ajv-validate `VEXA_BOT_CONFIG`, fail-fast (P14). Exports the typed `Invocation`. |
+| `transcription-language.ts` | the live transcription-language setting (`createLanguageControl`), the `reconfigure` act handler, and the language-aware STT call (auto · forced · restricted). Pure. |
 | `ports.ts` | the port interfaces the core depends on: `JoinDriver · Pipeline · TranscriptSink · LifecycleSink · ActsSource · RecordingSink`. Pure (no transport types). |
 | `test-doubles.ts` | shared L2 port doubles (`noopAloneness`, `noopActs`, `noopPipeline`, …) — one export site for every orchestrator construction in tests. |
 | `orchestrator.ts` | the `lifecycle.v1` state machine (`createOrchestrator`) — joining → awaiting_admission → active → (completed \| failed). Depends only on ports. |
@@ -16,7 +17,34 @@ types; transports are adapters wired at the composition root.
 | `join-driver.ts` | **JoinDriver** — wraps `@vexa/join` `joinMeeting`/leave/removal (guest + authenticated); maps `JoinState`→`BotStatus`. |
 | `pipeline.ts` | **Pipeline** — `google_meet`→`@vexa/gmeet-pipeline` (per-channel, glow-named) · `zoom`/`teams`→`@vexa/mixed-pipeline`; STT via `@vexa/transcribe-whisper`; lane sink → bot `TranscriptSink.publish`. Exposes `feedAudio`. |
 | `recording.ts` | **RecordingSink** — `@vexa/recording` assembler (`buildRecordingMaster` on `is_final`/`close`) → upload (`RecordingService`). |
-| `capture-bridge.ts` | **L4-pending (O6)** — browser launch (+ S3 auth profile), page-side capture inject + PCM pump → `pipeline.feedAudio`, and the speak controller. Browser-resident; not unit-provable — validated on the VM. |
+| `session-restore.ts` | a saved bot account's profile over HTTP — `GET inv.sessionRestoreUrl` (MeetingToken), the answer checked against session-profile.v1 `WritebackBody`, written profile paths only via `writeSessionProfile`; any failure is `SessionSyncError('session-restore')`. |
+| `session-writeback.ts` | the rotated session back to meeting-api on clean teardown (`PUT inv.sessionWritebackUrl`). |
+| `browser-session.ts` | **browser-session mode** (`VEXA_BROWSER_SESSION`): `signin` (private live view: x11vnc on localhost behind a per-session password, websockify :6080; `provisionLogin`; PUT the profile) or `verify` (restore, `validateLoggedIn`, POST the result). Run by `main()` instead of a meeting. |
+| `capture-bridge.ts` | **L4-pending (O6)** — browser launch (+ auth profile from S3 or `sessionRestoreUrl`), page-side capture inject + PCM pump → `pipeline.feedAudio`, the in-meeting chat reader (google_meet · jitsi) → `onChat`, and the speak + chat-send controllers. Browser-resident; not unit-provable — validated on the VM. |
+| `act-dispatch.ts` | the in-meeting act router — `speak`/`speak_stop` → SpeakController, `chat_send` → ChatSender (ungated: a text act), whose outcome goes back to meeting-api as a transcript.v1 `ChatSendResult` when the act carried an `id`. Pure (controllers and the report injected). |
 | `*.test.ts` | L1/L2/L3 — config (ajv goldens) · orchestrator (lifecycle.v1 sequence, fake ports) · lifecycle-http/transcript-redis/acts-redis (transports) · **pipeline (L3: capture→lane→stt→publish, overlap no cross-mislabel)** · **recording (L3: webm/wav/seq)**. |
 
 Tests run via `tsx` (no build step): `npx tsx src/<file>.test.ts`; all chained in `npm test`.
+
+## Transcription language
+
+The setting is `{language, allowedLanguages}` (`transcription-language.v1`); a code is `^[a-z]{2,3}$`.
+
+| Mode | Setting | Every STT call |
+|---|---|---|
+| auto | no language, empty list | carries no language |
+| forced | language, empty list | pinned to `language` |
+| restricted | non-empty list | one entry: pinned to it. Several: unpinned; a detection outside the list (or none) is re-run on the same audio pinned to the fallback — `language` when set, else the first entry. Each fallback is counted and logged. |
+
+`invocation.v1` seeds it; an off-contract pair (non-code, language outside a non-empty list) fails
+boot with `validation_error`. An `acts.v1` `reconfigure` replaces each field it carries — a present
+`language` sets it (`null` clears), a present `allowedLanguages` sets it (`[]` clears), an absent key
+keeps that field. The next STT call uses the new setting; calls in flight finish with the old one. A
+malformed act is refused with a `console.error` naming why and changes nothing. `task` is not
+supported (transcribe only): a non-`transcribe` task is reported and ignored. The mixed (Jitsi) lane
+reads the pinned language per turn for its segment stamp and language-probability gate.
+
+Log lines: `[bot] transcription language: <summary> (invocation)` at boot and
+`[bot] transcription language: <old> → <new> (reconfigure)` per applied change, where a summary is
+`auto` · `forced de` · `restricted [de,en] fallback de`. With the capture-signal recorder on, each
+setting is also an observation (`source: 'transcription-language'`, `{language, allowedLanguages, cause}`).

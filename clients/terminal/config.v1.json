@@ -1,0 +1,270 @@
+{
+  "contract": "config.v1",
+  "service": "terminal",
+  "keys": [
+    {
+      "key": "VEXA_MAIL_SMTP_HOST",
+      "class": "defaulted",
+      "default": "(unset — the local dev mail double at localhost:1025)",
+      "description": "The SMTP relay the terminal sends the emailed sign-in link through (src/app/api/auth/mailer.ts). The same key flows sends its mail through: one relay per deployment, one family of keys. Unset, the terminal dials the local dev double (Mailpit) at localhost:1025, which inside a container is nothing, so no link is delivered.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_FLOWS_API_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 the sign-in mail is sent by the terminal itself)",
+      "description": "flows-api's internal URL. Set, the sign-in link is sent through the deployment's one outbound mail path (flows POST /mail/sign-in: the global account's `sign-in` template, the sender identity, the audit); any failure there falls back to the terminal's own baked mail, so signing in never depends on it.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_REPLY_TO",
+      "class": "defaulted",
+      "default": "(unset \u2014 no Reply-To)",
+      "description": "The Reply-To on every mail — the mailbox the inbound mail sensor reads. The same key flows reads.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_RELAY",
+      "class": "defaulted",
+      "default": "(unset \u2014 VEXA_MAIL_SMTP_HOST as configured)",
+      "description": "THE ONE SWITCH for real delivery, shared with flows: `capture` sends every mail to VEXA_MAIL_CAPTURE_SMTP and reaches no real mailbox; `relay` uses the VEXA_MAIL_SMTP_* relay for real and never relays a recipient at a test domain (.test, .invalid, .localhost, .example, example.com/org/net).",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_CAPTURE_SMTP",
+      "class": "defaulted",
+      "default": "mailpit:1025",
+      "description": "host:port of the capture double used when VEXA_MAIL_RELAY=capture.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PORT",
+      "class": "defaulted",
+      "default": "25 (1025 for the dev double when VEXA_MAIL_SMTP_HOST is unset)",
+      "description": "The relay's port.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_FROM",
+      "class": "defaulted",
+      "default": "Vexa <no-reply@vexa.ai>",
+      "description": "The From of the sign-in mail, as `Name <address>` or a bare address; its domain is also the EHLO name.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_USER",
+      "class": "defaulted",
+      "default": "(unset — no AUTH)",
+      "description": "AUTH LOGIN user for the relay; used only when VEXA_MAIL_SMTP_PASSWORD is set as well.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PASSWORD",
+      "class": "defaulted",
+      "default": "(unset — no AUTH)",
+      "description": "AUTH LOGIN password for the relay; used only when VEXA_MAIL_SMTP_USER is set as well. Helm feeds it from the chart's Secret (secrets.mailSmtpPassword).",
+      "secret": true,
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_RECIPIENT_ALLOW",
+      "class": "defaulted",
+      "default": "(unset — no restriction)",
+      "description": "Shared with flows (PRD 0.13.4 S2): a comma list of exact addresses and domains. When set, the terminal's own mailer sends nothing to anybody else — the message goes to the capture double (VEXA_MAIL_CAPTURE_SMTP) and is logged mail_diverted, with no content.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PASSWORD_REF",
+      "class": "defaulted",
+      "default": "(unset)",
+      "description": "The relay password by reference, broker:mail/<name> (PRD 0.13.4 S2). The credential broker holds it and only flows reads it; with a ref and no raw VEXA_MAIL_SMTP_PASSWORD the terminal does not send to an authenticated relay itself — sign-in links go through flows (POST /mail/sign-in).",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_SECURE",
+      "class": "defaulted",
+      "default": "0",
+      "description": "1 = implicit TLS (a provider's :465 endpoint). Without it, STARTTLS is used whenever the relay offers it (a provider's :587); with VEXA_MAIL_SMTP_USER and VEXA_MAIL_SMTP_PASSWORD set, a relay that offers neither is refused, since credentials are sent only over TLS.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_TLS_INSECURE",
+      "class": "defaulted",
+      "default": "0",
+      "description": "1 = skip the relay's certificate check, for implicit TLS and STARTTLS alike. Development only.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "TERMINAL_TRUSTED_PROXIES",
+      "class": "defaulted",
+      "default": "",
+      "description": "The proxies whose X-Forwarded-For names the client for the sign-in link's per-client rate limit: addresses or CIDR ranges, comma-separated. Only these and loopback are believed; any other peer is the client itself. Helm defaults it to the in-cluster private ranges while the terminal's Service is ClusterIP.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_BROKER_URL",
+      "class": "capability",
+      "capability": "connections",
+      "description": "The credential broker's base URL (credential-broker.v1), which the terminal's server calls in the human role for consent, credential save, disconnect and delete (src/app/api/connections/broker.ts). Compose and the chart point it at the broker they deploy; Lite carries no Connections.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_HUMAN_KEY_FILE",
+      "class": "capability",
+      "capability": "connections",
+      "description": "File holding the human role's assertion key, the same file the broker verifies with. Mounted into the terminal only: never into agent-api or a worker. The path is not the secret; the file is.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_PUBLIC_ORIGIN",
+      "class": "defaulted",
+      "default": "(unset — the terminal's NEXTAUTH_URL)",
+      "description": "The origin a browser POST to /api/connections must come from. Deployment configuration only, never a forwarded Host header.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_ISSUER",
+      "class": "capability",
+      "capability": "oidc_signin",
+      "description": "The issuer URL of the instance's own OpenID Connect provider (ADFS, Keycloak, any OIDC issuer), https only; its discovery document is <issuer>/.well-known/openid-configuration (src/app/api/auth/oidcConfig.mjs). Set, the sign-in card offers the OIDC button, and the terminal refuses to start unless the client id and secret (and a readable CA file, when one is named) are set too. Redirect URI to register at the provider: <public URL>/api/auth/callback/oidc.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_CLIENT_ID",
+      "class": "capability",
+      "capability": "oidc_signin",
+      "description": "The client id the provider issued to the terminal; the ID token's audience must be this value.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_CLIENT_SECRET",
+      "class": "capability",
+      "capability": "oidc_signin",
+      "description": "The client secret for VEXA_OIDC_CLIENT_ID (confidential client). Helm feeds it from an existing Secret (terminal.oidc.existingSecret).",
+      "secret": true,
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_SCOPES",
+      "class": "defaulted",
+      "default": "openid email profile",
+      "description": "The scopes requested, space-separated; must include openid. ADFS issues the application's claim rules into the ID token only when allatclaims is requested as well.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_RESOURCE",
+      "class": "defaulted",
+      "default": "(unset — no resource parameter)",
+      "description": "Sent as `resource` on the authorization request. ADFS applies a relying party's claim rules only to the tokens of the resource the request names; set it to the application group's Web API identifier (usually the client id). Other providers ignore it.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_DISPLAY_NAME",
+      "class": "defaulted",
+      "default": "Single sign-on",
+      "description": "The sign-in button's label: \"Continue with <name>\".",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_CA_FILE",
+      "class": "defaulted",
+      "default": "(unset — Node's public roots)",
+      "description": "Path to a PEM bundle with the CA chain the provider's TLS certificate is issued under (an internal PKI). Added to Node's public roots for the OIDC requests (discovery, token, keys); unreadable or holding no certificate, the terminal refuses to start. Helm mounts it from a ConfigMap or Secret (terminal.oidc.caBundle).",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_EMAIL_CLAIM",
+      "class": "defaulted",
+      "default": "email",
+      "description": "The ID-token claim that carries the person's address (for example upn on ADFS). Claims are read from the verified ID token only; the userinfo endpoint is never called.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_NAME_CLAIM",
+      "class": "defaulted",
+      "default": "name",
+      "description": "The ID-token claim that carries the display name; absent, given_name and family_name are joined, else the address is used.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_REQUIRE_EMAIL_VERIFIED",
+      "class": "defaulted",
+      "default": "1",
+      "description": "1 (default) = refuse a sign-in unless the ID token says email_verified: true. 0 = take the address on the issuer's word, for a directory that issues no such claim (ADFS); anyone who can set their own address at that provider can then sign in as that address. An address taken that way is not recorded as verified, so it claims no CRM Person. Any other value refuses the start.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_DEV_TEST_USERS",
+      "class": "defaulted",
+      "default": "(unset — off)",
+      "description": "app.dev tooling only: `1` gives an instance administrator \"Test users…\" in the account menu — list and create @example.test accounts and mint a one-time sign-in link for them (redeemed through the ordinary door and admission). Any other value, or unset, and the routes answer 404. The Helm chart and Lite never set it.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_SIGNIN_METHODS",
+      "class": "defaulted",
+      "default": "(unset — every configured method)",
+      "description": "Which sign-in doors this instance offers: a comma-separated subset of google, microsoft, oidc, email. A method left out is not registered (its routes refuse), not merely hidden. An unknown entry, or oidc without VEXA_OIDC_ISSUER, refuses to start.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "LIVEKIT_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 no calls)",
+      "description": "The LiveKit address a browser joins (wss://\u2026), the same value meeting-api and agent-api read. The terminal names its origin in the pages' Content-Security-Policy connect-src (src/app/contentSecurityPolicy.ts); unset, the policy admits no LiveKit server.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_TERMINAL_ZERO_LOGIN",
+      "class": "defaulted",
+      "default": "false — a request with no session cookie is anonymous and is forwarded with no key",
+      "description": "ZERO-LOGIN, for a single-person box behind a closed port: `true` makes every request that carries no session cookie act as the deployment key (VEXA_API_KEY, else VEXA_BOT_API_KEY) over REST and /ws (src/app/api/auth/deploymentKey.mjs). Anyone who can reach the terminal is then that key's person. Any other value, or unset, and an anonymous request carries no key and the gateway refuses it. Off on every surface, Lite included (deploy/lite/entrypoint.sh): `true` is an explicit opt-in for a box only its operator can reach, and Lite prints a warning banner at every start while it is on and the terminal listens beyond loopback. With it off, Lite's first-run door is a one-time sign-in link it prints at start (vexa-signin-link).",
+      "targets": ["lite"]
+    },
+    {
+      "key": "VEXA_TERMINAL_SESSION_SECRET",
+      "class": "defaulted",
+      "default": "(unset — sign-in mints an ordinary login key, and every decision that needs a session is refused)",
+      "secret": true,
+      "description": "The terminal's own second secret for admin-api's POST /internal/sessions (src/app/api/auth/adminApi.ts mintSessionToken, PRD 0.13.4 D13): with it, sign-in mints the SESSION credential (credential_class=session) a policy change or a routine's activation requires; a self-serve key with the browser scope is not one. The same value admin-api holds. Set here, every sign-in ends with a session (an admin-api that cannot mint one fails the sign-in), and a browser still holding a pre-session login key is asked to sign in again (no key is traded up to a session). Unset here, sign-in falls back to the old bot,tx,browser key with a warning.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_ADMIN_ACCOUNT",
+      "class": "defaulted",
+      "default": "(unset — no Company profile switch is offered)",
+      "description": "The deployment's admin account address(es), the same value admin-api reads (comma-separated). An instance administrator's account menu offers Switch to Company, which opens that account's session on their tab and gives it back (src/app/api/auth/company, ADR-0049). The switch counts only when admin-api answers admin_account for the opened session.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "TERMINAL_CANVAS_ORIGIN",
+      "class": "defaulted",
+      "default": "(unset — the Meeting Canvas frame shares the terminal's origin, and the terminal warns at start)",
+      "description": "The public origin the Meeting Canvas frame is served from: a second host (https://canvas.vexa.example) or the terminal's host on a second port (http://localhost:3002). The same server answers it, by Host or on TERMINAL_CANVAS_PORT, with the frame document and the build's own files and nothing else; the pages frame that origin alone, and the frame lets only the terminal's public origin (NEXTAUTH_URL, which must then be set) frame it (src/app/canvasOrigin.mjs, src/app/api/frameDoor.mjs). An invalid value, or one equal to the terminal's origin, refuses the start.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "TERMINAL_CANVAS_PORT",
+      "class": "defaulted",
+      "default": "(unset — no second listener; the canvas host is told apart by its Host header)",
+      "description": "A second port the terminal listens on for the canvas origin alone, when TERMINAL_CANVAS_ORIGIN names a port rather than a host (compose maps it to TERMINAL_CANVAS_HOST_PORT, Lite exposes 3002). Every request on it is the canvas host's.",
+      "targets": ["compose", "lite"]
+    }
+  ],
+  "capabilities": {
+    "connections": {
+      "description": "Connections in the browser: a person connects, saves, disconnects and deletes accounts and services through the credential broker",
+      "mode": "all",
+      "when_unconfigured": "every /api/connections route answers 503 with one generic sentence, and the OAuth callback logs a config fault"
+    },
+    "oidc_signin": {
+      "description": "Sign-in through the instance's own OpenID Connect provider (ADFS, Keycloak)",
+      "mode": "all",
+      "when_unconfigured": "no OIDC button is offered and /api/auth/callback/oidc completes nothing; a partial configuration refuses to start the terminal"
+    }
+  }
+}

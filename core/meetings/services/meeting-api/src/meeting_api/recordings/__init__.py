@@ -18,7 +18,8 @@ Public surface:
   * ``upload_chunk(...)`` / ``finalize_master(...)`` — the flow core (callable directly in tests).
   * ``apply_chunk_to_recording`` / ``chunk_storage_key`` / ``master_storage_key`` /
     ``new_recording_numeric_id`` — the pure JSONB record materializers.
-  * ``Storage`` / ``RecordingRepo`` ports + ``SessionNotFound``.
+  * ``Storage`` / ``RecordingRepo`` ports + ``SessionNotFound`` + ``MeetingErased`` (a recordings
+    write refused because the meeting's recordings are deleted).
   * ``adapters.build_production_router(...)`` — wire with real MinIO/S3 + SQLAlchemy.
   * ``fakes`` — ``InMemoryStorage`` / ``InMemoryRecordingRepo`` (offline drivers).
 """
@@ -36,7 +37,7 @@ from .jsonb import (
     signal_tape_key,
     signal_tape_prefix,
 )
-from .ports import RecordingRepo, Storage
+from .ports import MeetingErased, RecordingRepo, Storage
 from .router import build_router
 from .service import (
     SIGNAL_MEDIA_TYPE,
@@ -59,6 +60,7 @@ __all__ = [
     "RecordingRepo",
     "Storage",
     "SessionNotFound",
+    "MeetingErased",
     # captured-signal tapes (O-TEL-1): the upload path + the keep-side budget janitor.
     "upload_signal_tape",
     "InvalidSignalTape",

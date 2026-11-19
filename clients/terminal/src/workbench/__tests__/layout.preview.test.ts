@@ -8,7 +8,7 @@
  *  setTitle/close — enough to assert the observable behaviour without a real DOM/dockview.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { createLayoutService, type LayoutService, type TabDescriptor } from "../layout";
+import { createLayoutService, type LayoutService, type TabDescriptor } from "../../platform/layout";
 
 interface FakePanel {
   id: string;

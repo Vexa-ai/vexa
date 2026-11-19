@@ -6,6 +6,9 @@ Houses the gateway lane's local packages:
   the v0.12 carve of `services/api-gateway/main.py` (REST proxy, `/ws` multiplex, `/health`).
   Collaborators are injected as ports so the same app runs with real adapters in prod and
   injected fakes in tests.
+- **`mcp/`** — the MCP edge (`vexa_mcp`, its own container): asks each deployed domain for its
+  `mcp.tools.v1` manifest and serves the union as one tool surface, forwarding every call back
+  through the gateway with the caller's credential.
 - **`conformance/`** — the Group-6 behavioral-conformance harness for the sealed `api.v1` +
   `ws.v1` contracts. It imports `create_app` from `gateway/` and injects fakes, so every
   O-API-1 assertion drives the **shipped** app (not a hand-ported twin).

@@ -1,0 +1,16 @@
+{
+  "type": "done",
+  "reply": "The model provider (chatgpt.com) is out of credit. It said: You've hit your usage limit. Add credit at chatgpt.com, or choose another model under Settings → Models.",
+  "sessionId": "thr_1",
+  "ok": false,
+  "fault": {
+    "source": "model-provider",
+    "kind": "unpaid",
+    "provider": "chatgpt.com",
+    "model": "",
+    "status": null,
+    "detail": "You've hit your usage limit.",
+    "remedy": "Add credit at chatgpt.com, or choose another model under Settings → Models."
+  },
+  "detail": "You've hit your usage limit."
+}

@@ -1,11 +1,13 @@
+import type { MeetingLanguage } from "./transcriptionLanguage";
+
 /** meetingModel — the meeting/transcript/entity SHAPES the live path works in. Real types only; the
  *  backend (meeting-api via the gateway) fills them. No fixtures, no fallbacks. */
 
-export interface Participant { name: string; role: string; initials: string }
+export interface Participant { name: string; role: string; initials: string; /** the invite's address, when the calendar gave one — what opens their profile */ email?: string }
 /** A calendar-invited human (data.attendees, prep-v3 slice b) — email is the identity key. */
 export interface Attendee { email: string; name?: string; partstat?: string }
 export interface ProposedAction { id: string; label: string; detail: string }
-export interface TranscriptLine { t: string; speaker: string; text: string }
+export interface TranscriptLine { offsetSeconds?: number; tsMs?: number; endMs?: number; t: string; speaker: string; text: string; id?: string }
 export interface MeetingMock {
   id: string;
   session_uid?: string;       // set on a LIVE-backend meeting → the tab subscribes to the real Stream
@@ -16,9 +18,11 @@ export interface MeetingMock {
   status: "live" | "past";
   live_status?: string;       // the RAW meeting-api status — drives the status badge + action dropdown
   shared?: boolean;           // surfaced via a share/membership (not owned by the caller) — badged in the list
+  shared_with?: number;       // the OWNER's view: how many people this meeting is shared with ("Shared with N")
   scheduled_at?: string;      // when a `scheduled` meeting is due (data.scheduled_at)
   start_time?: string;        // when the run actually started (row start_time) — sorts recordings
   end_time?: string;          // when the run ended (row end_time) — with start_time gives duration
+  created_at?: string;        // when the row was made (row created_at) — the time of a call that never started
   title_custom?: string;      // the user-given planned-meeting title (data.title) — wins over the fallback
   workspace_id?: string;      // the sharing bind (data.workspace_id) — members of it see this meeting
   calendar_uid?: string;      // calendar-import provenance (data.calendar_uid)
@@ -33,6 +37,15 @@ export interface MeetingMock {
   transcript: TranscriptLine[];
   insights: { t: string; text: string }[];  // copilot notes, revealed alongside the transcript
   docs?: { workspace: string; path: string; title?: string; kind?: string }[];  // connected workspace docs (data.docs)
+  artifacts_deleted?: boolean;  // its owner deleted the transcript + recordings (data.artifact_deletion)
+  transcription_language?: MeetingLanguage;  // the language setting the bot runs with (data.transcription_language)
+  room?: string;                // the room (its session id) a call started in, which owns it (data.metadata.room)
+  // A VEXA CALL (founder O1, 2026-10-18) — see liveMeetings `callFields`
+  call_session?: string;        // the session (s-…) the call is held in (data.session_id)
+  call_room?: string;           // the room it belongs to, when it was started in one (data.metadata.room)
+  completion_reason?: string;   // why it ended (data.completion_reason): `left_alone` = everyone left
+  renamed_from?: string;        // its who-or-where name before the topic renamed it (data.metadata.call_renamed_from)
+  call_with?: { subject: string; name: string }[];  // a call with one person: both of them
 }
 
 // ── meeting lifecycle phase (design-spec meeting-lifecycle-v2) ──────────────────────

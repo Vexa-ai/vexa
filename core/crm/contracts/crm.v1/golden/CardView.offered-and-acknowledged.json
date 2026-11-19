@@ -1,0 +1,156 @@
+{
+  "about": null,
+  "activity": [
+    {
+      "at": "2026-10-17T18:31:34.121468+00:00",
+      "by": "17",
+      "kind": "person",
+      "what": "Moved to accepted"
+    },
+    {
+      "at": "2026-10-17T18:31:34.104427+00:00",
+      "by": "3",
+      "kind": "agent",
+      "what": "Made the card"
+    }
+  ],
+  "can": {
+    "edit": true,
+    "members": true,
+    "review": true,
+    "transition": true
+  },
+  "chain": {
+    "blocked_by": [],
+    "blocks": []
+  },
+  "children": {
+    "done": 0,
+    "items": [],
+    "total": 0
+  },
+  "decisions": [
+    {
+      "action": "acknowledge",
+      "at": "2026-10-17T18:31:34.121468+00:00",
+      "by": "17",
+      "credential_class": "session",
+      "revision": 2
+    }
+  ],
+  "due": "2026-10-20",
+  "face": [
+    {
+      "type": "stepper"
+    },
+    {
+      "type": "next"
+    },
+    {
+      "type": "waiting"
+    },
+    {
+      "type": "movement"
+    },
+    {
+      "type": "subcards"
+    },
+    {
+      "type": "people"
+    }
+  ],
+  "gates": [
+    {
+      "at": "2026-10-17T18:31:34.121468+00:00",
+      "by": "17",
+      "name": "accepted",
+      "state": "done"
+    },
+    {
+      "at": null,
+      "by": null,
+      "name": "delivered",
+      "state": "current"
+    },
+    {
+      "at": null,
+      "by": null,
+      "name": "confirmed",
+      "state": "ahead"
+    },
+    {
+      "at": null,
+      "by": null,
+      "name": "closed",
+      "state": "ahead"
+    }
+  ],
+  "handoff": {
+    "phase": "acknowledged",
+    "seen": false,
+    "since": "2026-10-17T09:00:00+00:00"
+  },
+  "href": "/crm?record=fc8e39a6-ed25-484f-9afc-5f3333b90937",
+  "id": "fc8e39a6-ed25-484f-9afc-5f3333b90937",
+  "kind": "commitment",
+  "last_decision": {
+    "action": "acknowledge",
+    "at": "2026-10-17T18:31:34.121468+00:00",
+    "by": "17"
+  },
+  "members": [
+    {
+      "status": "member",
+      "subject": "17"
+    },
+    {
+      "status": "member",
+      "subject": "3"
+    }
+  ],
+  "movement": {
+    "at": "2026-10-17T18:31:34.121468+00:00",
+    "by": "17",
+    "kind": "person",
+    "what": "Moved to accepted"
+  },
+  "new": true,
+  "next": null,
+  "next_actor": "17",
+  "next_check_at": "2026-10-18T09:00:00+00:00",
+  "open": true,
+  "origin": "session:room-1",
+  "parent": null,
+  "progress": null,
+  "ref": "card:fc8e39a6-ed25-484f-9afc-5f3333b90937",
+  "requester": "3",
+  "revision": 2,
+  "side_states": [
+    "declined",
+    "expired"
+  ],
+  "stalled": false,
+  "state": "accepted",
+  "states": [
+    "proposed",
+    "accepted",
+    "delivered",
+    "confirmed",
+    "closed"
+  ],
+  "summary": null,
+  "title": "Send the venue contract",
+  "type": "Card",
+  "viewer": {
+    "actions": [
+      "deliver",
+      "decline"
+    ],
+    "role": "next_actor",
+    "seen": false
+  },
+  "waiting": null,
+  "workspaces": [
+    "team"
+  ]
+}

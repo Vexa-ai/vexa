@@ -3,8 +3,12 @@
   "domain": "agent",
   "owner": "core/agent",
   "edge": "gateway",
-  "note": "The agent control plane (agent-api): chat · sessions · routines · workspace · models · history. Per-RESOURCE authorization behind these rows is still the open Stage-3 gap (the strict-xfail in the gateway's tests/test_proxy.py); this manifest only settles which KEYS reach the door. The whole domain is OPTIONAL (PRD 40.7): a deployment that leaves AGENT_API_URL unset serves none of these rows, and a cut that drops the agent surface drops this file with it.",
+  "note": "The agent control plane. ABSENT in the no-agents profile (PRD decision 40.6) — these rows and the routes that carry them are simply not there, so a request 404s. The edge registers them from this file: `forward` maps /agent/<path> onto agent-api's /api/<path>, every row but the catch-all is a route of its own (`stream` relays server-sent events), `delegation` admits a worker's own delegation token — on the friction report its harness files, and nowhere else — and `mcp_reentry` admits it on the MCP's re-entry: one row per route a tool in mcp.tools.v1.json calls, and no other. `verbs` rows are agent-api's own verbs behind the forward, by public path, carrying a policy the catch-all cannot: `person` — the verb needs a person in the loop, and agent-api refuses a worker dispatched without one (`control_plane/route_policy.py`). The edge does not register them. `shared` (D3, default-deny for shared tokens, 0.13.4) is on EVERY row and verb: may a worker whose turn other people read (a room's or a shared chat's delegation, `scope.shared`) reach the route — `allow` or `refuse`. agent-api enforces it once, from the signed delegation, on the route a request matched (`control_plane/route_policy.py` SHARED_GATE); a route this app serves that no row or verb declares is refused to a shared token and fails the boot and CI (`tests/test_shared_routes.py`). Every verb agent-api serves under the forward has a row here, `person: false` where no person is needed. The MCP edge shows a shared caller only tools whose route says `allow`.",
   "presence_env": "AGENT_API_URL",
+  "forward": {
+    "edge_prefix": "/agent/",
+    "upstream_prefix": "/api/"
+  },
   "routes": [
     {
       "method": "POST",
@@ -12,7 +16,349 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "stream": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/name/agent",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/chat/folders",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/folders",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/folders/update",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/folders/delete",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/move",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/notifications",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/notifications/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/notifications/notify",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/notifications/act",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/claims",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/agents/message",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claims",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claims/verdicts",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/connections",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/event/cancel",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/event/create",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/event/update",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/events",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/draft",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/draft/update",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/inbox",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/search",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/thread",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/connections/policy",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/connections/policy",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/sensor-grant",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/connections/sensor-grants",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/sensor-grant/revoke",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/request",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/service/call",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/friction",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "delegation": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/global/ready",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -20,7 +366,599 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "stream": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/terms/scan",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/note/attach",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/onboarding/research",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/page/open",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/listen",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/sessions/{session}/participants",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/participants",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/rooms/list",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/call",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/sessions/{session}/participants/{principal}",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/call/show",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/call/highlight",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/time",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/models/catalog",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/time/zone",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/asset",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspaces/{slug}/identity/state",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/workspaces/{slug}/identity/icon",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/entity",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/file",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/workspace/file",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/import",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/folder/{plan_id}/status",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/import/{operation_id}/status",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invite",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invite-link",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/invite-links",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invite-link/revoke",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/policy/proposals",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/members",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/members/add",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/membership",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/move",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/new",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/templates",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/create",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/templates/save",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/rename",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/forget",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/workspace/{slug}",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/pull",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/status",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/purpose",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/push",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/publish",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/git-providers",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/remove",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/shared",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/shared/{workspace_id}/attach",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/target",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/propose-target",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/states",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/state",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/defaults",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/profiles",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/profile",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/profiles/edit",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/profiles/delete",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/tree",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
     },
     {
       "method": "DELETE",
@@ -28,7 +966,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -36,7 +975,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PATCH",
@@ -44,7 +984,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -52,7 +993,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -60,7 +1002,1492 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/chats/search",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/chats/{session}/turns",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/refs/resolve",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/home/history",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/home/customer",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/home/customer/correct",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/home/item",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/budgets",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/budgets/usage",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/usage",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/models/levels",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/followups",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/discover",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace-store/fetch",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "delegation": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace-store/push",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "delegation": true,
+      "shared": "allow"
+    }
+  ],
+  "verbs": [
+    {
+      "method": "DELETE",
+      "path": "/agent/held/{code}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/held",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/held/{code}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/policy/proposals",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/policy/proposals",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/policy/proposals/{proposal_id}/approve",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/policy/proposals/{proposal_id}/decline",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/request",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/global/ready",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/read",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/search",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/inbox",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/read",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/thread",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/events",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/draft",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/service/call",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/draft/update",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/event/create",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/event/update",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/event/cancel",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/connections/policy",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/sensor-grant",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/connections/sensor-grants",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/sensor-grant/revoke",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/onboarding/research",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/time/zone",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/routines",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/routines/{name}/confirm",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "PATCH",
+      "path": "/agent/routines/{name}/enabled",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/routines/{routine_id}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claims/verdicts",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/git-token",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{slug}/deploy-key",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/swap",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/activate",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/import",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/folder/plan",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/folder/{plan_id}/files",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/folder/{plan_id}/finish",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/publish",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/push",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/pull",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/git-remote-detach",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/shared/{workspace_id}/attach",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/workspace/{slug}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/state",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/defaults",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/profile",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/profiles/edit",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/profiles/delete",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/forget",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/reset",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{slug}/archive",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{slug}/share-enable",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{workspace_id}/unshare",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invites",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/workspace/invites/{invite_id}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invites/accept",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invites/decline",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/notifications/act",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invite",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invite-link",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invite-link/revoke",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/membership",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/members/add",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/members/{member_subject}/role",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/workspace/members/{member_subject}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{workspace_id}/leave",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/bundle-restore",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/sessions/{session}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/participants",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/sessions/{session}/participants/{principal}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/refs/request-access",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/desktop/sections",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/{session}/leave",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/desktop/attention",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/desktop/refs",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/admin/overview",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/admin/probe",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/budgets/mine",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/calls/{room}/changes",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/calls/{room}/changes/{change_id}/undo",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/chat/default-target",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/chat/default-target",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/level",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/chat/marks",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/marks",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/meeting",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/model",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/name",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/chat/order",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/chat/order",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/chat/pending",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/pending/now",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/pending/withdraw",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/reset",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/stop",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/submit",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/target",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/chat/turn-outcome",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/desk/touch",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/entities/summary",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/features",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/home",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/home/compose",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/home/expand",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/home/feedback",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/home/media/{key}",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/home/presence",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/join-links",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/join-links",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/join-links/preview",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/join-links/redeem",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/join-links/revoke",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/links/backlinks",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/links/resolve",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/meeting/bundle-parts",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/meeting/note",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/note",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/meeting/relay-health",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/meeting/terms",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/terms",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/models",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/models/test",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/admin",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/known",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/me",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/mentionable",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/{subject}/photo",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/proposals",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/proposals",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/proposals/resolve",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/rooms",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/rooms/list",
+      "person": false,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/calendar-sync",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/migrate-folders",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/{session}/hand-on",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/{session}/join",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/rooms/{session}/members",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/{session}/plan",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/{session}/plan/{meeting_id}/calendar",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/routines",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/scaffolds",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/scaffolds/hand",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/scaffolds/{scaffold_id}",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/scaffolds/{scaffold_id}/share",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/sessions",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/sessions/{session}/attachment",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/sessions/{session}/call",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/call",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/call/token",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/sessions/{session}/history",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/sessions/{session}/messages",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/messages",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/sessions/{session}/proposals",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/proposals",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/proposals/{proposal_id}/accept",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/proposals/{proposal_id}/reject",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/sessions/{session}/room",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "PATCH",
+      "path": "/agent/sessions/{session}/room",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/sessions/{session}/share-preview",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/transcription/test",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/usage",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/user/appearance",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/user/appearance",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/user/pinned-pages",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/user/pinned-pages",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/version",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace-links/{workspace_id}",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace-links/{workspace_id}",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace-links/{workspace_id}/remove",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/workspace-links/{workspace_id}/visibility",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/active",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/asset",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/workspace/asset",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/attached",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/deactivate",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/desk",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/git",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/git-remote-status",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/git-token",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/git/reset",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/git/show",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/init",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/invites",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/invites/preview",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/purpose",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/restore",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/shared/new",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/shared/{workspace_id}/active",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/shared/{workspace_id}/attached",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/upload",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/{slug}/deploy-key",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspaces/by-slug/{slug}",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspaces/{slug}/git/history",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspaces/{slug}/git/last-change",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspaces/{slug}/identity/icon",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspaces/{slug}/identity/proposal",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspaces/{workspace_id}",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspaces/{workspace_id}/rename",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/peers",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/people/me/accounts-merged",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/{person}/profile",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/profiles/public/{handle}",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/asks/open",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/asks/{pending_id}/answer",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/{session}/tag",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/{session}/members",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/rooms/{session}/members/{principal}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/rooms/{session}/people",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/direct",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/call",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/rooms/{session}/switches",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/{session}/switches",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/{session}/switches/{switch}/answer",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/sessions/{session}/call/share",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/desktop/page",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/pins",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/pins",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/refs/audience",
+      "person": true,
+      "shared": "refuse"
     }
   ]
 }

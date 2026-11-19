@@ -1,7 +1,7 @@
 /** The addressable-meeting URL contract: `/meetings/<id>` parses back to exactly the id that was put
  *  in, refuses anything it can't own, and never widens into another route. */
 import { describe, it, expect } from "vitest";
-import { isMeetingRouteId, isOwnedPath, meetingIdFromPath, meetingPath } from "../meetingRoute";
+import { isMeetingRouteId, isOwnedPath, meetingIdFromPath, meetingPath } from "../../platform/meetingRoute";
 
 describe("meetingPath — id → URL", () => {
   it("a row id becomes /meetings/<id>", () => expect(meetingPath("482")).toBe("/meetings/482"));

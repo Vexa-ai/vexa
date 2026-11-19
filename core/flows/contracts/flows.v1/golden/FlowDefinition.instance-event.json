@@ -1,0 +1,16 @@
+{
+  "name": "post_meeting",
+  "scope": "instance",
+  "version": 2,
+  "trigger": {
+    "kind": "event",
+    "event": "meeting.completed"
+  },
+  "steps": [
+    "await_completion",
+    "process_meeting",
+    "email_minutes"
+  ],
+  "params": {},
+  "status": "active"
+}

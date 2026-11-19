@@ -1,0 +1,176 @@
+# What the bank runs beside Vexa, applied by the cluster admin (run.sh up): the in-house model
+# (OpenAI-compatible), the speech-to-text service, the corporate IdP (ADFS-like OIDC), the bank's TLS
+# front door to the terminal (what an ingress or an OpenShift edge route does), the bank's
+# Postgres, and a workstation the journey's person signs in from. TLS everywhere is issued by the
+# profile's corporate CA. Placeholders (__X__) are filled by run.sh.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: model, namespace: bank-ext}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: model}}
+  template:
+    metadata: {labels: {app: model}}
+    spec:
+      containers:
+        - name: model
+          image: __STUB_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-u", "/stub/stub.py", "model"]
+          ports: [{containerPort: 8443}]
+          readinessProbe: {tcpSocket: {port: 8443}, periodSeconds: 2}
+          volumeMounts: [{name: stub, mountPath: /stub}, {name: tls, mountPath: /tls}]
+      volumes:
+        - {name: stub, configMap: {name: bank-stub}}
+        - {name: tls, secret: {secretName: model-tls}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: model, namespace: bank-ext}
+spec: {selector: {app: model}, ports: [{port: 443, targetPort: 8443}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: stt, namespace: bank-ext}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: stt}}
+  template:
+    metadata: {labels: {app: stt}}
+    spec:
+      containers:
+        - name: stt
+          image: __STUB_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-u", "/stub/stub.py", "stt"]
+          ports: [{containerPort: 8443}]
+          readinessProbe: {tcpSocket: {port: 8443}, periodSeconds: 2}
+          volumeMounts: [{name: stub, mountPath: /stub}, {name: tls, mountPath: /tls}]
+      volumes:
+        - {name: stub, configMap: {name: bank-stub}}
+        - {name: tls, secret: {secretName: stt-tls}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: stt, namespace: bank-ext}
+spec: {selector: {app: stt}, ports: [{port: 443, targetPort: 8443}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: idp, namespace: bank-ext}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: idp}}
+  template:
+    metadata: {labels: {app: idp}}
+    spec:
+      containers:
+        - name: idp
+          image: __STUB_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-u", "/stub/stub.py", "idp"]
+          env:
+            - {name: IDP_ISSUER, value: "https://idp.bank-ext.svc.cluster.local/adfs"}
+            - {name: IDP_CLIENT_ID, value: "vexa-terminal"}
+            - {name: IDP_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: idp-client, key: client-secret}}}
+            - {name: IDP_SUB, value: "S-1-5-21-bank-profile-1001"}
+            - {name: IDP_EMAIL, value: "__USER_EMAIL__"}
+            - {name: IDP_NAME, value: "Bank Profile User"}
+          ports: [{containerPort: 8443}]
+          readinessProbe: {tcpSocket: {port: 8443}, periodSeconds: 2}
+          volumeMounts:
+            - {name: stub, mountPath: /stub}
+            - {name: tls, mountPath: /tls}
+            - {name: key, mountPath: /idp-key}
+      volumes:
+        - {name: stub, configMap: {name: bank-stub}}
+        - {name: tls, secret: {secretName: idp-tls}}
+        - {name: key, secret: {secretName: idp-signing-key}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: idp, namespace: bank-ext}
+spec: {selector: {app: idp}, ports: [{port: 443, targetPort: 8443}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: vexa, namespace: bank-ext}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: vexa-front-door}}
+  template:
+    metadata: {labels: {app: vexa-front-door}}
+    spec:
+      containers:
+        - name: lb
+          image: __STUB_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-u", "/stub/stub.py", "lb"]
+          env:
+            - {name: LB_UPSTREAM, value: "http://vexa-terminal.vexa.svc.cluster.local:3000"}
+          ports: [{containerPort: 8443}]
+          readinessProbe: {tcpSocket: {port: 8443}, periodSeconds: 2}
+          volumeMounts: [{name: stub, mountPath: /stub}, {name: tls, mountPath: /tls}]
+      volumes:
+        - {name: stub, configMap: {name: bank-stub}}
+        - {name: tls, secret: {secretName: vexa-tls}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: vexa, namespace: bank-ext}
+spec: {selector: {app: vexa-front-door}, ports: [{port: 443, targetPort: 8443}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: pg, namespace: bank-db}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: pg}}
+  template:
+    metadata: {labels: {app: pg}}
+    spec:
+      containers:
+        - name: postgres
+          image: __PG_IMAGE__
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: pg-superuser, key: password}}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports: [{containerPort: 5432}]
+          readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 2}
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: pg, namespace: bank-db}
+spec:
+  selector: {app: pg}
+  ports: [{port: 5432}]
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: workstation, namespace: bank-users}
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 20000
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: browser
+      image: __STUB_IMAGE__
+      imagePullPolicy: IfNotPresent
+      command: ["sleep", "infinity"]
+      env:
+        - {name: SSL_CERT_FILE, value: /ca/ca.crt}
+        - {name: PYTHONUNBUFFERED, value: "1"}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - {name: stub, mountPath: /stub}
+        - {name: ca, mountPath: /ca}
+  volumes:
+    - {name: stub, configMap: {name: bank-stub}}
+    - {name: ca, configMap: {name: corp-root-ca}}

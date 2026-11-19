@@ -1,0 +1,7 @@
+{
+  "source": "agent-api",
+  "kind": "unavailable",
+  "status": 503,
+  "detail": "the agent service did not answer",
+  "remedy": "Send it again in a moment; if it keeps happening, an operator should check agent-api's log."
+}

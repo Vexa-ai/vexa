@@ -1,0 +1,13 @@
+{
+  "claims_golden": "claims-human.json",
+  "headers": {
+    "x-user-id": "42",
+    "x-user-email": "ada@example.com",
+    "x-user-scopes": "bot,tx",
+    "x-user-limits": "3",
+    "x-user-workspaces": "ws_7f3a",
+    "x-user-webhook-url": "https://hooks.example.com/vexa",
+    "x-user-webhook-secret": "whsec-example",
+    "x-user-webhook-events": "{\"meeting.completed\": true}"
+  }
+}

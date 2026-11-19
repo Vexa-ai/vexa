@@ -22,14 +22,120 @@ metadata:
 type: Opaque
 stringData:
   VEXA_MAIL_ADDR: {{ .Values.flows.mail.address | quote }}
+  {{- /* The mailbox password, unless it comes from a Secret you manage (flows.mail.existingSecret):
+  then it is not rendered here and every flows container reads it from that Secret by name. */}}
+  {{- if not (include "vexa.flowsMailExistingSecret" .) }}
   VEXA_MAIL_APP_PASSWORD: {{ .Values.flows.mail.appPassword | quote }}
+  {{- end }}
   # the inbound intake's authorization + ceilings (R-B12) — see values.yaml for what empty means
   VEXA_FLOWS_MAIL_DOMAINS: {{ .Values.flows.mail.domains | quote }}
   VEXA_FLOWS_MAIL_QUARANTINE_REPLY: {{ .Values.flows.mail.quarantineReply | quote }}
   VEXA_FLOWS_MAIL_RATE_PER_SENDER: {{ .Values.flows.mailRate.perSender | quote }}
   VEXA_FLOWS_MAIL_RATE_GLOBAL: {{ .Values.flows.mailRate.global | quote }}
   VEXA_FLOWS_MAIL_RATE_WINDOW_S: {{ .Values.flows.mailRate.windowSeconds | quote }}
+  # captured facts expire (finished reactions, quarantined mail): days after the run finished, 0 keeps all
+  VEXA_FLOWS_FACT_RETENTION_DAYS: {{ .Values.flows.factRetentionDays | quote }}
+  {{- /* The flows tier's remaining dials. Each is rendered only when set, so an empty value is the
+  code default and flows.extraEnv (an explicit env entry, which wins over this envFrom) still
+  overrides any of them. */}}
+  {{- $m := .Values.flows.mail | default dict }}
+  {{- $graph := $m.graph | default dict }}
+  {{- $out := .Values.flows.outbound | default dict }}
+  {{- $nudges := .Values.flows.nudges | default dict }}
+  {{- $lim := .Values.flows.limits | default dict }}
+  {{- with .Values.flows.timelineKey }}
+  VEXA_FLOWS_TIMELINE_KEY: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.inbox }}
+  VEXA_MAIL_INBOX: {{ . | toString | quote }}
+  {{- end }}
+  {{- with ($m.smtp | default dict).from }}
+  VEXA_MAIL_SMTP_FROM: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.replyTo }}
+  VEXA_MAIL_REPLY_TO: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.relay }}
+  VEXA_MAIL_RELAY: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.captureSmtp }}
+  VEXA_MAIL_CAPTURE_SMTP: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.maxPerDay }}
+  VEXA_MAIL_MAX_PER_DAY: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.kindsDefault }}
+  VEXA_MAIL_KINDS_DEFAULT: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.inboundFilter }}
+  VEXA_MAIL_INBOUND_FILTER: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.bodyMax }}
+  VEXA_FLOWS_MAIL_BODY_MAX: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.notifyChannel }}
+  VEXA_NOTIFY_CHANNEL: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $graph.tenantId }}
+  VEXA_GRAPH_TENANT_ID: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $graph.clientId }}
+  VEXA_GRAPH_CLIENT_ID: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $graph.clientSecret }}
+  VEXA_GRAPH_CLIENT_SECRET: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $graph.mailbox }}
+  VEXA_GRAPH_MAILBOX: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $out.attendeeDomains }}
+  VEXA_FLOWS_ATTENDEE_DOMAINS: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $out.dataStatement }}
+  VEXA_FLOWS_DATA_STATEMENT: {{ . | toString | quote }}
+  {{- end }}
+  {{- with .Values.flows.jitsiHosts }}
+  VEXA_JITSI_HOSTS: {{ . | toString | quote }}
+  {{- end }}
+  {{- if $nudges.enabled }}
+  VEXA_FLOWS_NUDGES: "1"
+  {{- end }}
+  {{- with $nudges.idleFloorMinutes }}
+  VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $nudges.budgetCeiling }}
+  VEXA_FLOWS_NUDGE_BUDGET_CEILING: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.timelineScanRows }}
+  VEXA_TIMELINE_SCAN_ROWS: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.scheduleCatchupSeconds }}
+  VEXA_FLOWS_SCHEDULE_CATCHUP_S: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.loopLimit }}
+  VEXA_FLOWS_LOOP_LIMIT: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.maxHops }}
+  VEXA_FLOWS_MAX_HOPS: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.userActiveFlows }}
+  VEXA_FLOWS_USER_ACTIVE_FLOWS: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.userMinIntervalSeconds }}
+  VEXA_FLOWS_USER_MIN_INTERVAL_S: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.userRunsPerDay }}
+  VEXA_FLOWS_USER_RUNS_PER_DAY: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.userMessagesPerDay }}
+  VEXA_FLOWS_USER_MESSAGES_PER_DAY: {{ . | toString | quote }}
+  {{- end }}
+  {{- /* The operator key, unless it comes from a Secret you manage (flows.existingSecret, or
+  secrets.existingSecretName with flows.apiKey empty): then it is not rendered here, and every
+  consumer reads it from that Secret by name. */}}
+  {{- if not (include "vexa.flowsApiKeyExistingSecret" .) }}
   VEXA_FLOWS_API_KEY: {{ .Values.flows.apiKey | quote }}
+  {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -38,102 +144,73 @@ metadata:
   labels: {app.kubernetes.io/component: flows-worker}
 spec:
   replicas: {{ .Values.flows.workerReplicas }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels: {app.kubernetes.io/component: flows-worker}
   template:
     metadata:
-      labels: {app.kubernetes.io/component: flows-worker}
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flows-worker
+      annotations:
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        checksum/flows: {{ include "vexa.checksum" (list . .Values.flows) }}
+        checksum/subject-tickets: {{ include "vexa.checksum" (list . .Values.subjectTickets.mail) }}
     spec:
-      {{- /* the ensure-db bootstrap only has work to do when the flows tables live in a database
-      OTHER than the application's own — when flows.databaseName == database.name they already
-      live in a database that is guaranteed to exist (F-D5 follow-up: compose already runs this
-      shape, sharing the app's own "vexa" database — no separate CREATE DATABASE anywhere). */}}
-      {{- if ne .Values.flows.databaseName .Values.database.name }}
-      initContainers:
-        - name: ensure-db
-          image: {{ include "vexa.flowsImage" . | quote }}
-          command: ["python", "-c"]
-          args:
-            - |
-              # Bootstraps the SEPARATE flows.databaseName database (F-D5 item 3+6): connects to
-              # the APPLICATION database (database.name via DB_NAME/POSTGRES_DB — guaranteed to
-              # exist, unlike Postgres's own "postgres" maintenance database, which many managed
-              # Postgres offerings do not expose to the app's own role) purely as a bootstrap
-              # target, then checks/creates flows.databaseName. pg_database is a global catalog —
-              # visible from any database in the cluster, so the presence check works regardless
-              # of which database this connection lands on.
-              #
-              # Tolerates a role with no CREATEDB (F-D5 item 6, common on managed Postgres): the
-              # create is attempted only when the database is absent, and a privilege failure is
-              # not immediately fatal — it re-checks once more (another replica, or an operator,
-              # may have created it in the meantime / ahead of time) before refusing loudly.
-              import os
-              from sqlalchemy import create_engine, text
-              name = os.environ["FLOWS_DB_NAME"]
-              admin_url = (
-                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
-                  + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
-                  + "?sslmode=" + os.environ["DB_SSL_MODE"]
-              )
-              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
-              with e.connect() as c:
-                  exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                  if not exists:
-                      try:
-                          c.execute(text('CREATE DATABASE "' + name + '"'))
-                          print("created database " + name)
-                      except Exception as exc:
-                          exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                          if not exists:
-                              raise RuntimeError(
-                                  "database " + repr(name) + " does not exist and this role could "
-                                  "not create it (" + repr(exc) + ") — pre-create it "
-                                  "(CREATE DATABASE ...) or grant CREATEDB"
-                              ) from exc
-                          print("database " + name + " already exists (created by another process)")
-                  else:
-                      print("database " + name + " already exists")
-          env:
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_PASSWORD
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_DB
-            - name: DB_HOST
-              value: {{ include "vexa.dbHostEffective" . | quote }}
-            - name: DB_PORT
-              value: {{ include "vexa.dbPortEffective" . | quote }}
-            - name: DB_SSL_MODE
-              value: {{ .Values.database.sslMode | quote }}
-            - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
+      enableServiceLinks: false
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- /* global scheduling and pull secrets, the same as every other component Deployment:
+      without them the flows tier sits Pending on a cluster whose nodes are all tainted. */}}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* the flows database check (vexa.flowsDbCheck): every Deployment that opens
+      VEXA_FLOWS_DB_URL checks before it starts, so none relies on another's pod starting first */}}
+      {{- $dbCheck := include "vexa.flowsDbCheck" . }}
+      {{- if or $dbCheck (include "vexa.extraCA.enabled" .) }}
+      initContainers:
+      {{- end }}
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- with $dbCheck }}{{ . | trim | nindent 8 }}{{ end }}
       containers:
         - name: flows-worker
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           # Composes VEXA_FLOWS_DB_URL from secretKeyRef-sourced parts (F-D5 item 1) rather than
           # a literal DSN in the Secret — see the file header. sslmode threads from database.sslMode
-          # (F-D5 item 2); the target database is flows.databaseName (default "flows", separate
-          # from the app database — set equal to database.name to share it, see values.yaml).
+          # (F-D5 item 2); the target database is vexa.flowsDatabaseName (the main database unless
+          # flows.databaseName names another, see values.yaml).
           command: ["/bin/sh", "-c"]
           args:
             - |
-              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
               exec python -m flows_worker
           envFrom:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- /* flows.extraEnv: operator env for the flows tier, like <component>.extraEnv on every
+            other component (e.g. VEXA_MAIL_KINDS_DEFAULT on an upgraded install). */}}
+            {{- with .Values.flows.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
+            {{- /* the bot mailbox's endpoints, TLS policy, CA path and password refs (flows.mail) */}}
+            {{- include "vexa.flowsMailEnv" . | nindent 12 }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -151,9 +228,9 @@ spec:
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
+              value: {{ include "vexa.flowsDatabaseName" . | quote }}
             - name: VEXA_FLOWS_GATEWAY_URL
-              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/meetings"
             {{- /* AGENT DOMAIN PRESENCE (F-D5 item 4): unset means "no agent domain deployed" to
             flows_config.py (a `capability` key, degrades via flows_steps.common.domain_present) —
             NOT a URL pointed at a Service that does not exist in a no-agents estate.
@@ -164,10 +241,17 @@ spec:
             half of it. Omitted when disabled, the SERVICE ADDRESS when enabled. */}}
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/agent"
+            {{- end }}
+            {{- if .Values.crm.enabled }}
+            # The optional CRM's door for the flows_defs.crm pack (ADR-0047).
+            - name: VEXA_FLOWS_CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/crm"
+            - name: VEXA_FLOWS_DEFS_EXTRA
+              value: "flows_defs.crm"
             {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/identity"
             {{- /* THE TERMINAL'S PUBLIC ORIGIN (F-D5 item 5): unset means "no terminal adapter" to
             flows_config.py (a `capability` key) — nothing is mailed with a link and any step that
             would compose one refuses, naming the key. Previously this ALWAYS resolved to a URL
@@ -178,11 +262,18 @@ spec:
             - name: VEXA_UI_URL
               value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
             {{- end }}
-            - name: VEXA_FLOWS_ADMIN_KEY
+            {{- /* THE FLOWS TIER'S ONE CREDENTIAL: it opens the gateway's service door and nothing
+            else. Flows holds no ADMIN_API_TOKEN and no INTERNAL_API_SECRET. */}}
+            - name: VEXA_FLOWS_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ADMIN_API_TOKEN
+                  key: VEXA_FLOWS_SERVICE_KEY
+            {{- /* subject-ticket.v1: the MAIL issuer's private key (the subject-ticket-mail-key Secret),
+            for the mailbox sensor's invite and reply tickets. Mounted here and in flows-mailbox,
+            never in flows-api. */}}
+            - name: VEXA_FLOWS_MAIL_TICKET_KEY_FILE
+              value: /run/vexa-subject-ticket/key.pem
           {{- /* NO PROBE, and that is a documented gap rather than an oversight (A12/E4).
           `flows_worker/__main__.py` and `flows_integrations.mailbox` are `while True: tick();
           sleep()` loops with no server and no port — there is nothing for an httpGet to reach,
@@ -190,9 +281,30 @@ spec:
           the database's health, not the loop's. The compose file says the same thing about the
           same two processes. Giving these a real liveness surface needs a health endpoint in
           flows itself; that is E4's work, not this template's. */}}
+          volumeMounts:
+            - name: subject-ticket-mail-key
+              mountPath: /run/vexa-subject-ticket
+              readOnly: true
+            {{- with include "vexa.flowsMailCaMount" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 500m, memory: 512Mi}
+      volumes:
+        # subject-ticket.v1: the mail issuer's private key (subject-ticket-keys.yaml), mounted by
+        # flows-worker and flows-mailbox only.
+        - name: subject-ticket-mail-key
+          secret:
+            secretName: {{ .Values.subjectTickets.mail.existingSecret | default (include "vexa.componentName" (list . "subject-ticket-mail-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
+        {{- with include "vexa.flowsMailCaVolume" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+{{- /* THE MAILBOX RENDERS ONLY WHEN IT CAN RUN (vexa.flowsMailboxEnabled): an explicit
+flows.mail.enabled, or an address. Without one it used to render anyway and restart-loop on its
+first IMAP login — the "broken deployment" picture the compose profile already avoids. */}}
+{{- if include "vexa.flowsMailboxEnabled" . }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -205,84 +317,51 @@ spec:
     matchLabels: {app.kubernetes.io/component: flows-mailbox}
   template:
     metadata:
-      labels: {app.kubernetes.io/component: flows-mailbox}
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flows-mailbox
+      annotations:
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        checksum/flows: {{ include "vexa.checksum" (list . .Values.flows) }}
+        checksum/subject-tickets: {{ include "vexa.checksum" (list . .Values.subjectTickets.mail) }}
     spec:
-      {{- /* F192 — the SAME ensure-db initContainer flows-worker carries above: every Deployment
-      that opens VEXA_FLOWS_DB_URL must be able to create the database it opens, not rely on
-      flows-worker's pod happening to have won the startup race first (k8s makes no promise
-      about pod start order). Reconciled to the SAME shape as flows-worker's block (merge of
-      #1505/F192 with #1509/F-D5, which landed on top of it): the CREATEDB-tolerant bootstrap
-      against flows.databaseName, guarded by the same "nothing to do when it equals the app's
-      own database" skip. See flows-worker above for the full reasoning in one place. A Helm
-      TEMPLATE comment, not a YAML one — a plain "#" line here renders into every values-name
-      permutation regardless of the if-guard below, including the word "ensure-db" the guard
-      exists to keep OUT of the no-op case. */}}
-      {{- if ne .Values.flows.databaseName .Values.database.name }}
-      initContainers:
-        - name: ensure-db
-          image: {{ include "vexa.flowsImage" . | quote }}
-          command: ["python", "-c"]
-          args:
-            - |
-              import os
-              from sqlalchemy import create_engine, text
-              name = os.environ["FLOWS_DB_NAME"]
-              admin_url = (
-                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
-                  + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
-                  + "?sslmode=" + os.environ["DB_SSL_MODE"]
-              )
-              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
-              with e.connect() as c:
-                  exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                  if not exists:
-                      try:
-                          c.execute(text('CREATE DATABASE "' + name + '"'))
-                          print("created database " + name)
-                      except Exception as exc:
-                          exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                          if not exists:
-                              raise RuntimeError(
-                                  "database " + repr(name) + " does not exist and this role could "
-                                  "not create it (" + repr(exc) + ") — pre-create it "
-                                  "(CREATE DATABASE ...) or grant CREATEDB"
-                              ) from exc
-                          print("database " + name + " already exists (created by another process)")
-                  else:
-                      print("database " + name + " already exists")
-          env:
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_PASSWORD
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_DB
-            - name: DB_HOST
-              value: {{ include "vexa.dbHostEffective" . | quote }}
-            - name: DB_PORT
-              value: {{ include "vexa.dbPortEffective" . | quote }}
-            - name: DB_SSL_MODE
-              value: {{ .Values.database.sslMode | quote }}
-            - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
+      enableServiceLinks: false
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- /* global scheduling and pull secrets, the same as every other component Deployment:
+      without them the flows tier sits Pending on a cluster whose nodes are all tainted. */}}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* the flows database check (vexa.flowsDbCheck): every Deployment that opens
+      VEXA_FLOWS_DB_URL checks before it starts, so none relies on another's pod starting first */}}
+      {{- $dbCheck := include "vexa.flowsDbCheck" . }}
+      {{- if or $dbCheck (include "vexa.extraCA.enabled" .) }}
+      initContainers:
+      {{- end }}
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- with $dbCheck }}{{ . | trim | nindent 8 }}{{ end }}
       containers:
         - name: flows-mailbox
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
           command: ["/bin/sh", "-c"]
           args:
             - |
-              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
               exec python -m flows_integrations.mailbox
           envFrom:
             - secretRef:
@@ -294,6 +373,15 @@ spec:
           # authorization decision (R-B12) — a known user outside the domain would otherwise be
           # quarantined on a lookup that never reached anything.
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- /* flows.extraEnv: operator env for the flows tier, like <component>.extraEnv on every
+            other component (e.g. VEXA_MAIL_KINDS_DEFAULT on an upgraded install). */}}
+            {{- with .Values.flows.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
+            {{- /* the bot mailbox's endpoints, TLS policy, CA path and password refs (flows.mail) */}}
+            {{- include "vexa.flowsMailEnv" . | nindent 12 }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -311,34 +399,77 @@ spec:
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
+              value: {{ include "vexa.flowsDatabaseName" . | quote }}
             - name: VEXA_FLOWS_GATEWAY_URL
-              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/meetings"
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/agent"
+            {{- end }}
+            {{- if .Values.crm.enabled }}
+            # The optional CRM's door for the flows_defs.crm pack (ADR-0047).
+            - name: VEXA_FLOWS_CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/crm"
+            - name: VEXA_FLOWS_DEFS_EXTRA
+              value: "flows_defs.crm"
             {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/identity"
             {{- if .Values.terminal.enabled }}
             - name: VEXA_UI_URL
               value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
             {{- end }}
-            - name: VEXA_FLOWS_ADMIN_KEY
+            {{- /* THE FLOWS TIER'S ONE CREDENTIAL: it opens the gateway's service door and nothing
+            else. Flows holds no ADMIN_API_TOKEN and no INTERNAL_API_SECRET. */}}
+            - name: VEXA_FLOWS_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ADMIN_API_TOKEN
-          {{- /* NO PROBE, and that is a documented gap rather than an oversight (A12/E4).
-          `flows_worker/__main__.py` and `flows_integrations.mailbox` are `while True: tick();
-          sleep()` loops with no server and no port — there is nothing for an httpGet to reach,
-          and an `exec` probe over the same Postgres these processes already poll would report
-          the database's health, not the loop's. The compose file says the same thing about the
-          same two processes. Giving these a real liveness surface needs a health endpoint in
-          flows itself; that is E4's work, not this template's. */}}
+                  key: VEXA_FLOWS_SERVICE_KEY
+            {{- /* subject-ticket.v1: the MAIL issuer's private key (the subject-ticket-mail-key Secret):
+            the intake signs the ticket an authenticated invite or reply carries. Mounted here and in
+            flows-worker, never in flows-api. */}}
+            - name: VEXA_FLOWS_MAIL_TICKET_KEY_FILE
+              value: /run/vexa-subject-ticket/key.pem
+          {{- /* READINESS FROM THE LOOP'S OWN REPORT. The loop writes how its last poll went to a file
+          in its temp directory (`flows_integrations/mailbox_status.py`) and this probe reads it: a
+          wrong password, an untrusted certificate or an unreachable IMAP host shows as NotReady
+          with `mail:<kind> imap <host>:<port> — <reason>` in `kubectl describe pod`. Readiness and
+          not liveness on purpose: none of those is cured by a restart, and the loop retries on its
+          own cadence and recovers the poll after the mailbox is fixed. The emptyDir is that temp
+          directory, so a read-only root filesystem does not silence the report. */}}
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "flows_integrations.mailbox_status"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 1
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: subject-ticket-mail-key
+              mountPath: /run/vexa-subject-ticket
+              readOnly: true
+            {{- with include "vexa.flowsMailCaMount" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        # subject-ticket.v1: the mail issuer's private key (subject-ticket-keys.yaml), mounted by
+        # flows-worker and flows-mailbox only.
+        - name: subject-ticket-mail-key
+          secret:
+            secretName: {{ .Values.subjectTickets.mail.existingSecret | default (include "vexa.componentName" (list . "subject-ticket-mail-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
+        {{- with include "vexa.flowsMailCaVolume" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -347,83 +478,60 @@ metadata:
   labels: {app.kubernetes.io/component: flows-api}
 spec:
   replicas: 1
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels: {app.kubernetes.io/component: flows-api}
   template:
     metadata:
-      labels: {app.kubernetes.io/component: flows-api}
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flows-api
+      annotations:
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        checksum/flows: {{ include "vexa.checksum" (list . .Values.flows) }}
     spec:
+      enableServiceLinks: false
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- /* global scheduling and pull secrets, the same as every other component Deployment:
+      without them the flows tier sits Pending on a cluster whose nodes are all tainted. */}}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- /* F192 — see the identical block on flows-worker above (reconciled the same way as
       flows-mailbox's — merge of #1505/F192 with #1509/F-D5): every Deployment that opens
       VEXA_FLOWS_DB_URL must be able to create the database it opens itself, not rely on
       flows-worker's pod happening to have won the startup race first. Helm TEMPLATE comment,
       not YAML — see the note on flows-mailbox's identical block for why. */}}
-      {{- if ne .Values.flows.databaseName .Values.database.name }}
+      {{- /* the flows database check (vexa.flowsDbCheck): every Deployment that opens
+      VEXA_FLOWS_DB_URL checks before it starts, so none relies on another's pod starting first */}}
+      {{- $dbCheck := include "vexa.flowsDbCheck" . }}
+      {{- if or $dbCheck (include "vexa.extraCA.enabled" .) }}
       initContainers:
-        - name: ensure-db
-          image: {{ include "vexa.flowsImage" . | quote }}
-          command: ["python", "-c"]
-          args:
-            - |
-              import os
-              from sqlalchemy import create_engine, text
-              name = os.environ["FLOWS_DB_NAME"]
-              admin_url = (
-                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
-                  + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
-                  + "?sslmode=" + os.environ["DB_SSL_MODE"]
-              )
-              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
-              with e.connect() as c:
-                  exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                  if not exists:
-                      try:
-                          c.execute(text('CREATE DATABASE "' + name + '"'))
-                          print("created database " + name)
-                      except Exception as exc:
-                          exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                          if not exists:
-                              raise RuntimeError(
-                                  "database " + repr(name) + " does not exist and this role could "
-                                  "not create it (" + repr(exc) + ") — pre-create it "
-                                  "(CREATE DATABASE ...) or grant CREATEDB"
-                              ) from exc
-                          print("database " + name + " already exists (created by another process)")
-                  else:
-                      print("database " + name + " already exists")
-          env:
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_PASSWORD
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_DB
-            - name: DB_HOST
-              value: {{ include "vexa.dbHostEffective" . | quote }}
-            - name: DB_PORT
-              value: {{ include "vexa.dbPortEffective" . | quote }}
-            - name: DB_SSL_MODE
-              value: {{ .Values.database.sslMode | quote }}
-            - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
       {{- end }}
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- with $dbCheck }}{{ . | trim | nindent 8 }}{{ end }}
       containers:
         - name: flows-api
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
           command: ["/bin/sh", "-c"]
           args:
             - |
-              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
               exec python -m flows_integrations.flows_api
           ports:
             - containerPort: 18200
@@ -431,6 +539,15 @@ spec:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- /* flows.extraEnv: operator env for the flows tier, like <component>.extraEnv on every
+            other component (e.g. VEXA_MAIL_KINDS_DEFAULT on an upgraded install). */}}
+            {{- with .Values.flows.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
+            {{- /* the bot mailbox's endpoints, TLS policy, CA path and password refs (flows.mail) */}}
+            {{- include "vexa.flowsMailEnv" . | nindent 12 }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -448,7 +565,7 @@ spec:
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
+              value: {{ include "vexa.flowsDatabaseName" . | quote }}
             {{- /* THE LISTENER. flows_api.py defaults VEXA_FLOWS_API_HOST to 127.0.0.1 on purpose
             (it also runs as a host lane on the dogfood rig, where 0.0.0.0 would publish that box's
             every interface). In a POD, loopback is this container's loopback: the Service below
@@ -465,22 +582,45 @@ spec:
             chart with flows.enabled=true. Same four values as the two lanes above, kept in the
             same order so a diff between the three containers reads as one list. */}}
             - name: VEXA_FLOWS_ADMIN_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/identity"
             - name: VEXA_FLOWS_GATEWAY_URL
-              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/meetings"
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/agent"
+            {{- end }}
+            {{- if .Values.crm.enabled }}
+            # The optional CRM's door for the flows_defs.crm pack (ADR-0047).
+            - name: VEXA_FLOWS_CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/crm"
+            - name: VEXA_FLOWS_DEFS_EXTRA
+              value: "flows_defs.crm"
             {{- end }}
             {{- if .Values.terminal.enabled }}
             - name: VEXA_UI_URL
               value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
             {{- end }}
-            - name: VEXA_FLOWS_ADMIN_KEY
+            {{- /* THE FLOWS TIER'S ONE CREDENTIAL: it opens the gateway's service door and nothing
+            else. Flows holds no ADMIN_API_TOKEN and no INTERNAL_API_SECRET. */}}
+            - name: VEXA_FLOWS_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ADMIN_API_TOKEN
+                  key: VEXA_FLOWS_SERVICE_KEY
+            {{- /* event.v2 (D8): POST /events verifies a sealed fact's envelope under the named
+            producer's PUBLIC key, `<producer>.pem` in this directory (the fact-verify-keys
+            ConfigMap, fact-seal-keys.yaml). Public keys only: flows-api cannot seal. Without the
+            ConfigMap (no CRM) the directory is empty and every sealed fact is refused 403. */}}
+            - name: VEXA_FACT_VERIFY_KEYS_DIR
+              value: /run/vexa-fact-verify
+            {{- /* The crm outbox's publish key (security review 19.1): POST /events for the CRM's own
+            facts, no other route. Optional: without it only the operator key admits facts. */}}
+            - name: VEXA_FLOWS_CRM_PUBLISH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_FLOWS_CRM_PUBLISH_KEY
+                  optional: true
           {{- /* PROBES. `/health` is liveness-grade only — it answers ok with Postgres
           unreachable (E4 in the 0.12.27 review) — so readiness here means "the process is
           listening and serving", not "the tier is well". That is still strictly more than the
@@ -502,16 +642,31 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
+          volumeMounts:
+            - name: fact-verify-keys
+              mountPath: /run/vexa-fact-verify
+              readOnly: true
+          {{- with include "vexa.flowsMailCaMount" . }}{{ . | trim | nindent 12 }}{{- end }}
+          {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{- end }}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
+      volumes:
+        - name: fact-verify-keys
+          configMap:
+            name: {{ include "vexa.componentName" (list . "fact-verify-keys") }}
+            optional: true
+      {{- with include "vexa.flowsMailCaVolume" . }}{{ . | trim | nindent 8 }}{{- end }}
+      {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "vexa.componentName" (list . "flows-api") }}
 spec:
-  selector: {app.kubernetes.io/component: flows-api}
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: flows-api
   ports:
     - name: http
       port: 18200

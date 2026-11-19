@@ -130,6 +130,10 @@ class Transcription(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     session_uid = Column(String, nullable=True, index=True)
     segment_id = Column(String, nullable=True)
+    # transcript.v1 `Source` — how the row was attributed; `chat` marks an in-meeting chat line
+    # (speaker = sender), which GET /bots/{platform}/{native}/chat reads back. NULL on speech rows
+    # from producers that never stamped one.
+    source = Column(String(32), nullable=True)
 
     meeting = relationship("Meeting", back_populates="transcriptions")
 

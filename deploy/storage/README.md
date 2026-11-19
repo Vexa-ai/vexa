@@ -8,7 +8,7 @@ they add no image.
 
 | File | Used by | What it does |
 |---|---|---|
-| `storage_init.py` | Compose `storage-init` | Resolves meeting-api's configured endpoint, creates the bucket if absent, then PUTs/GETs/DELETEs a unique probe under `.vexa-storage-init/` and compares bytes. Any failure exits 1, naming endpoint, bucket and step. After readiness, emits a WARNING on every run when the recording endpoint's host or port differs from bundled storage, surfaced by `make up` and `make dev`. When bots point `BOT_S3_ENDPOINT` at in-stack storage, also provisions their scoped account and prefix policy and proves the limit without writing to recordings. |
+| `storage_init.py` | Compose `storage-init` | Resolves meeting-api's configured endpoint, creates the bucket if absent, then PUTs/GETs/DELETEs a unique probe under `.vexa-storage-init/` and compares bytes. Any failure exits 1, naming endpoint, bucket and step. After readiness, emits a WARNING on every run when the recording endpoint's host or port differs from bundled storage, surfaced by `make up` and `make dev`. When bots point `BOT_S3_ENDPOINT` at in-stack storage, also provisions their scoped account with a **read-only** prefix policy (`s3:ListBucket` + `s3:GetObject` on `BOT_USERDATA_S3_PATH`, no Put/Delete) and proves it — own prefix listable and readable, writing or deleting there denied, recordings and the rest denied — without writing to recordings. Refuses a bot pair that shares either half with `MINIO_*` or `S3_*`. When `VEXA_PHOTOS_S3_*` is set, provisions admin-api's photos account the same way: `s3:ListBucket` (prefix `person-photos/*`) + Get/Put/Delete on `person-photos/` in the recordings bucket, merged into the bucket's one policy beside the bots' grant, and proves it — writes, reads, lists and deletes there allowed; recordings, the bucket root, bot userdata and the session store's bucket denied. Refuses a photos pair that shares either half with `MINIO_*` or `S3_*`; on an operator's own S3 it only proves I/O under the prefix. |
 | `s3_copy.py` | both, via `migrate-from-minio.sh` | Verifying, resumable S3 → S3 copy. Uploads are read back and compared by SHA-256; the manifest records source and target size/ETag. Reruns preserve target edits and deletions, reporting them in `summary.json`. Identical untracked target objects are adopted without uploading. Deletes nothing. |
 | `migrate-from-minio.sh` | `make -C deploy/lite migrate-storage`, `make -C deploy/compose migrate-storage` | Finds a MinIO that can read the old volume (the running container, else a temporary one from that container's image, else `LEGACY_MINIO_IMAGE` if present locally; never pulls), runs `s3_copy.py`, removes only the temporary containers it started. |
 
@@ -17,7 +17,7 @@ they add no image.
 ```
 /srv/vexa-storage/                 the volume (Lite: vexa-lite-storagedata, Compose: <project>_storage-data)
   data/<bucket>/<key>              every object, as a plain file (buckets are directories)
-  iam/users.json                   accounts versitygw created (the scoped bot account, if any)
+  iam/users.json                   accounts versitygw created (the scoped bot, session-store and photos accounts, if any)
   migration-from-minio/            manifest.jsonl, summary.json after an opt-in copy
 ```
 

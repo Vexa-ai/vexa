@@ -11,16 +11,19 @@
 // literal, which is code and survives the comment strip. So the fixtures below are planted as REAL
 // FILES in the tree the gate actually walks, and the real gate is run as a subprocess: a test that
 // fed a fixture string to an exported regex would prove the regex, not the gate, and the specifier
-// scan is the whole of what is under test.
+// scan is the whole of what is under test. The tree they are planted in is this file's PRIVATE
+// copy of the checkout (scripts/test-tree.mjs): every other test file runs in parallel over the
+// real one, and a plant there is a write any of them can read.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { writeFileSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { guardTree, sandboxTree } from "./test-tree.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+guardTree();
+const ROOT = sandboxTree();
 // An existing directory, so nothing is left behind for gate:readme to find (an empty leftover dir
 // is invisible to `git status` and very visible to that gate).
 const PLANTED = "clients/terminal/src/ui-kit/zzPlantedIsolation.tsx";
@@ -96,4 +99,22 @@ test("GREEN: a TypeScript import-TYPE query names a types package, not a runtime
   // characters as a dynamic import, a package that is never installed at runtime.
   const r = withPlanted(`export type T = { C: import("${UNDECLARED}").Thing };\n`, runIsolation);
   assert.equal(r.green, true, r.out);
+});
+
+test("RED: a THREE-folder cycle is refused, though no two of its folders import each other", () => {
+  // data → canvas → workbench → data. workbench → data is real; the plants add the other two
+  // edges. No pair is mutual, so a check that only refused `a<->b` pairs passed this (Vexa-ai/vexa#1783).
+  const plants = [
+    ["clients/terminal/src/data/zzPlantedCycle.ts", `import { x } from "../canvas/zzPlantedCycle";\nexport const y = x;\n`],
+    ["clients/terminal/src/canvas/zzPlantedCycle.ts", `import { createPaletteService } from "../workbench/palette";\nexport const x = createPaletteService;\n`],
+  ];
+  for (const [p, body] of plants) writeFileSync(join(ROOT, p), body);
+  let r;
+  try { r = runIsolation(); } finally { for (const [p] of plants) rmSync(join(ROOT, p), { force: true }); }
+  assert.equal(r.green, false, r.out);
+  assert.match(r.out, /FOLDER CYCLE/);
+  // the report names a closed path through the planted edge (every folder that reaches data/ joins
+  // the component, so the exact route is the checker's choice; that it closes and uses the plant is not)
+  assert.match(r.out, /\b([a-z-]+)(?: -> [a-z-]+)+ -> \1\b/);
+  assert.match(r.out, /data -> canvas/);
 });

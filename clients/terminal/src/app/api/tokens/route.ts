@@ -6,7 +6,7 @@
  *  resolved from the auth cookies (currentUser.ts) — a user_id from the client is never accepted (P20).
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { listUserTokens, mintUserToken } from "../auth/adminApi";
+import { TERMINAL_LOGIN_TOKEN_NAME, listUserTokens, mintUserToken } from "../auth/adminApi";
 import { currentUser } from "./currentUser";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +41,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Scopes must be a non-empty subset of ${[...VALID_SCOPES].join(", ")}` }, { status: 400, headers: NO_STORE });
   }
   const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 255) : undefined;
+  // The sign-in's own names are reserved: a self-serve key named like a login credential would pass as
+  // one (the login-token prune bounds every key under that name).
+  if (name && (name.toLowerCase() === TERMINAL_LOGIN_TOKEN_NAME || /^company:/i.test(name))) {
+    return NextResponse.json({ error: `"${name}" is reserved for sign-in; choose another name` }, { status: 400, headers: NO_STORE });
+  }
   const expiresIn = typeof body.expiresIn === "number" && Number.isFinite(body.expiresIn) && body.expiresIn > 0
     ? Math.floor(body.expiresIn)
     : undefined;

@@ -1,0 +1,56 @@
+---
+title: "Image names from v0.13.3"
+description: "The service images are now vexaai/vexa-SERVICE. What to change on upgrade, and how to mirror them."
+---
+
+From v0.13.3 the ten service images are published as `vexaai/vexa-<service>:<version>`. They were
+`vexaai/v012-<service>`. The bot (`vexaai/vexa-bot`) and Lite (`vexaai/vexa-lite`) keep their names.
+
+| Before | From v0.13.3 |
+|---|---|
+| `vexaai/v012-admin-api` | `vexaai/vexa-admin-api` |
+| `vexaai/v012-runtime` | `vexaai/vexa-runtime` |
+| `vexaai/v012-agent-api` | `vexaai/vexa-agent-api` |
+| `vexaai/v012-agent-worker` | `vexaai/vexa-agent-worker` |
+| `vexaai/v012-meeting-api` | `vexaai/vexa-meeting-api` |
+| `vexaai/v012-gateway` | `vexaai/vexa-gateway` |
+| `vexaai/v012-mcp` | `vexaai/vexa-mcp` |
+| `vexaai/v012-terminal` | `vexaai/vexa-terminal` |
+| `vexaai/v012-flows` | `vexaai/vexa-flows` |
+| none: the broker is new in 0.13 (v0.13.3 also pushes it as `vexaai/v012-credential-broker`) | `vexaai/vexa-credential-broker` |
+
+v0.13.3 is published under **both** names with the same digest. v0.13.4 and later are published
+under the new names only.
+
+## Upgrade
+
+- **Compose.** Set `IMAGE_TAG=v0.13.3` in `.env` (the old default, `v012`, does not exist under the
+  new names). If you set `AGENT_IMAGE` or `AGENT_WORKER_IMAGE`, change them to the new names. Then
+  `make up`.
+- **Helm.** Pin the release with `global.imageTag=v0.13.3`. Leaving it empty now installs the
+  chart's own release, `v<appVersion>`. If your values override a component's `image.repository`,
+  `runtime.agentImage` or `runtime.agentWorkerImage`, change them to the new names.
+- **Lite.** Nothing changes: `vexaai/vexa-lite` keeps its name.
+- **A registry mirror or pull-through cache.** Add the ten `vexaai/vexa-*` repositories to its
+  allow-list before upgrading. A mirror that copies by repository needs the new names; one that
+  verifies by digest sees the same digests under both names for v0.13.3.
+- **Policy that pins images by name** (admission control, scanning, signature policy): add the new
+  names. The digests of v0.13.3 do not change.
+
+Always pin a release tag. Do not use `latest` on the new repositories: on `vexaai/vexa-admin-api`
+and `vexaai/vexa-mcp` it is an unrelated image from an older line.
+
+## How it works
+
+The names are defined once, in `release/image-names.mjs`. The release workflow builds each service
+image once and pushes it under the new name, and for v0.13.3 only also under the old name in the same
+push, so both tags carry one digest. The candidate image map (schema 4) records the new names; maps
+frozen for earlier releases keep the names they were frozen with.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| One source of truth | Every workflow, the candidate map and the tag audit derive the names from one module; compose, the chart and docs are checked against it. | `release/image-names.test.mjs` |
+| Immutable install paths | The chart defaults to `v<appVersion>`, and compose's `.env.example` pins the release tag; compose itself falls back to `${IMAGE_TAG:-dev}` when `IMAGE_TAG` is unset. Lite's Makefile still falls back to the moving `v012` tag when `.env` sets none. | `release/image-names.test.mjs`, `deploy/helm/tests/test_template.sh` |
+| Same bytes under both names | One build pushes both tags; a re-published candidate copies the pinned digest and reads it back under each name. | `release-images.yml` readback |

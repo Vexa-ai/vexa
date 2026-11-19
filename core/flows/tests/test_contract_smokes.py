@@ -49,12 +49,16 @@ GATEWAY = _door("VEXA_FLOWS_GATEWAY_URL")
 pytestmark = pytest.mark.skipif(not (AGENT_API and _up(f"{AGENT_API}/health")),
                                 reason="VEXA_FLOWS_AGENT_API_URL is unnamed, or that stack is down")
 
-# READ AT IMPORT, which is before any fixture runs — so this is the key the OPERATOR exported,
-# never the placeholder `conftest` injects for the offline suite. The admin smoke below used to
-# hardcode `"changeme"`, a second copy of the default that R-B11 removed from the code: against
-# any real stack it answered 403, and the test had been red for exactly as long as the stack had
-# been configured correctly. A contract smoke that needs a credential runs when it is given one.
-REAL_ADMIN_KEY = (os.environ.get("VEXA_FLOWS_ADMIN_KEY") or "").strip()
+# The key the OPERATOR exported — never the offline value `conftest` injects at import (it uses
+# `setdefault`, so an exported key wins and the offline one is recognisable by its literal). The
+# identity smoke below once hardcoded `"changeme"`, a second copy of a default R-B11 removed from
+# the code: against any real stack it answered 403, and the test had been red for exactly as long
+# as the stack had been configured correctly. A contract smoke that needs a credential runs when it
+# is given one.
+_OFFLINE_KEY = "test-flows-service-key-not-a-placeholder"
+REAL_SERVICE_KEY = (os.environ.get("VEXA_FLOWS_SERVICE_KEY") or "").strip()
+if REAL_SERVICE_KEY == _OFFLINE_KEY:
+    REAL_SERVICE_KEY = ""
 
 from flows_steps.common import http  # noqa: E402 — the doors above come from the contract
 
@@ -84,14 +88,17 @@ def test_chat_post_is_a_stream_not_a_response():
         pass                                       # stream stayed open — the documented behavior
 
 
-@pytest.mark.skipif(not (REAL_ADMIN_KEY and ADMIN_API),
-                    reason="VEXA_FLOWS_ADMIN_KEY / VEXA_FLOWS_ADMIN_API_URL not exported — the "
+@pytest.mark.skipif(not (REAL_SERVICE_KEY and ADMIN_API),
+                    reason="VEXA_FLOWS_SERVICE_KEY / VEXA_FLOWS_ADMIN_API_URL not exported — the "
                            "smoke needs THIS stack's key and THIS stack's door")
-def test_admin_user_lookup_shapes():
-    keyed = {"X-Admin-API-Key": REAL_ADMIN_KEY}
-    code, u = http("GET", f"{ADMIN_API}/admin/users/email/definitely-absent@nowhere.test", keyed)
+def test_identity_user_lookup_shapes():
+    """The lookup flows actually makes: identity's internal by-email route, through the gateway's
+    service door with the flows key — no admin key."""
+    keyed = {"X-Vexa-Service-Key": REAL_SERVICE_KEY}
+    code, u = http("GET", f"{ADMIN_API}/internal/users/by-email/definitely-absent%40nowhere.test",
+                   keyed)
     assert code == 404
-    code, u = http("GET", f"{ADMIN_API}/admin/users/email/anna@bank.com", keyed)
+    code, u = http("GET", f"{ADMIN_API}/internal/users/by-email/anna%40bank.com", keyed)
     if code == 200:
         assert isinstance(u.get("id"), int)        # adapters str() this — must exist
 

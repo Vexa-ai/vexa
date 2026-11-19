@@ -1,0 +1,6 @@
+This is a voice note recorded for the end to end check. The quick brown fox jumps over the lazy dog.
+We are testing whether audio sent from a browser reaches the same pipeline a meeting uses.
+Each sentence should come back as text in the transcript, in order, with nothing lost at the end.
+The weather today is clear, and the meeting about the quarterly plan moved to Thursday afternoon.
+Please remember to send the summary to the team before five o'clock.
+This is the last sentence of the note, and it should be transcribed before the note is finished.

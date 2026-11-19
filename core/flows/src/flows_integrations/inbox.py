@@ -1,15 +1,24 @@
-"""The INBOX SEAM — one poller, two sources, one set of facts.
+"""The INBOX SEAM — one poller, three sources, one set of facts.
 
 `mailbox.py` polls an INBOX. Which inbox technology that is must not reach the parser, the
-routing decision, the admission or the flows: both sources fetch the RAW RFC822 source and hand
-back the same `InboundMessage`, so a Gmail invite and a mailpit invite produce byte-identical
-facts.
+routing decision, the admission or the flows: every source hands back the same `InboundMessage`,
+so a Gmail invite, a mailpit invite and an Exchange invite produce byte-identical facts.
 
-    VEXA_MAIL_INBOX = imap     (default) — IMAP against imap.gmail.com, exactly as before
+    VEXA_MAIL_INBOX = imap     (default) — IMAP; the Gmail preset unless VEXA_MAIL_IMAP_HOST names
+                                          another server (on-prem Exchange: `flows_steps/
+                                          mail_transport.py` lists the endpoint keys)
                     = mailpit           — the dev stack's mail double, REST only (no IMAP/POP3)
+                    = graph             — Microsoft 365 over Graph, client-credentials, for a
+                                          tenant with IMAP switched off (the bank posture)
     VEXA_MAILPIT_URL           — mailpit's HTTP base (default http://127.0.0.1:8025)
     VEXA_MAIL_ADDR             — the address this inbox answers as; mailpit filters on it
-    VEXA_MAILPIT_LOOKBACK_S    — re-scan window behind the watermark (default 300)
+    VEXA_MAILPIT_LOOKBACK_S    — re-scan window behind the watermark (default 300); the Graph
+                                 inbox reads the same dial, because it is the same mechanism
+    VEXA_GRAPH_*               — the Graph mailbox's four keys, see `graph_client.py`
+
+An Exchange mailbox that has IMAP ENABLED — on-premises or Exchange Online — needs none of the
+Graph machinery: point the IMAP source at it with VEXA_MAIL_IMAP_HOST (and _TLS, _USER, _CA_FILE).
+`graph` is for the Microsoft 365 tenant that will not enable IMAP.
 
 Contracts both sources keep — they are the ones the live witness paid for, so a source that
 breaks any of them is a regression, not a variant:
@@ -25,8 +34,11 @@ Why mailpit needs more than an integer: IMAP UIDs are monotonic, so one number i
 position. Mailpit IDs are random base62 (`6bdn12ZorjbbiXdRJuW3xR`) and carry no order at all, so
 the position is a **`Created` watermark plus a seen-ID set**, both persisted — the watermark bounds
 the scan, the set makes the re-scan window idempotent. Both live next to the IMAP cursor:
-`mail_cursor.token` holds the watermark (the same nullable TEXT column the Exchange/Graph seam in
-Vexa-ai/vexa#1318 adds, deliberately — the two converge on merge) and `mail_seen` holds the ids.
+`mail_cursor.token` holds the watermark and `mail_seen` holds the ids. **The Graph source
+reuses that machinery verbatim** — Graph's `receivedDateTime` is second-granular, so two
+invitations can share one, and the `gt`-per-message cursor Vexa-ai/vexa#1318 proposed would drop
+the second of them forever with no error anywhere. The convergence those two seams anticipated is
+these functions, below.
 
 Stdlib only (imaplib/urllib), matching `flows_steps/common.py`'s `http()` idiom.
 """
@@ -45,6 +57,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
+from flows_integrations.outlook import decode_ics
+
 # Exactly the two content types and the exact suffix test the IMAP poller has always used — a
 # widened match here would change the facts the Gmail path produces, which is the one thing this
 # seam may not do.
@@ -60,7 +74,9 @@ class InboundMessage:
 
     `cursor` is the source-native position AFTER this message; the poller persists it once the
     message has been routed (C1). `ext_id` is the source-native id — IMAP UID or mailpit ID —
-    and is only ever a fallback dedup key for a message with no Message-ID."""
+    and is only ever a fallback dedup key for a message with no Message-ID. `raw` is the message
+    exactly as received, which in-app DKIM verification reads (`mail_policy.dkim_dmarc`); empty
+    for a source that hands over no RFC822 bytes (Graph)."""
     cursor: str
     ext_id: str
     message_id: str
@@ -69,6 +85,7 @@ class InboundMessage:
     headers: dict = field(default_factory=dict)
     body: str = ""
     ics: str | None = None
+    raw: bytes = b""
 
 
 def from_rfc822(raw: bytes, *, cursor: str, ext_id: str) -> InboundMessage:
@@ -78,16 +95,34 @@ def from_rfc822(raw: bytes, *, cursor: str, ext_id: str) -> InboundMessage:
     body, ics = "", None
     for part in msg.walk():
         ct = part.get_content_type()
-        if ct == "text/plain" and not body:
+        # The body is the first INLINE text/plain part: a `text/plain` attachment is a file the
+        # sender attached, not what they wrote, and it never travels as their words.
+        if ct == "text/plain" and not body and part.get_content_disposition() != "attachment":
             body = (part.get_payload(decode=True) or b"").decode(errors="replace")
         if ct in ICS_TYPES or (part.get_filename() or "").endswith(".ics"):
-            ics = (part.get_payload(decode=True) or b"").decode(errors="replace")
+            # `decode_ics` sniffs a BOM before assuming UTF-8. For every UTF-8 payload without
+            # one — which is every invite this path has ever seen — it is byte-for-byte the same
+            # `decode(errors="replace")` that was here. What it adds is the UTF-16LE-with-BOM
+            # shape some Exchange connectors emit, which decoded to mojibake and then parsed as
+            # "not an invite": a silent ignore, the worst failure this file can have.
+            ics = decode_ics(part.get_payload(decode=True) or b"")
     return InboundMessage(
         cursor=cursor, ext_id=ext_id,
         message_id=(msg.get("Message-ID", "") or "").strip(),
         frm=email_mod.utils.parseaddr(msg.get("From", ""))[1].lower(),
         subject=msg.get("Subject", "") or "",
-        headers=dict(msg.items()), body=body, ics=ics)
+        headers=_headers(msg), body=body, ics=ics, raw=raw)
+
+
+def _headers(msg) -> dict:
+    """The headers as a dict — with the TOPMOST `Authentication-Results`, which is the one our own
+    receiving server prepended (D25). `dict(msg.items())` keeps the LAST of a repeated header, and
+    the last one is whatever the sender wrote into the message before it reached us."""
+    out = dict(msg.items())
+    ar = msg.get_all("Authentication-Results") or []
+    if ar:
+        out["Authentication-Results"] = ar[0]
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -125,6 +160,58 @@ def iso_norm(value) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(whole)) + f".{micro:06d}Z"
 
 
+# ---------------------------------------------------------------------------------------------
+# The WATERMARK CURSOR, shared by every source whose ids are not ordered.
+#
+# Lifted out of `MailpitInbox` unchanged — same SQL, same order, same semantics — because the
+# Graph source needs exactly it. A source whose position is a timestamp several messages can
+# share cannot be made idempotent by the position alone: the watermark bounds the scan, the
+# `mail_seen` set decides what inside the re-scan window has already been answered.
+# ---------------------------------------------------------------------------------------------
+def ensure_token_column(db) -> None:
+    """`schema.sql` is CREATE TABLE IF NOT EXISTS with no migration runner, so a database that was
+    deployed before this seam has a `mail_cursor` with no `token` column. Add it — one idempotent
+    ALTER, run only on the watermark sources, so an IMAP deployment is never touched."""
+    try:
+        db.execute("SELECT token FROM mail_cursor WHERE id = 1")
+    except Exception:  # noqa: BLE001 — "column does not exist" is a schema fact, not a failure
+        db.execute("ALTER TABLE mail_cursor ADD COLUMN token TEXT")
+
+
+def read_watermark(db) -> str | None:
+    row = db.execute("SELECT token FROM mail_cursor WHERE id = 1")
+    return (row[0][0] if row else None) or None
+
+
+def write_watermark(db, at: str) -> None:
+    """The first-boot anchor — an upsert, because the row may not exist yet."""
+    db.execute("INSERT INTO mail_cursor (id, uid, token) VALUES (1, 0, :t) "
+               "ON CONFLICT (id) DO UPDATE SET token = :t", {"t": at})
+
+
+def advance_watermark(db, source: str, created: str, *, prune_before: str) -> None:
+    """Move the watermark forward, never back, and prune what can no longer be re-fetched."""
+    held = read_watermark(db) or ""
+    if iso_epoch(created) >= iso_epoch(held):
+        db.execute("UPDATE mail_cursor SET token = :t WHERE id = 1", {"t": created})
+        db.execute("DELETE FROM mail_seen WHERE source = :s AND created < :f",
+                   {"s": source, "f": prune_before})
+
+
+def load_seen(db, source: str, floor: str) -> set:
+    return {r[0] for r in db.execute(
+        "SELECT ext_id FROM mail_seen WHERE source = :s AND created >= :f",
+        {"s": source, "f": floor})}
+
+
+def mark_seen(db, source: str, ext_id: str, created: str, cache: set | None = None) -> None:
+    db.execute("INSERT INTO mail_seen (source, ext_id, created, seen_at) "
+               "VALUES (:s, :e, :c, :t) ON CONFLICT (source, ext_id) DO NOTHING",
+               {"s": source, "e": ext_id, "c": created, "t": time.time()})
+    if cache is not None:
+        cache.add(ext_id)
+
+
 class Inbox:
     """The seam. Five methods; nothing else may vary between sources."""
 
@@ -151,15 +238,41 @@ class Inbox:
         """Persist the position AFTER this message has been routed."""
         raise NotImplementedError
 
+    def recent(self, n: int) -> list[InboundMessage]:
+        """The last `n` messages, READ-ONLY and without touching the cursor — what the mail
+        sensor's dry run (`sensor_test`) is shown. A source that cannot answer raises."""
+        raise NotImplementedError(f"the {self.name} inbox cannot list recent messages")
+
 
 # ---------------------------------------------------------------------------------------------
-# IMAP — the original wiring, moved behind the seam and otherwise untouched: same host, same
-# UID search, same `n:*` guard, same single-integer cursor row.
+# IMAP — any IMAP server. Gmail is the PRESET (every endpoint key defaults to it), not the only
+# host: an on-premises Exchange with IMAP enabled is `VEXA_MAIL_IMAP_HOST` + `_TLS` + `_USER`
+# (+ `_CA_FILE` for an internal CA). Same UID search, same `n:*` guard, same single-integer cursor
+# row as the original wiring. Connection, TLS and login failures leave `_open` as a typed
+# `MailTransportError` (`flows_steps.mail_transport`) the poller reports and the probe reads.
 # ---------------------------------------------------------------------------------------------
+def _peek(im, uid) -> bytes:
+    """ONE MESSAGE, READ WITHOUT A TRACE. `BODY.PEEK[]` is the whole message exactly as `RFC822`
+    returns it, except that it does not set `\\Seen` — and the folder is opened with EXAMINE
+    (`mail_transport.imap_open`, read-only), so nothing this reader does can mark, move, label or
+    delete mail in a mailbox other people read too. There is no STORE, COPY, MOVE or EXPUNGE
+    anywhere in this module, and `test_mail_sensor.py` holds it to that."""
+    _, md = im.uid("fetch", uid, "(BODY.PEEK[])")
+    for part in md or ():
+        if isinstance(part, tuple) and len(part) > 1:
+            return part[1]
+    return b""
+
+
 class ImapInbox(Inbox):
     name = "imap"
-    host = "imap.gmail.com"
-    folder = "INBOX"
+
+    def __init__(self) -> None:
+        from flows_steps import mail_transport as mt
+        self._mt = mt
+        self.settings = mt.imap_settings()      # a bad TLS mode or port is refused at construction
+        self.host = self.settings["host"]
+        self.folder = self.settings["folder"]
 
     def _creds(self):
         from flows_steps import emailx as mx
@@ -168,20 +281,37 @@ class ImapInbox(Inbox):
     def address(self) -> str:
         return self._creds()[0]
 
+    def _identity(self) -> str:
+        """WHICH MAILBOX the stored UID belongs to. A UID means nothing in another mailbox or
+        folder: a cursor row left by the mail double (uid 0), or by a different address, read as a
+        position here would replay this mailbox's whole history — on a shared `info@`, every
+        message anybody ever received. So the position is kept WITH the mailbox it was taken in,
+        and a cursor that names another one (or none) is not a position: first boot anchors at
+        the tail again (C1)."""
+        import flows_config
+        addr = (flows_config.get("VEXA_MAIL_IMAP_USER") or flows_config.get("VEXA_MAIL_ADDR") or "")
+        return f"imap:{addr.strip().lower()}/{self.folder}"
+
     def restore(self, db) -> str | None:
-        row = db.execute("SELECT uid FROM mail_cursor WHERE id = 1")
-        return str(row[0][0]) if row else None
+        ensure_token_column(db)
+        row = db.execute("SELECT uid, token FROM mail_cursor WHERE id = 1")
+        if not row or (row[0][1] or "") != self._identity():
+            return None
+        return str(row[0][0])
 
     def anchor(self, db, cursor: str) -> None:
-        db.execute("INSERT INTO mail_cursor (id, uid) VALUES (1, :u) ON CONFLICT (id) DO NOTHING",
-                   {"u": int(cursor)})
+        ensure_token_column(db)
+        db.execute("INSERT INTO mail_cursor (id, uid, token) VALUES (1, :u, :t) "
+                   "ON CONFLICT (id) DO UPDATE SET uid = :u, token = :t",
+                   {"u": int(cursor), "t": self._identity()})
 
     def _open(self):
-        addr, pw = self._creds()
-        im = imaplib.IMAP4_SSL(self.host)
-        im.login(addr, pw)
-        im.select(self.folder)
-        return im
+        try:
+            addr, pw = self._creds()
+        except Exception as e:  # noqa: BLE001 — a half-configured pair is a config fault, typed
+            raise self._mt.MailTransportError("config", "imap", self.host,
+                                              self.settings["port"], str(e)) from e
+        return self._mt.imap_open(addr, pw, self.settings)
 
     def tail_cursor(self) -> str:
         with self._open() as im:
@@ -197,8 +327,14 @@ class ImapInbox(Inbox):
                 uid = int(raw)
                 if uid <= low:
                     continue          # IMAP's `n:*` returns the last UID even when the range is empty
-                _, md = im.uid("fetch", raw, "(RFC822)")
-                yield from_rfc822(md[0][1], cursor=str(uid), ext_id=str(uid))
+                yield from_rfc822(_peek(im, raw), cursor=str(uid), ext_id=str(uid))
+
+    def recent(self, n: int) -> list[InboundMessage]:
+        with self._open() as im:
+            _, d = im.uid("search", None, "ALL")
+            uids = (d[0].split() if d and d[0] else [])[-max(int(n), 0):] if n else []
+            return [from_rfc822(_peek(im, raw), cursor=str(int(raw)), ext_id=str(int(raw)))
+                    for raw in uids]
 
     def commit(self, db, msg: InboundMessage) -> None:
         db.execute("UPDATE mail_cursor SET uid = :u WHERE id = 1", {"u": int(msg.cursor)})
@@ -238,25 +374,15 @@ class MailpitInbox(Inbox):
         return self.addr
 
     # --- cursor ------------------------------------------------------------------------------
-    @staticmethod
-    def ensure_schema(db) -> None:
-        """`schema.sql` is CREATE TABLE IF NOT EXISTS with no migration runner, so a database that
-        was deployed before this seam has a `mail_cursor` with no `token` column. Add it — one
-        idempotent ALTER, run only on the mailpit path, so an IMAP deployment is never touched."""
-        try:
-            db.execute("SELECT token FROM mail_cursor WHERE id = 1")
-        except Exception:  # noqa: BLE001 — "column does not exist" is a schema fact, not a failure
-            db.execute("ALTER TABLE mail_cursor ADD COLUMN token TEXT")
+    ensure_schema = staticmethod(ensure_token_column)   # kept as a name callers already use
 
     def restore(self, db) -> str | None:
-        self.ensure_schema(db)
-        row = db.execute("SELECT token FROM mail_cursor WHERE id = 1")
-        token = (row[0][0] if row else None) or None
+        ensure_token_column(db)
+        token = read_watermark(db)
+        if token and token.startswith("imap:"):
+            return None                     # an IMAP mailbox's identity, not a mailpit watermark
         if token:
-            floor = iso_norm(iso_epoch(token) - self.lookback)
-            self._seen = {r[0] for r in db.execute(
-                "SELECT ext_id FROM mail_seen WHERE source = :s AND created >= :f",
-                {"s": self.name, "f": floor})}
+            self._seen = load_seen(db, self.name, iso_norm(iso_epoch(token) - self.lookback))
         return token
 
     def anchor(self, db, cursor: str) -> None:
@@ -264,10 +390,9 @@ class MailpitInbox(Inbox):
         anchor is marked seen. That makes the two boot cases one rule — anchoring at the tail
         skips the double's whole rehearsal history (C1), while anchoring at an operator-supplied
         earlier position still admits everything after it."""
-        self.ensure_schema(db)
+        ensure_token_column(db)
         at = iso_norm(cursor)
-        db.execute("INSERT INTO mail_cursor (id, uid, token) VALUES (1, 0, :t) "
-                   "ON CONFLICT (id) DO UPDATE SET token = :t", {"t": at})
+        write_watermark(db, at)
         for created, m in self._scan(iso_epoch(at) - self.lookback):
             if created <= at:
                 self._mark_seen(db, m.get("ID") or "", created)
@@ -279,21 +404,14 @@ class MailpitInbox(Inbox):
         return iso_norm(msgs[0].get("Created", "")) if msgs else iso_norm(time.time())
 
     def _mark_seen(self, db, ext_id: str, created: str) -> None:
-        db.execute("INSERT INTO mail_seen (source, ext_id, created, seen_at) "
-                   "VALUES (:s, :e, :c, :t) ON CONFLICT (source, ext_id) DO NOTHING",
-                   {"s": self.name, "e": ext_id, "c": created, "t": time.time()})
-        self._seen.add(ext_id)
+        mark_seen(db, self.name, ext_id, created, self._seen)
 
     def commit(self, db, msg: InboundMessage) -> None:
         created = msg.cursor
         self._mark_seen(db, msg.ext_id, created)
-        row = db.execute("SELECT token FROM mail_cursor WHERE id = 1")
-        held = (row[0][0] if row else None) or ""
-        if iso_epoch(created) >= iso_epoch(held):
-            db.execute("UPDATE mail_cursor SET token = :t WHERE id = 1", {"t": created})
-            # anything older than the re-scan window can never be fetched again
-            db.execute("DELETE FROM mail_seen WHERE source = :s AND created < :f",
-                       {"s": self.name, "f": iso_norm(iso_epoch(created) - self.lookback - 86400)})
+        # anything older than the re-scan window can never be fetched again
+        advance_watermark(db, self.name, created,
+                          prune_before=iso_norm(iso_epoch(created) - self.lookback - 86400))
 
     # --- fetch -------------------------------------------------------------------------------
     def _for_us(self, m: dict) -> bool:
@@ -334,6 +452,18 @@ class MailpitInbox(Inbox):
             yield from_rfc822(raw if isinstance(raw, bytes) else raw.encode(),
                               cursor=created, ext_id=mid)
 
+    def recent(self, n: int) -> list[InboundMessage]:
+        msgs = self._json(f"/api/v1/messages?limit={max(int(n), 0)}&start=0").get("messages") or []
+        out = []
+        for m in reversed(msgs):
+            if not self._for_us(m):
+                continue
+            mid = m.get("ID") or ""
+            raw = self._open(f"/api/v1/message/{mid}/raw")    # `/raw` does not mark it read
+            out.append(from_rfc822(raw if isinstance(raw, bytes) else raw.encode(),
+                                   cursor=iso_norm(m.get("Created", "")), ext_id=mid))
+        return out
+
 
 def get_inbox() -> Inbox:
     kind = (os.environ.get("VEXA_MAIL_INBOX") or "imap").strip().lower()
@@ -341,4 +471,21 @@ def get_inbox() -> Inbox:
         return ImapInbox()
     if kind == "mailpit":
         return MailpitInbox()
-    raise ValueError(f"VEXA_MAIL_INBOX={kind!r} — expected 'imap' (default) or 'mailpit'")
+    if kind == "graph":
+        # Graph hands over no RFC822 bytes, so there is no signature to verify in-app: refused here
+        # rather than quarantining every sender without a word.
+        from flows_integrations import mail_policy
+        from flows_steps.mail_transport import MailTransportError
+        try:
+            mode = mail_policy.auth_mode()
+        except ValueError as e:
+            raise MailTransportError("config", "graph", "inbox", "-", str(e)) from None
+        if mode != "mta":
+            raise MailTransportError("config", "graph", "inbox", "-",
+                                     f"VEXA_FLOWS_MAIL_AUTH_MODE={mode} needs the message bytes, "
+                                     "which the Graph inbox does not read — use mta with Graph")
+        # Imported here, not at module scope: the Graph client refuses to construct without its
+        # four keys, and an IMAP deployment must not pay for a source it does not run.
+        from flows_integrations.graph_inbox import GraphInbox
+        return GraphInbox()
+    raise ValueError(f"VEXA_MAIL_INBOX={kind!r} — expected 'imap' (default), 'mailpit' or 'graph'")

@@ -1,0 +1,60 @@
+{{- if .Values.agentApi.enabled }}
+{{- $ws := include "vexa.workspaceStore" . | fromYaml }}
+{{- if $ws.migrate }}
+{{- if not $ws.bucket }}
+{{- fail "agentApi.workspaces.s3.migrate.enabled needs agentApi.workspaces.s3.bucket and existingSecret: the bucket the volume is copied into" }}
+{{- end }}
+# WS-S3: copy the agent-workspaces volume into the workspaces bucket, then verify it from a fresh,
+# empty cache (refs, HEAD tree and commit count per repository; platform files byte for byte). The
+# volume is mounted read-only and never written. Exit 0 only when everything verified; read the
+# report with `kubectl logs job/<this job>`. Run it with agent-api scaled to 0, then switch
+# agentApi.workspaces.backend to s3.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vexa.componentName" (list . "workspaces-s3-migrate") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workspaces-s3-migrate
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: workspaces-s3-migrate
+    spec:
+      enableServiceLinks: false
+      restartPolicy: Never
+      {{- include "vexa.podSecurityContext" . | nindent 6 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag | default (include "vexa.releaseTag" .) }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "workspaces.store.migrate", "--source", "/source"]
+          env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- include "vexa.workspaceStore.bucketEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: source
+              mountPath: /source
+              readOnly: true
+            {{- include "vexa.workspaceStore.caMount" . | nindent 12 }}
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
+      volumes:
+        - name: source
+          persistentVolumeClaim:
+            claimName: {{ include "vexa.componentName" (list . "agent-workspaces") }}
+            readOnly: true
+        {{- include "vexa.workspaceStore.caVolume" . | nindent 8 }}
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+{{- end }}
+{{- end }}

@@ -11,16 +11,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { WorkspaceSwitcher } from "../workspace";
 import { ServicesProvider, createContainer, reg } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
-import * as api from "../workspaceApi";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
+import * as api from "../../data/workspaceApi";
 
 // WorkspaceSwitcher now opens the MANAGE tab via the LayoutService — provide a real one so it renders.
 const withServices = (node: React.ReactNode) => (
   <ServicesProvider container={createContainer([reg(LayoutServiceId, () => createLayoutService("files"))])}>{node}</ServicesProvider>
 );
 
-vi.mock("../workspaceApi", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../workspaceApi")>()),
+vi.mock("../../data/workspaceApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../data/workspaceApi")>()),
   readAttachedWorkspaces: vi.fn(),
   readActiveSet: vi.fn(),
   swapWorkspace: vi.fn(),
@@ -48,7 +48,7 @@ async function renderOpenSwitcher(overrideActive?: Awaited<ReturnType<typeof api
   vi.mocked(api.readAttachedWorkspaces).mockResolvedValue(view);
   vi.mocked(api.readActiveSet).mockResolvedValue(overrideActive ?? activeSet);
   vi.mocked(api.swapWorkspace).mockResolvedValue(undefined as never);
-  vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true, cloned: false, nested: false });
+  vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true, cloned: false });
   vi.mocked(api.deactivateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true });
   vi.mocked(api.createWorkspace).mockResolvedValue({ subject: "u1", slug: "workspace-1", changed: true, added: true });
   const onSwapped = vi.fn();
@@ -221,7 +221,7 @@ describe("WorkspaceSwitcher — active set uses CHECKBOXES, not radio-style dots
     sessionStorage.setItem("ws.attach.open", "1");
     vi.mocked(api.readAttachedWorkspaces).mockResolvedValue({ ...view, baseline_hidden: true } as unknown as Awaited<ReturnType<typeof api.readAttachedWorkspaces>>);
     vi.mocked(api.readActiveSet).mockResolvedValue({ subject: "u1", active: [] } as unknown as Awaited<ReturnType<typeof api.readActiveSet>>);
-    vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "leo", changed: true, cloned: false, nested: false });
+    vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "leo", changed: true, cloned: false });
     render(withServices(<WorkspaceSwitcher onSwapped={vi.fn()} />));
     await screen.findByText("leo");
     const cb = rowCheckbox("leo");

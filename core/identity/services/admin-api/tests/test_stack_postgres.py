@@ -241,44 +241,47 @@ def test_meeting_active_unique_index_blocked_fails_closed(engine):
     assert idx_name in built and built[idx_name]["unique"] is True
 
 
-def test_backfill_grandfathers_empty_token_scopes(engine):
-    """MIGRATION-0004 (issue #578) — a 0.10-era token row with scopes='{}' (what the additive
-    ADD COLUMN leaves behind on upgrade) is grandfathered to the full valid-scope set by
-    ensure_schema, so it keeps authorizing core routes; an already-scoped row is left untouched.
-
-    RED before the backfill: the empty-scope row would stay '{}' and 403 on every core route.
-    """
+def test_backfill_grandfathers_pre_scope_tokens(engine):
+    """MIGRATION-0004 (issue #578) — a 0.10-era api_tokens table has no `scopes` column. The pass
+    that adds it fills every row with '{}', and those rows (unscoped = allow-all on 0.10) are
+    converged to the full valid-scope set in the same pass. Re-running changes nothing."""
     from admin_api.schema.sync import ensure_schema_sync
 
     with Session(engine) as s:
         u = User(email="legacy@vexa.ai", name="Legacy", max_concurrent_bots=3)
         s.add(u)
         s.flush()
-        uid = u.id
-        # A 0.10-era token: unscoped → empty array after the additive column add.
-        empty = APIToken(token="vxa_legacy_0_10", user_id=uid, scopes=[])
-        # A token minted under 0.12 with a deliberate narrow scope — must NOT be widened.
-        scoped = APIToken(token="vxa_tx_scoped", user_id=uid, scopes=["tx"])
-        s.add_all([empty, scoped])
+        s.add(APIToken(token="vxa_legacy_0_10", user_id=u.id, scopes=["tx"]))
         s.commit()
+    with engine.begin() as conn:          # the 0.10 shape: no scopes column at all
+        conn.execute(text("ALTER TABLE api_tokens DROP COLUMN scopes"))
 
-    # Sanity: the empty row really is empty before the backfill re-runs.
-    with Session(engine) as s:
-        assert s.query(APIToken).filter_by(token="vxa_legacy_0_10").one().scopes == []
-
-    # Re-converge — the backfill runs as part of ensure_schema.
-    ensure_schema_sync(engine, Base)
-
-    with Session(engine) as s:
-        empty_after = s.query(APIToken).filter_by(token="vxa_legacy_0_10").one()
-        scoped_after = s.query(APIToken).filter_by(token="vxa_tx_scoped").one()
-        assert set(empty_after.scopes) == {"bot", "tx", "browser"}, "empty-scope token not grandfathered"
-        assert set(scoped_after.scopes) == {"tx"}, "already-scoped token must not be widened"
-
-    # Idempotent: a further run changes nothing.
     ensure_schema_sync(engine, Base)
     with Session(engine) as s:
         assert set(s.query(APIToken).filter_by(token="vxa_legacy_0_10").one().scopes) == {"bot", "tx", "browser"}
+
+    ensure_schema_sync(engine, Base)
+    with Session(engine) as s:
+        assert set(s.query(APIToken).filter_by(token="vxa_legacy_0_10").one().scopes) == {"bot", "tx", "browser"}
+
+
+def test_an_empty_scope_token_is_never_widened(engine):
+    """A row whose `scopes` column already exists is never rewritten: '{}' is a key with no access
+    (the read path denies it), and a convergence must not grant it any. A scoped row stays as is."""
+    from admin_api.schema.sync import ensure_schema_sync
+
+    with Session(engine) as s:
+        u = User(email="noscope@vexa.ai", name="No scope", max_concurrent_bots=3)
+        s.add(u)
+        s.flush()
+        s.add_all([APIToken(token="vxa_empty", user_id=u.id, scopes=[]),
+                   APIToken(token="vxa_tx_scoped", user_id=u.id, scopes=["tx"])])
+        s.commit()
+
+    ensure_schema_sync(engine, Base)
+    ensure_schema_sync(engine, Base)
+    with Session(engine) as s:
+        assert s.query(APIToken).filter_by(token="vxa_empty").one().scopes == []
         assert set(s.query(APIToken).filter_by(token="vxa_tx_scoped").one().scopes) == {"tx"}
 
 

@@ -1,0 +1,2330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vexa:crm:v1",
+  "title": "CRM v1 (ADR-0047)",
+  "description": "The optional CRM domain's wire: the record a read answers, the references snapshot a workspace commit carries, binding and change results, and the typed refusals.",
+  "$defs": {
+    "CardField": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Field",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Label",
+          "type": "string"
+        },
+        "format": {
+          "default": "text",
+          "enum": [
+            "text",
+            "markdown",
+            "number",
+            "currency",
+            "percent",
+            "date",
+            "badge"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "currency": {
+          "default": "USD",
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field"
+      ],
+      "title": "CardField",
+      "type": "object"
+    },
+    "CardSection": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Title",
+          "type": "string"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/CardField"
+          },
+          "maxItems": 40,
+          "title": "Fields",
+          "type": "array"
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "title": "CardSection",
+      "type": "object"
+    },
+    "Record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "org_id",
+        "object_type",
+        "revision",
+        "fields",
+        "narrative",
+        "sources",
+        "quarantined"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "org_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "object_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fields": {
+          "type": "object"
+        },
+        "narrative": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quarantined": {
+          "type": "boolean"
+        },
+        "audience": {
+          "type": "string",
+          "enum": [
+            "cross_org"
+          ],
+          "description": "Present only on an answer to a room with people from outside the org: the fields are the public ones, the narrative is null, and the org's own facts (sources, links it cannot show, proposals, bindings, pages, identifiers) are empty."
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "system",
+              "source_org",
+              "object_type",
+              "source_id"
+            ],
+            "properties": {
+              "system": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_org": {
+                "type": "string",
+                "minLength": 1
+              },
+              "object_type": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "field",
+              "record_id",
+              "object_type",
+              "label"
+            ],
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "record_id": {
+                "type": "string"
+              },
+              "object_type": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "actions": {
+          "type": "object",
+          "properties": {
+            "can_review": {
+              "type": "boolean",
+              "description": "False for an agent: a person accepts or rejects with their own credential."
+            },
+            "can_update": {
+              "type": "boolean"
+            },
+            "can_propose": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "proposals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "base_revision",
+              "fields",
+              "reason",
+              "evidence"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "base_revision": {
+                "type": "integer"
+              },
+              "fields": {
+                "type": "object"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "narrative": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "author_kind": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "agent",
+                  "agent-shared",
+                  "agent-unwatched",
+                  "internal"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "href": {
+          "type": "string"
+        },
+        "card": {
+          "type": "object",
+          "required": [
+            "version",
+            "layout"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "layout": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "title_field": {
+                      "default": "Name",
+                      "maxLength": 120,
+                      "title": "Title Field",
+                      "type": "string"
+                    },
+                    "sections": {
+                      "items": {
+                        "$ref": "#/$defs/CardSection"
+                      },
+                      "maxItems": 12,
+                      "title": "Sections",
+                      "type": "array"
+                    },
+                    "show_narrative": {
+                      "default": true,
+                      "title": "Show Narrative",
+                      "type": "boolean"
+                    },
+                    "show_related": {
+                      "default": true,
+                      "title": "Show Related",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "sections"
+                  ],
+                  "title": "CardLayout",
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "mentioned_in": {
+          "type": "array",
+          "description": "ADR-0047 d5: pages that link this record, only from workspaces the caller is a member of (an administrator sees all). Others are omitted with no count.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "workspace",
+              "page"
+            ],
+            "properties": {
+              "workspace": {
+                "type": "string",
+                "minLength": 1
+              },
+              "page": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "bound_to": {
+          "type": "array",
+          "description": "ADR-0047 d6: workspaces bound to this record whose members get derived grants — every binding for an administrator, the caller's own otherwise.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "match_ids": {
+          "type": "array",
+          "description": "Match identifiers (email:, domain:, calendar:) — shown to a caller who reads every field.",
+          "items": {
+            "type": "string",
+            "pattern": "^(email|domain|calendar):.+$"
+          }
+        },
+        "account_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ADR-0047 d3: the account attached to this person entity; null for an external person."
+        }
+      }
+    },
+    "ReferencesSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The refs of a `workspace.references.changed` fact and the body of POST /internal/references: one workspace's whole set of record references (and its roster) at one commit. A full snapshot, so applying it twice changes nothing and an older commit never overwrites a newer one.",
+      "required": [
+        "workspace",
+        "commit",
+        "committed_at",
+        "references"
+      ],
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.\\-]{0,127}$"
+        },
+        "commit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "committed_at": {
+          "type": "string",
+          "description": "ISO-8601 commit time; the ordering key"
+        },
+        "references": {
+          "type": "array",
+          "maxItems": 20000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "page",
+              "record"
+            ],
+            "properties": {
+              "page": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "record": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            }
+          }
+        },
+        "members": {
+          "type": "array",
+          "description": "policy/members.json at that commit; absent when the workspace has none",
+          "items": {
+            "type": "object",
+            "required": [
+              "subject",
+              "role"
+            ],
+            "properties": {
+              "subject": {
+                "type": "string",
+                "minLength": 1
+              },
+              "role": {
+                "enum": [
+                  "owner",
+                  "contributor",
+                  "viewer"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "BindResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "workspace",
+        "record_id",
+        "bound_to"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "bound",
+            "unbound"
+          ]
+        },
+        "workspace": {
+          "type": "string"
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "bound_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ChangeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "saved",
+            "proposed",
+            "merged",
+            "rejected"
+          ]
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "proposal_id": {
+          "type": "string"
+        },
+        "merged_into": {
+          "type": "string"
+        },
+        "replayed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason",
+        "instruction"
+      ],
+      "description": "A typed refusal, the same body every service answers (gateway-identity.v1). The desk adds propose_instead, desk_changed, proposals_pending_max, proposals_daily_max, not_readable, ref_kind_not_enabled and desk_placements_max. Cards (desktop D2) answer the same reasons: propose_instead (an agent makes or changes no card; it proposes), person_confirmation_required (members are a person's), proposals_pending_max, proposals_daily_max, not_readable. Workspace settings answer person_only: only the person, or their agent in a turn they typed in their own one-person chat, changes them.",
+      "properties": {
+        "status": {
+          "const": "refused"
+        },
+        "reason": {
+          "enum": [
+            "shared_conversation",
+            "human_session_required",
+            "person_confirmation_required",
+            "propose_instead",
+            "desk_changed",
+            "proposals_pending_max",
+            "proposals_daily_max",
+            "not_readable",
+            "ref_kind_not_enabled",
+            "desk_placements_max",
+            "person_only",
+            "session_required"
+          ]
+        },
+        "instruction": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "desk_changed only: the desktop's current version, to read and retry on."
+        }
+      }
+    },
+    "DeskSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "hidden",
+        "collapsed",
+        "column",
+        "span",
+        "size"
+      ],
+      "description": "One section of the desktop, in display order.",
+      "properties": {
+        "id": {
+          "enum": [
+            "workspaces",
+            "agents",
+            "files",
+            "cards"
+          ]
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "collapsed": {
+          "type": "boolean"
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "span": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "size": {
+          "enum": [
+            "compact",
+            "normal",
+            "tall"
+          ]
+        }
+      }
+    },
+    "DeskLayout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sections",
+        "order",
+        "groups",
+        "filters",
+        "columns"
+      ],
+      "description": "One person's desktop arrangement with defaults filled in. The sections array order IS the section order; a section type that appears later is appended at the end.",
+      "properties": {
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DeskSection"
+          }
+        },
+        "order": {
+          "type": "object",
+          "description": "Per section, the refs in the order the person arranged; unlisted items follow.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 600,
+              "pattern": "^(agent|chat|file|workspace|card):.+$"
+            }
+          }
+        },
+        "groups": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "by"
+                ],
+                "properties": {
+                  "by": {
+                    "enum": [
+                      "workspace",
+                      "type",
+                      "state",
+                      "about"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "named"
+                ],
+                "properties": {
+                  "named": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "title",
+                        "ids"
+                      ],
+                      "properties": {
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 600,
+                            "pattern": "^(agent|chat|file|workspace|card):.+$"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "filters": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "where"
+            ],
+            "properties": {
+              "where": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "until": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "columns": {
+          "type": "object",
+          "properties": {
+            "phone": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            },
+            "desktop": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            }
+          }
+        },
+        "hidden_cards": {
+          "type": "array",
+          "maxItems": 500,
+          "description": "Desktop D2: member cards this person took off their desktop (their own view; the card and its membership are untouched). Placing one again shows it.",
+          "items": {
+            "type": "string",
+            "pattern": "^card:.+$"
+          }
+        }
+      }
+    },
+    "DeskOp": {
+      "description": "One declarative desktop operation. A list of 1..50 is applied in order; a bad one refuses the whole list naming its index.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "section",
+            "ids"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "order"
+              ]
+            },
+            "section": {
+              "enum": [
+                "workspaces",
+                "agents",
+                "files",
+                "cards"
+              ]
+            },
+            "ids": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 600,
+                "pattern": "^(agent|chat|file|workspace|card):.+$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "id"
+          ],
+          "properties": {
+            "op": {
+              "const": "move"
+            },
+            "id": {
+              "type": "string"
+            },
+            "before": {
+              "type": "string"
+            },
+            "after": {
+              "type": "string"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "before"
+              ]
+            },
+            {
+              "required": [
+                "after"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "section"
+          ],
+          "properties": {
+            "op": {
+              "const": "group"
+            },
+            "section": {
+              "enum": [
+                "workspaces",
+                "agents",
+                "files",
+                "cards"
+              ]
+            },
+            "by": {
+              "enum": [
+                "workspace",
+                "type",
+                "state",
+                "about"
+              ]
+            },
+            "named": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "title",
+                  "ids"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 600,
+                      "pattern": "^(agent|chat|file|workspace|card):.+$"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "by"
+              ]
+            },
+            {
+              "required": [
+                "named"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "section"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "show",
+                "hide",
+                "collapse",
+                "expand",
+                "section_top"
+              ]
+            },
+            "section": {
+              "enum": [
+                "workspaces",
+                "agents",
+                "files",
+                "cards"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "sections"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "section_order"
+              ]
+            },
+            "sections": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "workspaces",
+                  "agents",
+                  "files",
+                  "cards"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "section",
+            "column"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "section_place"
+              ]
+            },
+            "section": {
+              "enum": [
+                "workspaces",
+                "agents",
+                "files",
+                "cards"
+              ]
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            },
+            "span": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            },
+            "side_by_side_with": {
+              "enum": [
+                "workspaces",
+                "agents",
+                "files",
+                "cards"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "section",
+            "size"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "section_size"
+              ]
+            },
+            "section": {
+              "enum": [
+                "workspaces",
+                "agents",
+                "files",
+                "cards"
+              ]
+            },
+            "size": {
+              "enum": [
+                "compact",
+                "normal",
+                "tall"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "ref"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "place",
+                "remove"
+              ]
+            },
+            "ref": {
+              "type": "string",
+              "pattern": "^(agent|chat|file|card):.+$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "section",
+            "where"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "filter"
+              ]
+            },
+            "section": {
+              "enum": [
+                "workspaces",
+                "agents",
+                "files",
+                "cards"
+              ]
+            },
+            "where": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 300
+            },
+            "until": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "name"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "save",
+                "restore"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          }
+        }
+      ]
+    },
+    "DeskProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "ops",
+        "reason",
+        "author",
+        "created_at",
+        "summary"
+      ],
+      "description": "A pending desktop suggestion (7 days to live), shown beside Apply / Not now.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ops": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/DeskOp"
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": "string",
+          "pattern": "^(person|agent:.+)$"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "Desk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "layout",
+        "placements",
+        "proposals",
+        "saved",
+        "undo_version"
+      ],
+      "description": "What desktop_read / POST /desk/read answers: the person's own desktop. Version 0 is the default.",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "layout": {
+          "$ref": "#/$defs/DeskLayout"
+        },
+        "placements": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ref",
+              "placed_at",
+              "seen_at"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string",
+                "pattern": "^(agent|chat|file|card):.+$"
+              },
+              "placed_at": {
+                "type": "string"
+              },
+              "seen_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DeskProposal"
+          }
+        },
+        "saved": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "undo_version": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cards": {
+          "type": "array",
+          "description": "Desktop D2 (desktop_cards on): the cards on this desktop — the ones the person is a member of (minus those they took off) and the ones they placed, in their order.",
+          "items": {
+            "$ref": "#/$defs/CardView"
+          }
+        },
+        "card_invites": {
+          "type": "array",
+          "description": "Cards this person was added to and has not accepted yet; never on the desktop by themselves.",
+          "items": {
+            "$ref": "#/$defs/CardView"
+          }
+        },
+        "card_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CardProposal"
+          }
+        }
+      }
+    },
+    "ArrangeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "version",
+        "undo_version",
+        "summary"
+      ],
+      "description": "What desktop_arrange, an applied suggestion and Undo answer: the new version, the one Undo restores, and one plain line of what changed.",
+      "properties": {
+        "status": {
+          "const": "applied"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "undo_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "CardFaceBlock": {
+      "description": "One resolved block of a card face (blocks.v1's face profile, resolved for one viewer by card_face.py). Structural blocks draw from the CardView; data blocks arrive filled; a field the viewer may not read is `locked`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "stepper",
+                "people",
+                "movement",
+                "waiting",
+                "next",
+                "subcards",
+                "ref",
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "metric"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "value": {
+              "type": "string",
+              "maxLength": 24
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 160
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "progress"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "at"
+          ],
+          "properties": {
+            "type": {
+              "const": "due"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "at": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "items"
+          ],
+          "properties": {
+            "type": {
+              "const": "checklist"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "text",
+                  "done"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "done": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "rows"
+          ],
+          "properties": {
+            "type": {
+              "const": "list"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "rows": {
+              "type": "array",
+              "maxItems": 4,
+              "items": {
+                "type": "string",
+                "maxLength": 80
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "label"
+          ],
+          "properties": {
+            "type": {
+              "const": "locked"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        }
+      ]
+    },
+    "CardMovement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "by",
+        "kind",
+        "what",
+        "at"
+      ],
+      "description": "One movement of a card, from its revisions: who (the proposer when a person accepted an agent's proposal), and what in words.",
+      "properties": {
+        "by": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "person",
+            "agent"
+          ]
+        },
+        "what": {
+          "type": "string",
+          "minLength": 1
+        },
+        "at": {
+          "type": "string"
+        }
+      }
+    },
+    "CardView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Desktop D2: one card as one viewer may read it — a CRM record of a card type (`x-card`). Fields the viewer cannot read are null; the face is resolved for them; children count only what they read; `workspaces` are the boards referencing it that they are a member of. `activity` only on a single read (POST /card/read).",
+      "required": [
+        "id",
+        "ref",
+        "type",
+        "revision",
+        "title",
+        "about",
+        "state",
+        "states",
+        "side_states",
+        "next",
+        "waiting",
+        "summary",
+        "due",
+        "progress",
+        "workspaces",
+        "parent",
+        "children",
+        "members",
+        "face",
+        "movement",
+        "stalled",
+        "can",
+        "href"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^card:.+$"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "about": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "page",
+                "chat",
+                "workspace",
+                "meeting",
+                "crm"
+              ]
+            },
+            "ref": {
+              "type": "string"
+            }
+          },
+          "description": "What the card is about. Membership never grants it: the viewer opens it under their own access."
+        },
+        "state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "states": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string"
+          }
+        },
+        "side_states": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "waiting": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "due": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "parent": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "title"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          }
+        },
+        "children": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "done",
+            "total",
+            "items"
+          ],
+          "properties": {
+            "done": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "title",
+                  "state",
+                  "done"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "done": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "subject",
+              "status"
+            ],
+            "properties": {
+              "subject": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "invited",
+                  "member"
+                ]
+              }
+            }
+          }
+        },
+        "face": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/CardFaceBlock"
+          }
+        },
+        "movement": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CardMovement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stalled": {
+          "type": "boolean"
+        },
+        "can": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "edit",
+            "transition",
+            "review",
+            "members"
+          ],
+          "properties": {
+            "edit": {
+              "type": "boolean"
+            },
+            "transition": {
+              "type": "boolean"
+            },
+            "review": {
+              "type": "boolean"
+            },
+            "members": {
+              "type": "boolean"
+            }
+          },
+          "description": "What this viewer may do with their own credential. Always false for an agent: it proposes."
+        },
+        "href": {
+          "type": "string"
+        },
+        "activity": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/CardMovement"
+          }
+        },
+        "new": {
+          "type": "boolean",
+          "description": "This viewer has never opened the card and did not make it; clears when their terminal renders it in view (POST /card/seen, the session credential, D14)."
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "ask",
+            "approval",
+            "question",
+            "commitment",
+            "invitation",
+            "policy_change",
+            null
+          ],
+          "description": "D11: what obligation the card is; picks its seeded lifecycle template (card_templates.py). Null for a plain board card."
+        },
+        "next_actor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128,
+          "description": "D11: the person id whose move it is. Every open card of a kind has exactly one."
+        },
+        "requester": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128,
+          "description": "D11: the person waiting on it (confirms a delivery, uses an answer). Defaults to the card owner."
+        },
+        "next_check_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "D11: when the flows worker next checks the open card."
+        },
+        "chain": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "blocks",
+            "blocked_by"
+          ],
+          "properties": {
+            "blocks": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string"
+              }
+            },
+            "blocked_by": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "session:<id> or message:<session>/<message id>"
+        },
+        "open": {
+          "type": "boolean"
+        },
+        "handoff": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "phase",
+            "since"
+          ],
+          "properties": {
+            "phase": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "offered",
+                "acknowledged",
+                null
+              ]
+            },
+            "since": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "seen": {
+              "type": "boolean",
+              "description": "Whether the next actor has seen it since the offer: present only to the next actor, and to the requester when policy card_seen_visible_to_sender is on (N-7)."
+            }
+          },
+          "description": "D12: custody of the current gate \u2014 offered to the next actor until acknowledged."
+        },
+        "gates": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "state",
+              "by",
+              "at"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "current",
+                  "ahead"
+                ]
+              },
+              "by": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 128
+              },
+              "at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "description": "The route as a strip of gates (converged \u00a713)."
+        },
+        "decisions": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/CardDecision"
+          },
+          "description": "D13: the decision records, newest first."
+        },
+        "last_decision": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "action",
+            "by",
+            "at"
+          ],
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          }
+        },
+        "viewer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "role",
+            "seen",
+            "actions"
+          ],
+          "properties": {
+            "role": {
+              "type": "string",
+              "enum": [
+                "next_actor",
+                "requester",
+                "member",
+                "watcher"
+              ]
+            },
+            "seen": {
+              "type": "boolean"
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "acknowledge",
+                  "decide",
+                  "answer",
+                  "deliver",
+                  "confirm",
+                  "use",
+                  "execute",
+                  "decline"
+                ]
+              }
+            }
+          },
+          "description": "This viewer's position: their role, whether they have seen it since the offer, and the gate actions they may take now (only the next actor has any)."
+        }
+      }
+    },
+    "CardProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Desktop D2: a pending card proposal this person may answer (crm_review): a new card (`create`, into a workspace's board or the proposing person's own) or a change to a card they are a member of (`change`; a stage move is `fields.State`). Expires after card_proposal_ttl_days.",
+      "required": [
+        "id",
+        "kind",
+        "card",
+        "title",
+        "workspace",
+        "fields",
+        "reason",
+        "author_kind",
+        "author",
+        "at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "create",
+            "change"
+          ]
+        },
+        "card": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "title"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          }
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workspace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "type": "object"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author_kind": {
+          "enum": [
+            "person",
+            "agent",
+            "agent-shared",
+            "agent-unwatched",
+            "internal"
+          ]
+        },
+        "author": {
+          "type": "string"
+        },
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "CardList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cards",
+        "proposals"
+      ],
+      "description": "What card_list / POST /card/list answers: the cards this caller reads (a workspace's board, their own, or both) and the pending proposals they may answer.",
+      "properties": {
+        "cards": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/CardView"
+          }
+        },
+        "proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CardProposal"
+          }
+        },
+        "counts": {
+          "$ref": "#/$defs/CardCounts"
+        }
+      }
+    },
+    "CardResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "card"
+      ],
+      "description": "What a person's POST /card/create and /card/update answer.",
+      "properties": {
+        "status": {
+          "const": "saved"
+        },
+        "card": {
+          "$ref": "#/$defs/CardView"
+        }
+      }
+    },
+    "WorkspaceSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pinned",
+        "hidden",
+        "muted",
+        "room_order",
+        "level",
+        "collapsed",
+        "updated_at"
+      ],
+      "description": "One person's settings for one workspace, on the CRM member_of relation (crm_member_settings): private to the person, written only by crm-api. A slug with no row reads as the defaults (false, false, false, [], null, [], null). They carry no access.",
+      "properties": {
+        "pinned": {
+          "type": "boolean"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Hidden from the person's home."
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "notify": {
+          "enum": [
+            "all",
+            "mentions",
+            "none"
+          ],
+          "deprecated": true,
+          "description": "DEPRECATED (PRD 0.13.4 S6): never written or answered. A room's or workspace's notification level lives in the person's identity notification policy (GET/PUT /user/notifications, `rooms`: ws:<slug>)."
+        },
+        "room_order": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]{0,127}$"
+          },
+          "description": "Chat ids in the person's order."
+        },
+        "level": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 5,
+          "description": "The person's level override for this workspace; null follows their default."
+        },
+        "collapsed": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]{0,127}$"
+          },
+          "description": "Section ids the person collapsed."
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When the person last changed them; null only for the defaults."
+        }
+      }
+    },
+    "WorkspaceSettingsMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspaces"
+      ],
+      "description": "What workspace_settings_read / POST /desk/workspaces/read answers: the caller's own rows only, keyed by workspace slug. A slug never set is absent (read it as the defaults).",
+      "properties": {
+        "workspaces": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.\\-]{0,127}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WorkspaceSettings"
+          }
+        }
+      }
+    },
+    "WorkspaceSettingsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace",
+        "settings"
+      ],
+      "description": "What workspace_settings_set / POST /desk/workspaces/set answers: the slug and the full settings after the change.",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.\\-]{0,127}$"
+        },
+        "settings": {
+          "$ref": "#/$defs/WorkspaceSettings"
+        }
+      }
+    },
+    "CardDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "action",
+        "by",
+        "at",
+        "credential_class"
+      ],
+      "description": "D13: one decision record \u2014 an append-only card revision a person wrote with the session credential, bound to a server nonce and the content hash of the face they saw.",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "action": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "credential_class": {
+          "type": "string"
+        }
+      }
+    },
+    "CardInbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "items",
+        "counts"
+      ],
+      "description": "POST /card/inbox: the open cards waiting on this person (they are the next actor) and the counts the Now strip, the Inbox and a room badge read \u2014 one predicate.",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/CardView"
+          }
+        },
+        "counts": {
+          "$ref": "#/$defs/CardCounts"
+        }
+      }
+    },
+    "CardCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "waiting_on_me",
+        "due_soon",
+        "i_wait_on"
+      ],
+      "properties": {
+        "waiting_on_me": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "due_soon": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "i_wait_on": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "CardNonce": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "card",
+        "nonce",
+        "content_hash",
+        "revision",
+        "expires_at",
+        "actions"
+      ],
+      "description": "POST /card/nonce: a server nonce bound to this person, this card at this revision and the content hash of the face shown now (D13).",
+      "properties": {
+        "card": {
+          "type": "string"
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 16
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CardDecided": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "card",
+        "decision"
+      ],
+      "properties": {
+        "status": {
+          "const": "saved"
+        },
+        "card": {
+          "$ref": "#/$defs/CardView"
+        },
+        "decision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action",
+            "by",
+            "at",
+            "revision",
+            "credential_class",
+            "content_hash"
+          ],
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "credential_class": {
+              "const": "session"
+            },
+            "content_hash": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

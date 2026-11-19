@@ -1,0 +1,34 @@
+{
+  "why": "a manifest that declares shared on one row declares it on every row and verb: an undeclared row beside declared ones reads as allowed to whoever forgot it",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent/workspace/file",
+        "scopes": [
+          "bot",
+          "tx"
+        ],
+        "mcp_reentry": true,
+        "shared": "allow"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/people/followups",
+        "scopes": [
+          "bot",
+          "tx"
+        ],
+        "mcp_reentry": true
+      }
+    ]
+  }
+}

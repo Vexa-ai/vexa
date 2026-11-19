@@ -1,0 +1,2 @@
+{"cards": [{"id": "c1", "title": "Renewal", "state": "Proposal", "next": "Send terms", "waiting": "Ana", "due": null,
+            "workspaces": ["client-x"], "members": [{"subject": "u1", "status": "member"}]}], "workspace": null}

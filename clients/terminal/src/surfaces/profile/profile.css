@@ -1,0 +1,28 @@
+/* Public profiles (R4, `public_profiles`), from the approved mock (flows 13–14). Tokens only. */
+.vx-pp { display: flex; flex-direction: column; gap: 8px; }
+.vx-pp-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.vx-pp-chip { font-size: 11px; color: var(--t2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.vx-pp-chip[data-verified] { color: var(--t1); border-color: var(--accent); }
+.vx-pp-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; }
+.vx-pp-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; font-size: 12px; }
+.vx-pp-field input, .vx-pp-field textarea, .vx-pp-verify input, .vx-dir-q { font: inherit; font-size: 12px; color: var(--t1); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 4px 6px; min-width: 0; }
+.vx-pp-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--t2); white-space: nowrap; }
+.vx-pp-acts { display: flex; justify-content: flex-end; gap: 8px; }
+.vx-pp-btn { font-family: var(--sans); font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: var(--r); border: 1px solid var(--line2); background: var(--panel2); color: var(--t1); cursor: pointer; white-space: nowrap; align-self: flex-start; }
+.vx-pp-btn[data-primary] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.vx-pp-verify { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.vx-pp-txt { font-size: 11px; color: var(--t2); }
+.vx-pp-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.vx-pp-box { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; background: var(--panel); display: flex; flex-direction: column; gap: 6px; }
+.vx-pp-box h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; display: flex; gap: 6px; align-items: center; }
+.vx-pp-line { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r); padding: 6px 10px; font-size: 12px; }
+.vx-pp-line small, .vx-pp-notes { color: var(--t2); margin: 0; }
+.vx-pp-banner { margin-bottom: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r); color: var(--t2); font-size: 12px; }
+.vx-pp-face { width: 32px; height: 32px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; background: var(--panel2); color: var(--t1); flex: none; }
+.vx-dir { display: flex; flex-direction: column; gap: 8px; }
+.vx-dir-h { font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--t3); }
+.vx-dir-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; }
+.vx-dir-who { flex: 1; display: flex; flex-direction: column; font-size: 12px; min-width: 0; }
+.vx-dir-who small { color: var(--t2); }
+/* The Settings dialog grows with the Public profile section: it scrolls inside the viewport. */
+[data-settings] { max-height: calc(100dvh - 140px); overflow-y: auto; }

@@ -1,0 +1,13 @@
+{
+  "event": "crm.record.changed",
+  "owner": "crm",
+  "cardinality": "once_per_occurrence",
+  "refs": [
+    "org_id",
+    "record_id",
+    "revision",
+    "uid"
+  ],
+  "source_event_id": "<uuid> — minted per revision by crm-api in the same transaction as the revision (the crm_outbox row), so the outbox's redelivery after a crash is the same id and dedupes at the flows intake",
+  "description": "A CRM record or card changed: one fact per revision, written to crm_outbox in the revision's transaction and delivered by the crm outbox to POST /events. `uid` is the ACTOR — who made the change — and the refs carry no field value (M5). Since event.v2 (PRD 0.13.4 D8) the body also carries a SEALED fact envelope: crm computes `owner`, `visibility` and the `audience` (the next actor, the card's members, `ws:<slug>` for the workspace principal) and, for a card, the enumerated lifecycle coordination fields (kind, state, next_actor, next_check_at, handoff — C8), sealed with the crm producer key (core/flows/contracts/event.v2). The intake verifies it and sets refs `_audience`/`_owner`/`_visibility`/`_lifecycle`, and admission starts a person's flow when that person is the subject or in the audience; an unverifiable envelope is refused 403. Older rows have no envelope and reach the subject only. Consumed by the instance flow crm_change_log (a reference receipt) and by any person's routine on this event."
+}

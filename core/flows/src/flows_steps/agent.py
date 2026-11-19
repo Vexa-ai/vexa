@@ -8,18 +8,26 @@ import urllib.parse
 
 from flows import Done, StepCtx, StepError, Wait
 
-from .common import agent_door, http, require_internal_secret, scaffolded, swallowed, ws_file
+from .common import agent_door, door_headers, http, scaffolded, swallowed, ws_file
+
+
+def as_person(uid) -> dict:
+    """The headers flows sends agent-api to act FOR a person: their id, through the gateway's
+    service door. The door forwards it over the internal tier only on the routes its flows
+    allow-list names; anywhere else it is a 403 that never reaches agent-api."""
+    return door_headers(uid)
 
 
 def history(uid: str, session: str) -> list:
     code, hist = http("GET", f"{agent_door()}/api/sessions/{urllib.parse.quote(session)}/history",
-                      {"X-User-Id": uid})
+                      as_person(uid))
     if isinstance(hist, dict):
         hist = hist.get("turns", [])          # the endpoint wraps: {"turns": [...]}
     return hist if isinstance(hist, list) else []
 
 
-def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None) -> int:
+def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None,
+                  flow: str = "", step: str = "", kind: str = "") -> int:
     """Fire an agent turn; returns the history length BEFORE it (the collect baseline).
     /api/chat is an SSE STREAM that stays open for the whole turn — a client timeout while
     the stream runs is SUCCESS, not failure (the double-dispatch bug of 2026-08-23 evening).
@@ -40,13 +48,13 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
                              so the far side never has to guess a person from an email local part.
       ``read_max``        -> ``room_read_max``: the flow's cap, clamped to a server ceiling.
 
-    THE INTERNAL-TIER HEADER IS PART OF THE ROOM, NOT AN EXTRA. agent-api refuses a room to any
-    caller that cannot present ``X-Internal-Secret``, so it goes on the same post. Its value comes
-    from the environment (``INTERNAL_API_SECRET``, a mode-600 file the lane's start script
-    exports) and never from this repository; both entrypoints refuse to start without it, so by
-    the time a turn is dispatched it exists.
+    THE FLOWS KEY RIDES EVERY POST (``as_person``), to the gateway's service door, which forwards
+    this route to agent-api over the internal tier — agent-api believes the X-User-Id only from
+    there, and refuses a room to any caller that cannot present it. Its value comes from the
+    environment (``VEXA_FLOWS_SERVICE_KEY``) and never from this repository; both entrypoints
+    refuse to start without it, so by the time a turn is dispatched it exists.
 
-    Omitted entirely when there is no room, so every other dispatch in this file sends exactly the
+    The room fields are omitted entirely when there is no room, so every other dispatch in this file sends exactly the
     body it has always sent.
 
     WHAT IS AND IS NOT "THE TURN IS RUNNING" (P21b). This used to be `except Exception: pass`, with
@@ -58,12 +66,37 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
     `collect_reply` waited for a reply that was never coming, for as long as its caller allowed.
     A dispatch that did not happen, reported as one that did, is the exact shape P21 names.
 
-    So: the status is checked, and only a TIMEOUT is treated as success."""
+    So: the status is checked, and only a TIMEOUT is treated as success.
+
+    ``flow`` / ``step`` SAY WHO COMPOSED THIS TURN (Vexa-ai/vexa#1605). Nobody typed it, and on
+    2026-09-06 the founder opened a held meeting's chat and read the whole `process-meeting` kick
+    back as his own grey bubble — because the post carried nothing that said a machine wrote it.
+    They travel as HEADERS, not body fields, and that is deliberate: `ChatBody` is `extra="forbid"`,
+    so a field this side invents 422s the whole dispatch against an agent-api that predates it,
+    while an unread header costs the turn its label and nothing else. agent-api composes the mark
+    (`shared/marks.flow_mark`) — the marks are its vocabulary, and a caller able to compose one
+    could compose any of them.
+
+    Omitted when the caller names neither.
+
+    EVERY TURN FLOWS DISPATCHES RUNS UNATTENDED. Nobody typed it — an email reply, a meeting kick,
+    an onboarding opening — so it carries ``X-Vexa-Flow-Regime: autonomous`` beside the internal
+    tier's secret, the one pair agent-api believes (`_flow_turn`): the turn is dispatched with the
+    ``scheduled`` trigger and its worker's delegation is the hard, unattended scope, exactly as a
+    routine's run (`routine.post_turn`). A person's own turn running in the same thread is answered
+    409 ``thread_busy``; that is retried, never dropped."""
     base = len(history(uid, session))
     body = {"prompt": prompt, "session": session}
-    headers = {"X-User-Id": uid}
+    headers = as_person(uid)
+    headers["X-Vexa-Flow-Regime"] = "autonomous"
+    if flow and step:
+        headers["X-Vexa-Flow"] = str(flow)
+        headers["X-Vexa-Flow-Step"] = str(step)
+    if kind:
+        # `mail` (D25): a turn an inbound email started runs at least privilege in agent-api — it
+        # reads, writes the thread's reply file, and proposes everything else.
+        headers["X-Vexa-Flow-Kind"] = str(kind)
     if room and room.get("meeting_id"):
-        headers["X-Internal-Secret"] = require_internal_secret()
         body["room_meeting_id"] = str(room["meeting_id"])
         if room.get("read"):
             body["room_participants"] = [str(x) for x in room["read"]]
@@ -86,9 +119,10 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
         raise StepError(
             f"the agent turn for {uid}/{session} was not dispatched: agent-api answered {code} — "
             f"{str(out)[:200]}",
-            # 5xx and 429 are the platform having a moment; a 4xx is a fact about this call, and
-            # retrying it just delays the reaction without changing the answer.
-            retryable=code == 429 or int(code) >= 500)
+            # 5xx and 429 are the platform having a moment, and so is 409 (the thread is running
+            # its person's turn); any other 4xx is a fact about this call, and retrying it just
+            # delays the reaction without changing the answer.
+            retryable=code in (409, 429) or int(code) >= 500)
     return base
 
 
@@ -145,10 +179,106 @@ def workspace_init(uid: str) -> dict:
     call 404'd" the same observable event: the next step then wrote into, or read out of, a
     directory that is not a git repo, and the failure surfaced somewhere with no information
     about its cause."""
-    code, body = http("POST", f"{agent_door()}/api/workspace/init", {"X-User-Id": uid}, {})
+    code, body = http("POST", f"{agent_door()}/api/workspace/init", as_person(uid), {})
     if not _ok(code):
         raise StepError(f"workspace init for {uid}: HTTP {code} — {str(body)[:200]}")
     return body if isinstance(body, dict) else {}
+
+
+def mint_meeting_note(uid: str, meeting_id, path: str = "") -> str:
+    """THIS MEETING'S PAGE ON THIS PERSON'S DESK, minted if it is not there — the path, or `""`.
+
+    Vexa-ai/vexa#1601: *"the meeting doc exists from the moment the meeting exists for this
+    person"*. A chat that sends a bot gets its page inside the turn, from agent-api itself; a
+    meeting that arrives from the mailbox has no chat, so the flow asks for the same act here at the
+    moment the row is created — and agent-api records the path on that row, which is what
+    `_note_path` reads back instead of composing a second spelling.
+
+    IDEMPOTENT on the far side: a page already there comes back untouched, never refreshed.
+
+    DEGRADES, NEVER RAISES. A page that could not be minted costs the reader a document that
+    appears when the meeting ends, exactly as it does today — it is not worth failing a prepare
+    mail over, and every caller here is a step whose real work is the mail."""
+    body = {"meeting_id": str(meeting_id)}
+    if str(path or "").strip():
+        body["path"] = str(path).strip()
+    try:
+        code, out = http("POST", f"{agent_door()}/api/meeting/note", as_person(uid), body)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        swallowed("flows_steps.agent.mint_meeting_note", "the meeting's page was not minted", e,
+                  uid=uid, meeting=str(meeting_id))
+        return ""
+    if not _ok(code) or not isinstance(out, dict):
+        swallowed("flows_steps.agent.mint_meeting_note", "the meeting's page was not minted", None,
+                  uid=uid, meeting=str(meeting_id), http=code)
+        return ""
+    return str(out.get("path") or "")
+
+
+def propose(uid: str, *, source: str, act: str, source_label: str = "", by: str = "") -> dict:
+    """APPEND ONE JOB to this person's short list — the empty chat's proposals (Vexa-ai/vexa#1614).
+
+    Founder, 2026-09-06: the empty chat shows *"a short list that is updated by other agents when
+    they see something as JTBD, can have up to 10 items"*. This is the door a flow writes one
+    through. `source` + `act` are together the identity, so a re-run of the same step over the same
+    meeting updates the row it already wrote instead of adding a second — the far side owns that,
+    and the cap, and the ordering.
+
+    DEGRADES, NEVER RAISES, exactly like `mint_meeting_note` and for the same reason: every caller
+    is a step whose real work is something else, and a chip that did not appear is not worth losing
+    a meeting's record over. The swallow is logged, so it is not silent."""
+    body = {"source": str(source), "act": str(act),
+            "source_label": str(source_label or ""), "by": str(by or "")}
+    try:
+        code, out = http("POST", f"{agent_door()}/api/proposals", as_person(uid), body)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        swallowed("flows_steps.agent.propose", "the proposal was not filed", e,
+                  uid=uid, source=str(source))
+        return {}
+    if not _ok(code) or not isinstance(out, dict):
+        swallowed("flows_steps.agent.propose", "the proposal was not filed", None,
+                  uid=uid, source=str(source), http=code)
+        return {}
+    return out
+
+
+def compose_home(uid: str, trigger: str) -> dict:
+    """ASK AGENT-API TO COMPOSE THIS PERSON'S HOME NOW (#1783, `home_compose`).
+
+    agent-api does the whole composition — it holds the chats, the notifications, the meetings it
+    reads and the model catalog — and APPENDS it; this is only the clock. It answers `skipped` when
+    the last composition is fresher than its debounce, so a burst of events costs one composition.
+    Raises a retryable `StepError` when agent-api does not answer: the engine retries, and a home
+    that is a little late is still the home."""
+    code, out = http("POST", f"{agent_door()}/api/home/compose", as_person(uid), {"trigger": str(trigger)})
+    if not _ok(code) or not isinstance(out, dict):
+        raise StepError(f"agent-api did not compose the home (HTTP {code})", retryable=True)
+    return out
+
+
+def propose_session_change(uid: str, session_id: str, *, kind: str, body: str, title: str = "",
+                           workspace: str | None = None, path: str | None = None,
+                           meeting_id=None) -> dict:
+    """RECORD ONE PROPOSED CHANGE for a call's owner to decide (ADR-0048 decision 7).
+
+    After a call, nothing lands in a workspace on its own: the post-meeting run proposes, and the
+    meeting's owner (``uid``) accepts, edits or rejects in the session the call belonged to. This is
+    the internal-tier door agent-api keeps for that. Raises `StepError` (retryable) when agent-api
+    refuses or is unreachable: unlike a short-list chip, a proposal is the call's only way into a
+    workspace, so losing one is not a degradation."""
+    payload = {"owner": str(uid), "kind": kind, "body": body, "title": title}
+    if workspace is not None:
+        payload["workspace"] = workspace
+    if path is not None:
+        payload["path"] = path
+    if meeting_id is not None:
+        payload["meeting_id"] = int(meeting_id)
+    # AS the owner: with `post_meeting_auto_accept` on, the change lands with their rights.
+    code, out = http("POST", f"{agent_door()}/api/sessions/{urllib.parse.quote(session_id)}/proposals",
+                     as_person(uid), payload)
+    if not _ok(code) or not isinstance(out, dict):
+        raise StepError(f"agent-api did not record the proposal (HTTP {code})", retryable=True)
+    return out.get("proposal") or {}
 
 
 def head_sha(uid: str) -> str:
@@ -160,7 +290,7 @@ def head_sha(uid: str) -> str:
     failed read compares equal to a failed read and the detector stays silent rather than
     failing a meeting on its own blind spot."""
     try:
-        code, body = http("GET", f"{agent_door()}/api/workspace/git", {"X-User-Id": uid}, None)
+        code, body = http("GET", f"{agent_door()}/api/workspace/git", as_person(uid), None)
     except Exception as e:  # noqa: BLE001 — a probe never costs the caller its step
         swallowed("flows_steps.agent.head_sha", "desk history unreadable", e, uid=uid)
         return ""
@@ -177,7 +307,7 @@ def head_sha(uid: str) -> str:
 def head_subjects(uid: str, limit: int = 3) -> list:
     """The newest commit subjects on a desk — for naming, in a failure, exactly what landed."""
     try:
-        code, body = http("GET", f"{agent_door()}/api/workspace/git", {"X-User-Id": uid}, None)
+        code, body = http("GET", f"{agent_door()}/api/workspace/git", as_person(uid), None)
     except Exception as e:  # noqa: BLE001 — a probe never costs the caller its step
         swallowed("flows_steps.agent.head_subjects", "desk history unreadable", e, uid=uid)
         return []
@@ -192,7 +322,37 @@ def head_subjects(uid: str, limit: int = 3) -> list:
     return out
 
 
-def workspace_write(uid: str, path: str, content: str) -> None:
+def reset_desk(uid: str, sha: str, reason: str = "") -> dict:
+    """PUT ONE SUBJECT'S DESK BACK to a sha this flow witnessed itself, and say whether it landed.
+
+    The other half of `head_sha`. That one takes the BEFORE witness; this one undoes whatever moved
+    HEAD past it. It exists because the decision-22 detector in `process_meeting` was loud, correct
+    and un-actionable: on 2026-09-06 it fired twice, and both times the recovery was a person
+    resetting a repository by hand and re-firing the reaction, while a grounded report sat unsent.
+
+    ONLY BACKWARD, and only the caller's own desk — agent-api refuses a sha that is not an ancestor
+    of HEAD and takes no workspace name at all, so the worst this can do is remove commits made after
+    the witness. It is gated on the internal tier (the service door's forward), the same edge the
+    meeting room opens on.
+
+    DEGRADES, NEVER RAISES, and the shape says which happened: `{"reset": bool, "detail": str, ...}`.
+    A caller that cannot reset must say so in its refusal rather than die with a second failure on
+    top of the first — the person reading it needs the ORIGINAL reason and the command to run."""
+    body = {"sha": str(sha or "")}
+    if reason:
+        body["reason"] = str(reason)[:200]
+    try:
+        code, out = http("POST", f"{agent_door()}/api/workspace/git/reset",
+                         as_person(uid), body)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        swallowed("flows_steps.agent.reset_desk", "the desk could not be reset", e, uid=uid, sha=sha)
+        return {"reset": False, "detail": f"agent-api unreachable: {e}"}
+    if not _ok(code) or not isinstance(out, dict):
+        return {"reset": False, "detail": f"agent-api answered {code} — {str(out)[:200]}"}
+    return out
+
+
+def workspace_write(uid: str, path: str, content: str, slug: "str | None" = None) -> None:
     """WRITE one file into ONE subject's workspace, as that subject, COMMITTED.
 
     `PUT /api/workspace/file` is the door the terminal's own page editor uses: it writes the file,
@@ -206,8 +366,10 @@ def workspace_write(uid: str, path: str, content: str) -> None:
 
     A non-2xx RAISES: a write that silently did not land leaves the workspace disagreeing with a
     mail that has already gone out, and nobody would ever learn that from a return value."""
-    code, body = http("PUT", f"{agent_door()}/api/workspace/file", {"X-User-Id": uid},
-                      {"path": path, "content": content})
+    payload = {"path": path, "content": content}
+    if slug:
+        payload["slug"] = slug      # the workspace a meeting's page is recorded in (#1783)
+    code, body = http("PUT", f"{agent_door()}/api/workspace/file", as_person(uid), payload)
     if not _ok(code):
         raise StepError(f"workspace write {path!r} for {uid}: HTTP {code} — {str(body)[:200]}")
 

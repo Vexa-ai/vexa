@@ -1,0 +1,282 @@
+---
+title: "Routines and agent messages"
+description: "Your own flows: a routine is a schedule and one agent turn in the chat where you made it. Agents can also message each other. How they run, what stops them, and how old routine files were converted once."
+---
+
+A **routine** is a flow of your own: a schedule and the `agent_run` step. Each time it fires, your
+agent runs the routine's instruction as a turn in **the chat where you made it**. That chat is marked
+**routine** in your chat list and shows Pause and Retire. Every run continues it, so the agent sees
+what earlier runs did. You can reply there, and the next run sees your reply. A routine made with no
+chat (from the API or a background run) gets a chat of its own.
+
+There is no other way to make a routine. A file under `routines/` in a workspace does nothing.
+
+Agents can also **message each other**. An agent's address is its chat thread. The `message_agent`
+tool puts a message into another thread as a turn marked with who sent it. The answer comes back
+later as a turn in the sender's thread.
+
+## Make a routine
+
+Ask your agent ("every weekday at 7, brief me on today's meetings"), or call `flows_submit`:
+
+```json
+{
+  "name": "morning-brief",
+  "trigger": { "kind": "schedule", "cron": "0 7 * * 1-5" },
+  "steps": ["agent_run"],
+  "params": { "instruction": "Read my calendar for today and write the three things I must not miss." }
+}
+```
+
+- `cron` has five fields (minute, hour, day of month, month, day of week) and is read in **UTC**.
+  The terminal shows the schedule, the next run and the last run on the viewer's clock; a rule
+  limited to some weekdays whose local time falls on another day than in UTC is shown in UTC.
+- `params.instruction` is required. `params.thread: "new"` gives each run a fresh thread instead.
+- `params.notify` names a connection for outward notifications. It is used only if you chose it
+  and it works. Without it, alerts and results go to the routine's chat.
+- The flow is written in your scope (`user:<you>`), taken from your own credential. Nobody names a
+  scope, and nobody else can read, change or retire it.
+- Two fires are at least `VEXA_FLOWS_USER_MIN_INTERVAL_S` apart (default 900 s). A faster cron is
+  refused with `quota_min_interval`.
+
+From the routine's thread you can **Pause**, **Resume** or **Retire** it. `flow_lifecycle` does the
+same from any client. If you delete the thread, you are asked whether to retire the routine too.
+
+The **Routines board** lists your schedule flows. Its switch pauses and resumes a routine; delete
+retires it. The board also shows any old routine file that could not be converted, with the exact
+reason (see [Upgrading](#upgrading)).
+
+## What a run may do
+
+A run has nobody watching, so it runs in the `autonomous` regime. It can use only the connections
+and actions company policy allows for unattended runs: `connection_actions_unattended` in `_global/POLICIES.md` (default `none`). Anything else is
+refused.
+
+**What you grant it.** Some acts need you present — putting a bot into a meeting among them. When you
+make a routine in chat to do one such act ("send a bot to this meeting at 12:13"), the agent names
+it in `params.grants` and tells you in words: *This routine may: send bots to meetings.* Only these
+can be granted: `bot.request` (send a bot), `bot.stop` (stop it), `flow.retire_self` (retire or
+pause itself). Company policy caps them (`routine_unattended_actions` in `_global/POLICIES.md`,
+default all three). The routine's strip shows the same sentence. To take a grant back, ask in chat
+or use `flow_lifecycle` with `revoke_grants`; the next run carries none.
+
+**One time, not a schedule.** `trigger: {kind: "at", at: "2027-03-01T13:13:00+01:00"}` fires once at
+that minute and then retires the routine. A bot at a time needs no agent at all:
+`steps: ["request_meeting_bot"]` with `params: {meeting_url, grants: ["bot.request"], thread}`. The
+bot is sent and one line says so in the chat.
+
+**A run ends the way its turn ended.** A run waits for its turn to finish. If the turn's acts were
+refused, or a one-shot that was granted `bot.request` never sent the bot, the run ends `failed`
+with the reason, and one line in the chat says what did not happen ("Couldn't send the bot: …").
+It never reads `done` when nothing was done.
+
+If a routine is refused for the same reason three runs in a row, it pauses itself. The reason is
+posted into the routine's chat and shown on the Routines board. Fix the cause (or the
+instruction), then resume it.
+
+`flow_runs` lists your flows' runs, newest first, with what each step did. Each person's own flow
+pages are also written to `flows/` in their own workspace.
+
+## Share a routine's chat
+
+Mention someone with **@** in the routine's chat and choose **Share and send**
+([Shared chats](/minutes/shared-chats#share-a-routines-chat)).
+
+- The routine stays yours: only you pause, edit or retire it. The flow is still in your scope.
+- Everyone in the chat sees each run and can reply; a reply steers the next run.
+- From then on each run is a **shared turn**: it uses only what everyone in the chat can read, and
+  your Gmail, Calendar, meetings and other connections are refused (`shared_conversation`). Before you
+  share, the question says so if the routine reads them, for example *This routine reads your Gmail.
+  Shared, it can't — its runs would only use what everyone here can see.*
+- A run that needs a refused read ends refused and **the routine pauses at once**. Its chat gets one
+  line, for example *Paused: this chat is now shared with Bob, so your mail can't be read here.
+  Unshare the chat, or move the routine to a private chat, then resume.* Its strip shows it paused,
+  with that reason, and it does not run again until you resume it. Your private scope is never used
+  in a shared chat, because nothing can reliably filter what a run writes there.
+  `routine_pauses_when_shared: off` in `_global/POLICIES.md` keeps the routine on instead: the run
+  fails with its reason, and three runs refused the same way pause it.
+- A routine that reads only shared workspaces or public sources keeps working unchanged.
+- The shared chat takes over the routine's thread, so later runs land there. Earlier runs stay in
+  your private history. A routine with `params.thread: "new"` is not shared this way.
+
+## Message another agent
+
+```json
+{ "thread": "pchat-…", "text": "Summarise today's call and send it back.", "from_thread": "flow-…" }
+```
+
+`from_thread` is the thread you are writing from (your turn context names it). Add `person` (their
+user id) only for another person's thread. Nothing waits for the answer.
+
+## What is refused, and why
+
+Every refusal is typed and names its reason.
+
+| Refusal | When |
+|---|---|
+| `not_your_scope`, `not_your_flow` | naming another person's flow, or the instance's without being its administrator |
+| `step_not_allowed` | a step outside `user_flow_steps` in `_global/POLICIES.md` (default: `agent_run` only); the refusal names the step |
+| `quota_active_flows` | more than `VEXA_FLOWS_USER_ACTIVE_FLOWS` active flows (default 20) |
+| `quota_versions`, `quota_drafts` | more than 500 versions, or 50 drafts, held in your scope in all |
+| `submission_too_large` | `params` (the instruction among them) over 16 KB |
+| `quota_min_interval` | a cron that fires more often than `VEXA_FLOWS_USER_MIN_INTERVAL_S` (default 900 s) |
+| `bad_cron`, `instruction_required` | a cron that is not five valid fields; `agent_run` with no instruction |
+| `quota_runs_per_day` | a run beyond `VEXA_FLOWS_USER_RUNS_PER_DAY` (default 48), counted separately for schedule fires and for event-started runs, so messages and other events never use up the budget your scheduled routines run from; it is not started and is counted |
+| `agent_messages_own`, `agent_messages_shared`, `agent_messages_from_routines` | the policy keys below |
+| `grant_unknown`, `grant_not_allowed`, `grant_required` | a grant outside `bot.request`, `bot.stop`, `flow.retire_self`; one `routine_unattended_actions` does not allow; `request_meeting_bot` without `bot.request` |
+| `bad_at`, `at_in_the_past`, `at_too_far`, `meeting_url_required` | a one-shot time with no offset, in the past or more than 360 days out; a bot step with no meeting link |
+| `loop_max_hops`, `loop_limit` | a conversation or a chain of flows past the loop guard |
+| `quota_messages_per_day` | more than `VEXA_FLOWS_USER_MESSAGES_PER_DAY` messages (default 100) |
+| `thread_busy` | you replied while a run in that thread was still working; send it again |
+
+Who may message whom is set in `_global/POLICIES.md`:
+
+| Key | Default | Allows |
+|---|---|---|
+| `agent_messages_own` | on | messages between one person's own threads |
+| `agent_messages_shared` | off | messages to another person, only into a conversation (`s-…`) both take part in and the sender writes to, inside a workspace both belong to where the sender is not a reader. Their own threads and routines are never an address |
+| `agent_messages_from_routines` | off | a routine sending messages |
+
+## How it works
+
+**One clock, in Postgres.** A routine is a `flow_version` row with `scope`, `cron` and the
+`agent_run` step. The flows worker checks schedules every ten seconds. A due slot becomes an
+ordinary reaction keyed `schedule:<scope>/<name>:<slot>`, so the database's unique constraint makes
+each slot fire at most once, across any number of workers.
+
+**Grants travel with the run.** flows reads the routine's `params.grants`, caps them by the policy
+as it reads now, and sends them with the turn to agent-api over the internal tier. agent-api mints
+them into that run's delegation token (`scope.grants` beside `scope.flow`) — only for the routine's
+own unattended turn, never a turn you are watching, a shared chat or an event agent. Identity
+passes them on and the gateway signs them (`x-user-delegation-grants`). meeting-api's `POST /bots`
+and flows-api's retire/pause of that same routine let exactly the granted verb through and log each
+use (`routine_grant_used`); every other verb still refuses the run. `request_meeting_bot` checks the
+same grant in flows before it calls the gateway.
+
+**The run waits for its turn.** After posting the turn, `agent_run` asks agent-api
+(`GET /api/chat/turn-outcome`) every ten seconds how it ended: the worker stamps each turn's `done`
+with what was refused and which tools succeeded. Refused, or a granted one-shot that never acted,
+ends the run `failed` with the reason and one notice line in the chat. An hour with no end is
+`failed` too. An agent-api without the route keeps the old answer.
+
+**A one-shot retires itself.** `at` is stored as the cron of its minute plus `once`; the worker
+fires it at most once (the slot key) and retires the version in the same pass. A one-shot saved
+inside its own minute still fires.
+
+**After downtime** the worker fires only the most recent missed slot, and only if it is newer than
+`VEXA_FLOWS_SCHEDULE_CATCHUP_S` (default 3600 s). Older slots are skipped and counted in the log.
+No slot from before the routine existed ever fires.
+
+**The run.** `agent_run` first asks agent-api whether the thread is busy. If it is, the run waits on
+flows' own clock and tries again. Otherwise it posts the instruction to the thread over the internal
+tier. agent-api runs that turn with trigger `scheduled`, so the `autonomous` regime applies: tools
+that need a person in the loop are refused. The turn runs on the thread's second worker
+(`…-chat-<thread>-auto`). That is needed because a worker's regime is fixed when it starts. The
+thread is a session in agent-api's session store ([Shared chats](/minutes/shared-chats)): the first
+run creates it, binds it to the flow and titles it with the flow's name. Every turn, a run's or
+yours, is handed the session's latest saved conversation and hands it back one turn longer, so runs
+and replies stay one conversation.
+They never run at the same time: a run waits while your turn runs, and your turn is refused with
+`thread_busy` while a run is working.
+
+**No second mechanism.** agent-api compiles nothing to the runtime scheduler and arms nothing from
+a file. The Routines board and the deprecated `/api/routines` routes both read and write the same
+flows.
+
+**Scope.** Each flow is keyed by `(scope, name, version)`. A person's flow reacts only to events
+about that person, and only that person can write, read, steer or see its runs. The scope always
+comes from the caller's own credential and is never taken from the request. A caller may name its
+own scope as `user:<id>` or as `user:<its sign-in address>`, as identity answers it for that
+credential; both are stored as `user:<id>`, and any other person's scope is refused. `steps` are
+step names (`["agent_run"]`); what a step needs goes in `params`.
+
+**The loop guard.** An event a flow emits carries `_origin`, the chain of flows that produced it. A
+flow already in the chain does not start again (`VEXA_FLOWS_LOOP_LIMIT`, default 1). A chain
+`VEXA_FLOWS_MAX_HOPS` long (default 8) starts nothing. Agent messages carry the chain of threads a
+conversation has passed through, so a long exchange between two agents ends at the same limit.
+
+**Messages.** `message_agent` (agent-api) checks that `from_thread` is one of the caller's own
+threads or a stored session they take part in, that the target thread exists, and whether two people share a workspace. It then publishes
+`thread.message`. flows-api applies the policy keys and the guards and answers at once. The
+`agent_messages` flow then queues the text in the target thread as an `autonomous` turn, marked with
+its sender. The receiving person sees it under the sender's name, with a link to the sending thread.
+
+## Upgrading
+
+On a deployment with flows (`VEXA_FLOWS_API_URL` and `VEXA_FLOWS_API_KEY` set on agent-api; the Helm
+chart sets both), agent-api converts what the old mechanism held **once**, at startup. It retries
+until one pass completes with nothing left to move, then stops for good.
+
+- Each `routines/<name>.md` becomes a routine of its owner. Each routine job armed through
+  `POST /api/routines` becomes one too, and the old job is cancelled.
+- Files with the same intent as each other, or as one of your flows, become one flow: the flow is
+  kept, and the newer schedule is carried.
+- A file nobody stood behind (one written by a run nobody watched) becomes a **paused** flow. You
+  resume it if you want it.
+- A file that cannot be read, or that flows refuses (for example, a cron faster than the minimum
+  interval), runs nothing. It is shown on the Routines board with the exact reason.
+- Every converted or refused file is then removed from the workspace. A copy is kept outside every
+  workspace mount, in `<store>/.routines/retired/<subject>/`.
+- There is no confirmation step any more. A `routines/*.md` file written after the upgrade does
+  nothing.
+
+The `/api/routines` routes stay **for one release** as a deprecated adapter onto flows, answering
+`Deprecation: true`, for installs that are upgrading. They are removed in 0.14.0. On a deployment
+**without** flows there are no routines: the routes answer `501 routines_need_flows`. Deploy flows
+to keep routines.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How it is met | Enforced by |
+|---|---|---|
+| One owner per concern ([ADR-0046](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0046-flows-absorb-routines-flows-own-time-flows-are-scoped.md)) | flows decides when, the agent decides what, the runtime spawns, and the policy file decides what a person may use | ungated: reviewed |
+| P4 (couple through sealed contracts) | `flows.v1` gains `FlowDefinition` and the `thread.message` carrier, re-sealed as back-compatible changes | `gate:schema`, `gate:contract-version` |
+| P23 (one writer per carrier) | `thread.message` has one producer (agent-api) and is in the carrier census | `gate:config-contract`; `test_carrier_census.py::test_every_carrier_has_exactly_one_producing_domain` |
+| P14 (config is a validated contract) | each new limit is declared in `config.v1.json` with its default and set in compose | `gate:config-contract`; `test_config_declaration.py::test_every_key_the_code_reads_is_declared`, `::test_the_declared_default_is_what_an_unset_key_returns` |
+| One mechanism, converted once (ADR-0046 decision 5) | each routine file is converted once, retired with a copy outside every mount, and never read again; same-intent files merge into one flow | `core/agent/tests/test_routines_once.py::test_a_converted_file_is_retired_with_a_copy_and_never_converted_again`, `::test_two_files_with_one_intent_become_one_flow`, `::test_a_file_and_a_flow_with_the_same_intent_become_one_flow` |
+| P18 (fail loud) | every refusal is typed; skipped slots and refused admissions are counted in the log; a routine file that cannot become a flow is shown with its reason, never dropped | `test_user_flows.py::test_after_downtime_only_the_most_recent_slot_fires_and_the_rest_are_counted`, `::test_runs_over_the_daily_cap_are_not_admitted`; `core/agent/tests/test_routines_once.py::test_a_file_that_cannot_be_read_is_shown_with_the_reason`; `core/agent/tests/test_agent_messages.py::test_a_refusal_from_flows_reaches_the_agent_typed` |
+| P20 (authorize every access) | scope from the signed caller; ownership checked on every read, write and run listing | `test_user_flows_api.py` (below) |
+
+Test files without a path are in `core/flows/tests/`.
+
+### Authorization at each hop
+
+| Hop | Who is checked, and against what | Deny tests |
+|---|---|---|
+| Your MCP client → flows-api (`flows_submit`, `flow_lifecycle`, `flows_list`) | flows-api asks identity who holds the credential; the scope is `user:<that person>`, and any other scope is refused | `test_user_flows_api.py::test_nobody_names_another_persons_scope`, `::test_only_the_instance_admin_or_the_operator_writes_the_instance`, `::test_a_person_pauses_and_resumes_their_own_flow_and_nobody_elses`, `::test_run_history_is_the_callers_own`, `::test_a_person_lists_the_instances_flows_and_their_own_never_anothers` |
+| A worker → flows-api | identity answers the delegation token with its regime; a worker with nobody in the loop is refused every authoring and steering verb | `test_user_flows_api.py::test_a_worker_with_nobody_in_the_loop_cannot_author_a_flow`; `test_subject_bearer.py::test_a_worker_with_nobody_in_the_loop_is_refused_every_person_only_verb`, `::test_every_route_a_person_reaches_is_classified_for_a_worker` |
+| flows' clock → the run | only flows emits `schedule.due`, and a person's flow is admitted only for that person's events | `test_user_flows.py::test_schedule_due_is_never_an_event_anyone_can_publish`, `::test_a_persons_event_flow_is_admitted_only_for_their_own_events`; `test_user_flows_api.py::test_nobody_publishes_the_schedule_event` |
+| flows → agent-api (the run's turn) | the internal tier only; the turn runs `autonomous` | `core/agent/tests/test_routine_thread.py::test_only_the_internal_tier_may_post_a_routine_turn` |
+| A routine's grant (flows → agent-api → identity → gateway → meeting-api / flows-api) | named at creation by the person (only a person may submit), capped by policy at submission and at every run, minted only on that routine's own autonomous turn, honoured for exactly the named verb | `test_routine_phase0.py::test_a_routine_running_unattended_cannot_author_a_grant`, `::test_the_company_policy_caps_what_a_routine_may_be_granted`, `::test_a_routine_granted_retire_self_may_retire_itself_and_nothing_else`, `::test_the_person_revokes_the_grant`; `core/agent/tests/test_routine_grants.py::test_no_grant_on_a_watched_turn_or_an_event_agent`; `core/agent/tests/test_routine_thread.py::test_a_routine_run_carries_the_grants_flows_sent_and_a_person_cannot_add_any`; `core/meetings/services/meeting-api/tests/test_regime.py::test_the_bot_grant_opens_nothing_else`, `::test_a_routine_without_the_grant_is_still_refused`; `core/identity/services/admin-api/tests/test_internal_validate_delegation.py::test_a_routine_token_carries_its_grants_and_flow_on_its_ceiling` |
+| An agent → `message_agent` (agent-api) | the sending thread must be the caller's own or a session they take part in; the target must exist | `core/agent/tests/test_agent_messages.py::test_the_sending_thread_must_be_the_callers_own`, `::test_a_thread_that_does_not_exist_is_refused`; `core/agent/tests/test_agent_messages_store.py::test_a_session_the_caller_is_not_in_is_not_theirs_to_write_from` |
+| `thread.message` → flows (the policy) | the policy keys, the loop guard and the daily cap | `test_agent_messages.py::test_across_people_without_a_shared_workspace_is_refused_naming_the_key`, `::test_a_routine_sending_is_refused_by_default`, `::test_ping_pong_stops_at_the_hop_limit`, `::test_messages_are_capped_per_sender_per_day` |
+| The old `/api/routines` routes | an unwatched worker cannot arm a routine; the routes are adapters onto the same flows-api door, for your own subject only | `core/agent/tests/test_routine_flows.py::test_an_unwatched_worker_still_cannot_arm_a_routine`, `::test_the_routes_are_deprecated_adapters_onto_flows` |
+| The one-time migration → flows-api | the operator key writes a flow only for the file's owner (`user:<owner>`); a file nobody stood behind lands paused | `core/agent/tests/test_routines_once.py::test_a_file_an_agent_wrote_becomes_a_paused_flow_not_a_confirmation`, `::test_a_routine_flows_refuses_is_shown_and_leaves_nothing_on_the_old_scheduler` |
+
+### Security
+
+- **Nobody acts as somebody else.** A person's flows run as that person and react only to their
+  own events. The operator key may write a flow for a named person, which is what the migration
+  uses. Nothing else can.
+- **A run has nobody in the loop.** `agent_run` turns and delivered messages run `autonomous`, so
+  the tools that spend credentials, send mail or delete are refused unless policy allows them. A
+  routine refused for the same reason three runs in a row pauses and says why in its chat.
+- **A grant is narrow, named and yours.** Only you can grant your routine an act, from a chat you
+  are in; it is shown to you in words, capped by company policy, carried only on that routine's own
+  run, opens only that verb, is logged on every use, and can be revoked. Mail, calendar and
+  connection acts are never grantable this way.
+- **Notifications go only where you chose.** Alerts stay in the routine's chat unless `params.notify`
+  names a working connection you picked.
+- **A retired routine file stays out of reach.** Its copy is kept outside every workspace mount, so
+  no turn reads or re-arms it.
+- **A worker with nobody in the loop cannot author or steer flows.** `POST /flows` and the
+  lifecycle verb refuse it.
+- **Steps are allow-listed.** By default a person's flow may name `agent_run` only
+  (`test_user_flows_api.py::test_a_step_a_person_may_not_use_is_refused_by_name`).
+- **Messages stay inside shared ground.** A message crosses between two people only inside a
+  workspace both belong to. It is marked with its sender, and it is never shown as the receiving
+  person's own words.
+- **Bounded.** Loop guard, hop limit, active-flow cap, minimum interval, runs per day and messages
+  per day. Every refusal is logged with counts.

@@ -1,0 +1,38 @@
+/* Settings → Notifications (0.13.4 S6) and the "Enable sounds" prompt. Tokens only, no solid fills
+ * (UI 7r). Nothing scrolls sideways at 360px: rows wrap, controls drop under their label. */
+.vx-settings-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; margin: 0 0 var(--space-3); }
+.vx-settings-tabs::-webkit-scrollbar { display: none; }
+.vx-settings-tabs .vx-tabs { flex-wrap: nowrap; min-width: max-content; }
+.vx-settings-scroll { max-height: min(70vh, 640px); overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; padding-right: var(--space-2); }
+
+.vx-nt { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.vx-nt-sec { margin: var(--space-3) 0 0; font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-3); }
+.vx-nt-sec:first-child { margin-top: 0; }
+.vx-nt-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-3); min-height: var(--control-md); min-width: 0; }
+.vx-nt-row[aria-disabled="true"] .vx-nt-title { color: var(--text-3); }
+.vx-nt-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 160px; }
+.vx-nt-title { font-size: var(--text-sm); color: var(--text-1); }
+.vx-nt-detail { font-size: var(--text-xs); color: var(--text-3); overflow-wrap: break-word; }
+.vx-nt-ctl { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.vx-nt-ctl select, .vx-nt-ctl input[type="time"] { font: inherit; font-size: var(--text-sm); color: var(--text-1); background: transparent; border: 1px solid var(--border-control); border-radius: var(--radius-md); padding: 4px 8px; min-height: var(--control-sm); max-width: 100%; }
+.vx-nt-ctl select:focus-visible, .vx-nt-ctl input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.vx-nt-ctl input[type="range"] { width: 160px; max-width: 100%; accent-color: var(--accent); }
+.vx-nt-soon { font-size: var(--text-xs); color: var(--text-3); }
+.vx-nt-note { margin: var(--space-3) 0 0; font-size: var(--text-xs); color: var(--text-3); line-height: 1.5; }
+
+/* the On/Off switch: an outline track, the knob moves; never a solid fill */
+.vx-nt-switch { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-sm); padding: 0; border: 0; background: none; color: var(--text-2); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.vx-nt-switch:disabled { cursor: default; color: var(--text-disabled); }
+.vx-nt-switch:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--radius-sm); }
+.vx-nt-track { position: relative; width: 28px; height: 16px; border: 1px solid var(--border-control); border-radius: var(--radius-full); flex: none; }
+.vx-nt-knob { position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: var(--radius-full); background: var(--text-3); }
+.vx-nt-switch[aria-checked="true"] .vx-nt-track { border-color: var(--accent); }
+.vx-nt-switch[aria-checked="true"] .vx-nt-knob { left: 14px; background: var(--accent); }
+
+.vx-enable-sounds { pointer-events: auto; align-self: flex-end; }
+
+@media (max-width: 719px) {
+  .vx-nt-row { align-items: flex-start; }
+  .vx-nt-ctl { width: 100%; }
+  .vx-nt-ctl select { flex: 1 1 auto; min-height: 44px; }
+}

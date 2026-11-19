@@ -8,11 +8,13 @@ from runtime_kernel import FakeClock, Scheduler
 from runtime_kernel.api import create_app
 from runtime_kernel.kernel import Runtime
 
+from _caller import TOKEN, caller_client
+
 
 def _client(dispatch, clock):
     sched = Scheduler(fakeredis.FakeStrictRedis(decode_responses=True), dispatch=dispatch, clock=clock)
-    app = create_app(Runtime(), scheduler=sched)
-    return TestClient(app), sched
+    app = create_app(Runtime(), scheduler=sched, caller_token=TOKEN)
+    return caller_client(app), sched
 
 
 def test_schedule_register_list_and_fire():
@@ -55,6 +57,6 @@ def test_schedule_bad_spec_is_400():
 
 
 def test_schedule_503_when_not_wired():
-    client = TestClient(create_app(Runtime()))  # no scheduler
+    client = caller_client(create_app(Runtime(), caller_token=TOKEN))  # no scheduler
     assert client.post("/schedule", json={"cron": "* * * * *", "request": {"url": "http://x/y"}}).status_code == 503
     assert client.get("/health").json()["checks"].get("scheduler") is None

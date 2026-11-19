@@ -18,12 +18,21 @@ the conformance harness never imports it — it injects its own in-process fakes
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
+from . import identity_token
 from .obs import TRACE_HEADER, get_trace_id
 from .ports import AuthUnavailable
+
+#: The header this edge sets, to ``ACCEPTS_DELEGATION_VALUE``, on its ``/internal/validate`` hop to say
+#: it reads a delegation answer (identity.v1 ``AcceptsDelegationHeader``). Identity answers a worker's
+#: ``vxd_`` token only to a caller that sends it, so an edge that does not read ``delegation`` fails
+#: closed instead of forwarding the worker as its person.
+ACCEPTS_DELEGATION_HEADER = "x-vexa-internal-accepts-delegation"
+ACCEPTS_DELEGATION_VALUE = "1"
 
 
 class HttpxDownstreamClient:
@@ -50,12 +59,17 @@ class HttpxDownstreamClient:
         )
 
     @asynccontextmanager
-    async def open_stream(self, method, url, *, headers=None, params=None, content=None):
+    async def open_stream(self, method, url, *, headers=None, params=None, content=None,
+                          timeout=None):
         """Open a streaming downstream request and yield the response HEAD (status + headers)
         while the body is still arriving. The httpx stream is a context manager; it stays open
-        for the life of this block so the gateway can relay each chunk as it arrives."""
+        for the life of this block so the gateway can relay each chunk as it arrives.
+
+        ``content`` may be an async iterator (a request body relayed as it arrives). ``timeout``,
+        when given, replaces the streaming leg's own for this one request (the bundle hop's)."""
+        extra = {"timeout": timeout} if timeout is not None else {}
         async with self._stream_client.stream(
-            method, url, headers=headers, params=params or None, content=content
+            method, url, headers=headers, params=params or None, content=content, **extra
         ) as resp:
             yield resp
 
@@ -68,34 +82,41 @@ class HttpxDownstreamClient:
                 yield chunk
 
 
+#: Waits before each retry of a ``/internal/validate`` hop that could not CONNECT (seconds). Bounded:
+#: two retries, ~2 s added, which covers admin-api restarting behind its Service.
+VALIDATE_CONNECT_RETRY_BACKOFF = (0.5, 1.5)
+
+
 class AdminApiAuthorizer:
     """``Authorizer`` over the admin-api + meeting-api hops.
 
     ``resolve`` POSTs ``/internal/validate`` to admin-api (carrying ``X-Internal-Secret`` when
-    configured, and forwarding the request trace_id); ``authorize_subscribe`` POSTs
+    configured, the delegation declaration, and the request trace_id); ``authorize_subscribe`` POSTs
     ``/ws/authorize-subscribe`` to meeting-api (which now hosts the folded-in collector, P2) with
     the resolved user identity.
     """
 
-    def __init__(self, client, admin_api_url: str, meeting_api_url: str):
+    def __init__(self, client, admin_api_url: str, meeting_api_url: str, *, identity_key=None,
+                 sleep=asyncio.sleep):
         self._client = client
+        self._sleep = sleep
         self._admin_api_url = admin_api_url.rstrip("/")
         self._meeting_api_url = meeting_api_url.rstrip("/")
+        # gateway-identity.v1: the gateway's Ed25519 signing key, the same one every forward is signed with.
+        self._identity_key = identity_key
 
     async def resolve(self, api_key: str) -> Optional[dict]:
         import httpx
 
-        headers = {TRACE_HEADER: get_trace_id() or ""}
+        # This edge reads `delegation` (delegation.py), so it declares it; identity answers a
+        # worker's token to no caller that does not.
+        headers = {TRACE_HEADER: get_trace_id() or "",
+                   ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE}
         internal_secret = os.getenv("INTERNAL_API_SECRET", "")
         if internal_secret:
             headers["X-Internal-Secret"] = internal_secret
         try:
-            resp = await self._client.post(
-                f"{self._admin_api_url}/internal/validate",
-                json={"token": api_key},
-                headers=headers,
-                timeout=5.0,
-            )
+            resp = await self._post_validate(httpx, api_key, headers)
         except httpx.HTTPError as e:
             # Transport-layer failure or timeout: we did NOT reach a verdict on the key. Surfacing
             # this as an invalid key is the #495/#483 bug — raise so the app answers 503 (retry),
@@ -114,6 +135,28 @@ class AdminApiAuthorizer:
             return None
         raise AuthUnavailable(f"admin-api validate returned {resp.status_code}")
 
+    async def _post_validate(self, httpx, api_key: str, headers: dict):
+        """POST ``/internal/validate``, retrying ONLY a hop that never connected.
+
+        A ``ConnectError`` / ``ConnectTimeout`` means the request never reached admin-api (it is
+        restarting, or its endpoint is not ready yet), so it is safe to send again and likely to
+        succeed a moment later: two retries, after ``VALIDATE_CONNECT_RETRY_BACKOFF``. Every other
+        failure is raised at once — a read timeout means admin-api has the request and is slow, and
+        repeating it would add load exactly when it is overloaded; a pool timeout is this edge's own
+        saturation (#495)."""
+        for wait in (*VALIDATE_CONNECT_RETRY_BACKOFF, None):
+            try:
+                return await self._client.post(
+                    f"{self._admin_api_url}/internal/validate",
+                    json={"token": api_key},
+                    headers=headers,
+                    timeout=5.0,
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if wait is None:
+                    raise
+                await self._sleep(wait)
+
     async def authorize_subscribe(self, api_key: str, meetings: list) -> dict:
         auth_headers = {"X-API-Key": api_key, TRACE_HEADER: get_trace_id() or ""}
         try:
@@ -123,9 +166,13 @@ class AdminApiAuthorizer:
             # subscribe path fail-safe — surface it as an authorization error, not an unhandled 500.
             return {"authorized": [], "errors": [f"authorization_unavailable:{e}"]}
         if user_data:
-            auth_headers["x-user-id"] = str(user_data["user_id"])
-            auth_headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-            auth_headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
+            # The same signed identity every proxied forward carries (gateway-identity.v1) — meeting-api
+            # refuses an x-user-* header without it.
+            if self._identity_key is not None:
+                auth_headers.update(identity_token.signed_headers(self._identity_key, user_data))
+            else:
+                auth_headers.update(identity_token.headers_from_claims(
+                    identity_token.claims_from_validation(user_data)))
         try:
             resp = await self._client.post(
                 f"{self._meeting_api_url}/ws/authorize-subscribe",
@@ -139,7 +186,29 @@ class AdminApiAuthorizer:
             return {"authorized": [], "errors": [f"authorization_call_failed:{e}"]}
 
 
-def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str):
+def load_signing_key(path: str):
+    """gateway-identity.v1 — the gateway's Ed25519 signing key, or a refused boot.
+
+    This process is the ONE holder of the private key: agent-api, meeting-api and the credential
+    broker hold only its public half, so they verify and cannot sign. The boot preflight refuses an
+    unset path; a file that is unreadable or is not an Ed25519 private key refuses the boot here,
+    naming the fault and never the key."""
+    from .config_preflight import ConfigError
+
+    try:
+        return identity_token.read_signing_key(path)
+    except identity_token.KeyUnavailable as e:
+        raise ConfigError(f"gateway refuses to boot: VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE — {e}") from None
+
+
+
+#: The buffered forward's deadline. THE HOPS ARE ORDERED (Vexa-ai/vexa#1783): each inner hop gives
+#: up before the one that called it, so the hop that was slow is the one that says so — the MCP
+#: tool call waits 35 s (vexa_mcp.register.TOOL_TIMEOUT_S), this forward 30 s, agent-api's whole
+#: budget for the credential broker 25 s, the broker's call to a connected service 12 s.
+FORWARD_TIMEOUT_S = 30.0
+
+def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str, *, identity_key=None):
     """#495: build the authorizer + downstream over TWO httpx clients with SEPARATE connection
     pools, and return ``(authorizer, downstream)``. This is the load-bearing decision the whole fix
     turns on — extracted here so it is unit-testable WITHOUT redis (build_production_app needs redis;
@@ -159,7 +228,7 @@ def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str):
     import httpx
 
     forward_client = httpx.AsyncClient(
-        timeout=30.0,
+        timeout=FORWARD_TIMEOUT_S,
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
     auth_client = httpx.AsyncClient(
@@ -170,7 +239,7 @@ def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str):
         timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0),
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
-    authorizer = AdminApiAuthorizer(auth_client, admin_api_url, meeting_api_url)
+    authorizer = AdminApiAuthorizer(auth_client, admin_api_url, meeting_api_url, identity_key=identity_key)
     downstream = HttpxDownstreamClient(forward_client, stream_client=stream_client)
     return authorizer, downstream
 
@@ -198,6 +267,9 @@ def build_production_app(
     # reject every /internal/validate hop (503 on every API-key check), the 2026-04-23 shape. Fail
     # loud at boot with one message naming the missing key, instead of coming up green and 503ing.
     preflight()
+    from .changed import warn_removed_keys_at_boot
+
+    warn_removed_keys_at_boot()  # a configuration key this release does not read is named at boot
 
     admin_api_url = admin_api_url or os.getenv("ADMIN_API_URL", "http://admin-api:8001")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
@@ -207,12 +279,18 @@ def build_production_app(
     # here would assert the domain exists and make absence unsayable, which is the same defect a
     # host-port default has one layer down. Every shipped deployment names it: compose, helm, lite.
     agent_api_url = os.getenv("AGENT_API_URL", "")
+    # The optional CRM (ADR-0047): fronted under /crm/* only where its door is named.
+    crm_api_url = os.getenv("CRM_API_URL", "")
     # #795: the MCP service, fronted at the gateway edge under /mcp (streamable-HTTP transport).
     mcp_url = os.getenv("MCP_URL", "http://mcp:8010")
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
+    # gateway-identity.v1: this process is the ONE holder of the Ed25519 signing key (see load_signing_key).
+    identity_key = load_signing_key(os.getenv("VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE", ""))
+
     # #495: authorizer + downstream over SEPARATE httpx pools (see build_auth_and_downstream).
-    authorizer, downstream = build_auth_and_downstream(admin_api_url, meeting_api_url)
+    authorizer, downstream = build_auth_and_downstream(admin_api_url, meeting_api_url,
+                                                       identity_key=identity_key)
     redis_client = aioredis.from_url(
         redis_url, encoding="utf-8", decode_responses=True,
         socket_timeout=10, socket_connect_timeout=5, socket_keepalive=True,
@@ -220,6 +298,7 @@ def build_production_app(
     )
 
     from .ratelimit import from_env as _rate_limiter_from_env
+    from .taint import TaintMarker as _TaintMarker
 
     app = create_app(
         authorizer,
@@ -227,8 +306,14 @@ def build_production_app(
         redis_client,
         meeting_api_url=meeting_api_url,
         agent_api_url=agent_api_url,  # P20·Stage 2: the agent control plane fronted under /api/*
+        crm_api_url=crm_api_url,      # ADR-0047: the record page's read, history and review
         admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
         mcp_url=mcp_url,              # #795: the MCP streamable-HTTP front door under /mcp
+        # gateway-identity.v1: the resolved identity is signed onto every forward with the key loaded
+        # above, so this is never None in production.
+        identity_key=identity_key,
+        # D6: the privacy mark — a worker's session marked from the label on every private read.
+        taint_marker=_TaintMarker(redis_client),
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
     )
 
@@ -240,6 +325,52 @@ def build_production_app(
 
     apply_guard(app)
     return app
+
+
+class WebsocketsDialer:
+    """The voice-note relay's upstream dial (voice_relay.SocketDialer) over the ``websockets``
+    client. Imported lazily: only the image carries it (production dependency group)."""
+
+    def __init__(self, *, open_timeout: float = 10.0, max_size: int = 256 * 1024) -> None:
+        self._open_timeout = open_timeout
+        self._max_size = max_size
+
+    def connect(self, url, headers):
+        import contextlib
+
+        from websockets.asyncio.client import connect
+        from websockets.exceptions import ConnectionClosed
+
+        from .voice_relay import UpstreamClosed
+
+        open_timeout, max_size = self._open_timeout, self._max_size
+
+        class _Socket:
+            def __init__(self, conn) -> None:
+                self._c = conn
+
+            async def send(self, data) -> None:
+                try:
+                    await self._c.send(data)
+                except ConnectionClosed as e:
+                    raise UpstreamClosed(e.rcvd.code if e.rcvd else None) from e
+
+            async def recv(self):
+                try:
+                    return await self._c.recv()
+                except ConnectionClosed as e:
+                    raise UpstreamClosed(e.rcvd.code if e.rcvd else None) from e
+
+            async def close(self, code: int = 1000) -> None:
+                await self._c.close(code=code)
+
+        @contextlib.asynccontextmanager
+        async def _cm():
+            async with connect(url, additional_headers=dict(headers), open_timeout=open_timeout,
+                               max_size=max_size, ping_interval=20) as conn:
+                yield _Socket(conn)
+
+        return _cm()
 
 
 # ── ASGI entrypoint (P4) ─────────────────────────────────────────────────────────────────────

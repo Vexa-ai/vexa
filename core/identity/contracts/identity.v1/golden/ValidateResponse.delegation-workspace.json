@@ -1,0 +1,24 @@
+{
+  "user_id": 1042,
+  "scopes": [
+    "bot",
+    "tx"
+  ],
+  "max_concurrent": 0,
+  "email": "ws-1042@principal.invalid",
+  "is_admin": false,
+  "delegation": {
+    "regime": "human",
+    "workspaces": [
+      "team-ws"
+    ],
+    "unit": "agent-ws-team-ws-room-s-room1",
+    "shared": true,
+    "principal_kind": "workspace",
+    "principal_workspace": "team-ws",
+    "on_behalf_of": "43",
+    "bills_to": 42
+  },
+  "person_is_admin": false,
+  "credential_class": "delegation"
+}

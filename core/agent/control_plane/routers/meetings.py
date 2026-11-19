@@ -1,0 +1,510 @@
+"""routers/meetings.py — The meeting seam: relay health, the annotation layer over a transcript, and the
+live transcript stream a chat renders beside the conversation.
+
+Extracted from `api.py`'s `create_app` VERBATIM: the handler bodies below are the same
+bytes, with `@app.` rewritten to `@router.` and nothing else. Everything they close over
+is handed in by `build()` and rebound to the name it already had, so no body needed a
+single identifier changed.
+"""
+from __future__ import annotations
+
+from control_plane import meeting_highlight as meeting_highlight_mod
+from control_plane import meeting_mint as meeting_mint_mod
+from control_plane import meeting_note as meeting_note_mod
+from control_plane import meeting_terms as meeting_terms_mod
+from control_plane import system_mounts
+from control_plane.api_shared import _decode_sse_cursor, _encode_sse_cursor, _sse, transcript_erased
+from control_plane.peer_lookups import meeting_access_check, meeting_transcript_reader
+from control_plane.ceiling import reads_within, require_in_ceiling, require_private
+from control_plane.commit_trailers import writer_trailers
+from control_plane.bodies import MeetingAttachBody, TranscriptTermsBody
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from pathlib import Path
+import json
+import time
+
+#: How often an OPEN live stream re-asks whether its caller may still read the meeting, and how long
+#: it waits before asking a second time when the first answer is no. The redis read between checks
+#: blocks for at most `LIVE_READ_BLOCK_MS`, so a removed person's live view ends within
+#: RECHECK + BLOCK + RETRY ≈ 17 s — never the ~30 s a 15 s block on top of a 15 s re-check allowed
+#: (R1801-6). Pings still go out every `LIVE_PING_EVERY_MS` of quiet, as before.
+LIVE_ACCESS_RECHECK_SEC = 10.0
+LIVE_ACCESS_RETRY_SEC = 2.0
+LIVE_READ_BLOCK_MS = 5000
+LIVE_PING_EVERY_MS = 15000
+
+
+def build(**d) -> APIRouter:
+    """The meetings routes, bound to one app's dependencies."""
+    # A turn other people read reaches none of the person's meetings (ADR-0048 decision 4).
+    router = APIRouter(dependencies=[Depends(require_private)])
+    _entity_mounts = d['_entity_mounts']
+    _meeting_note_recorder = d['_meeting_note_recorder']
+    _meeting_owner_lookup = d['_meeting_owner_lookup']
+    _meeting_transcript_lookup = d['_meeting_transcript_lookup']
+    _read_target = d['_read_target']
+    _ws_lookup = d['_ws_lookup']
+    live = d['live']
+    redis_url = d['redis_url']
+    settings = d['settings']
+    subject_of = d['subject_of']
+    workspace_registry = d['workspace_registry']
+    wsr = d['wsr']
+
+    # THE ONE ACCESS DECISION every route in this file makes: the meeting record this caller may
+    # read, or None. Owner, transcript-share recipient, or member of the workspace the meeting is
+    # bound to — meeting-api evaluates all three. Shared with the chat's meeting grounding, which
+    # reads the same transcript (see `peer_lookups.meeting_access_check`).
+    _meeting_access = meeting_access_check(_meeting_owner_lookup, wsr.root)
+    # …and the WORDS, read under the same identity and the same access union.
+    _meeting_words = meeting_transcript_reader(_meeting_transcript_lookup, wsr.root)
+
+    def _within(request: Request):
+        """The workspaces this request may read through a person-wide set: a delegated dispatch's
+        ceiling (`ceiling.reads_within`), every workspace for a caller with none."""
+        return lambda slug: reads_within(request, slug)
+
+    def _readable_mounts(subject: str, request: Request) -> list:
+        """``(workspace_id, slug, path)`` for every workspace this reader can read, DESK FIRST,
+        then the company layer, then the groups they belong to — the precedence a chip resolves in.
+        The groups are the ones inside a delegated dispatch's ceiling (`_entity_mounts`)."""
+        def wsid(slug: str) -> str:
+            rec = workspace_registry.by_slug(slug) or _ws_lookup(slug) or {}
+            return str(rec.get("id") or slug)
+
+        out = [(wsid(str(subject)), "", wsr.workspace_dir(subject))]
+        if settings is not None:
+            g = system_mounts.global_root(settings, wsr.root)
+            if Path(g).is_dir():
+                out.append((wsid(system_mounts.GLOBAL_SLUG), system_mounts.GLOBAL_SLUG, Path(g)))
+        for m in _entity_mounts(subject, request):
+            out.append((wsid(m["slug"]), m["slug"], Path(m["path"])))
+        return out
+
+    @router.get("/api/meeting/relay-health")
+    def meeting_relay_health(request: Request):
+        """P18 (ADR 0010) — the transcript relay's observable health: is the numeric→native resolve OK,
+        and are segments arriving? A stale `VEXA_BOT_API_KEY` (401 on `/meetings`) shows here as a typed
+        `native_resolve: {ok:false, kind:'unauthorized', detail:…}` instead of silent dead air."""
+        from control_plane import transcription_watcher as _txw
+        return _txw.relay_health()
+    @router.get("/api/meeting/note")
+    def meeting_note(meeting_id: str, request: Request):
+        """WHERE THIS MEETING'S REPORT LIVES ON THE CALLER'S DESK — `{"path", "transcript", "cursor"}`.
+
+        The client asks; it does not spell. `kg/entities/meeting/<meeting-day>-<title-slug>.md` is
+        written by `core/flows`' `drop_to_attendees`, the day in the organiser's zone and the slug
+        through an allow-list, and the terminal used to point its Minutes tab at
+        `kg/entities/meeting/<native>.md` instead — one path, two spellings, in two languages, and
+        they never matched. The founder opened a meeting whose report had been written, mailed and
+        dropped an hour earlier and was told there was no page there (Vexa-ai/vexa#1588). A chat
+        born from a mailed link already gets the path on its scaffold (`refs.note_path`); this is
+        the same answer for the chat opened from the rail, which is every meeting after the first.
+
+        `null` IS AN ANSWER, and the ordinary one before the report lands: nothing on this desk
+        names this meeting yet. The caller opens one document fewer — never a tab onto a guess.
+
+        OWNER-SCOPED BEFORE ANYTHING IS READ, exactly as `/api/meeting/stream` is one route down and
+        for the same reason: row ids are sequential ints, and this answers with a path on a DESK.
+        `_meeting_owner_lookup` returns None for an absent row and for another tenant's.
+
+        `transcript` AND `cursor` ARE READ OFF THE PAGE (Vexa-ai/vexa#1598). A meeting doc that
+        declares the transcript widget (`<!-- vexa:transcript meeting=… -->`) IS the meeting's one
+        page — the live transcript renders inside it — so the room shows no separate Transcript tab.
+        Both are `""` for every report written before the widget existed, and that absence is what
+        keeps those meetings on the two-page room they have today instead of losing the transcript."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        row = _meeting_access(subject, meeting_id, within=_within(request))
+        if row is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        return meeting_note_mod.describe(wsr.root, subject, row)
+    @router.post("/api/meeting/note")
+    def mint_meeting_note(request: Request, body: dict = Body(default={})):
+        """MINT this meeting's page on the caller's desk if it is not there — `{"path", "created"}`.
+
+        The same act `_binding_watch` performs in-process when a chat sends a bot (Vexa-ai/vexa#1601);
+        this is the door for the caller that is not that chat — `core/flows`' upcoming step, which
+        mints the page for the organiser at the moment their meeting's row is created, so a meeting
+        that arrives from the mailbox has a document before anybody opens it.
+
+        IDEMPOTENT: a page already there is returned untouched, never refreshed. It is written by
+        three hands after this — the person, their Expand, and the flow's report — so re-minting
+        would delete somebody's writing at the moment the room got busy.
+
+        `path` is a PROPOSAL, not an instruction: the caller may name the page it already knows
+        about, and it is honoured only if it is a meeting page (`meeting_note.is_note_path`).
+
+        Owner-scoped before anything is written, exactly as the read above — row ids are sequential
+        ints and this creates a file on a DESK."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        meeting_id = str((body or {}).get("meeting_id") or (body or {}).get("meeting") or "").strip()
+        row = _meeting_access(subject, meeting_id, within=_within(request))
+        if row is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        return meeting_mint_mod.mint(wsr.root, subject, row,
+                                     path=str((body or {}).get("path") or ""),
+                                     record=_meeting_note_recorder,
+                                     trailers=writer_trailers(request.headers))
+    @router.post("/api/meeting/note/attach")
+    def attach_meeting_page(request: Request, body: MeetingAttachBody = Body(...)):
+        """MAKE THIS PAGE THE MEETING'S PAGE — `meeting_attach_page`, and "Use as meeting page" (#1783).
+
+        Founder, 2026-10-15: *"why not map page to meeting reliably?"* An agenda his agent wrote
+        before a call sat beside the note the bot then minted, and the report went to the minted one.
+        So a page is bound by IDENTITY, never by a title that looks alike:
+
+          * ``meeting_id`` given — the meeting exists: the page is stamped with it (and with the
+            row's native id and link) and RECORDED on the row with its workspace, so the sidebar,
+            Update notes and the post-meeting report all read and write this page;
+          * no meeting yet — ``native`` (from ``parse_meeting_link``), ``meeting_url`` or
+            ``calendar_event`` are stamped, and the bot's mint ADOPTS the page when the meeting is
+            created (exact match, `meeting_note.resolve_exact_in`).
+
+        ONE MEETING, ONE PAGE: a meeting whose recorded page is a different page with words in it is
+        refused with ``409`` naming that page — merge the two first, then attach. A recorded page
+        that is still empty is simply replaced. The page must be a meeting page
+        (``kg/entities/meeting/<name>.md``) in one of the caller's own active workspaces; the
+        meeting, when named, must be one the caller may read."""
+        from workspaces.shared import workspace_paths as _wp
+        from workspaces.shared.entities import commit_entity
+
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        b = body.model_dump()
+        path = str(b.get("path") or "").strip()
+        slug = str(b.get("workspace") or b.get("slug") or "").strip()
+        if slug in ("personal", "desk"):
+            slug = ""
+        # A NAMED WORKSPACE IS HELD TO A DELEGATED DISPATCH'S CEILING before anything is read
+        require_in_ceiling(request, slug or None)
+        if not meeting_note_mod.is_note_path(path):
+            raise HTTPException(status_code=400, detail={
+                "refused": "not a meeting page", "path": path,
+                "said": "A meeting page lives at kg/entities/meeting/<name>.md. Move the page there "
+                        "(workspace_move), then attach it."})
+        # A workspace may be named by its ID as well as its slug (what `workspaces()` hands an agent).
+        if slug and workspace_registry.by_slug(slug) is None:
+            rec = workspace_registry.get(slug)
+            if rec and rec.get("slug"):
+                slug = str(rec["slug"])
+        place = next((p for p in meeting_note_mod.note_places(wsr.root, subject)
+                      if not p["hidden"] and (p["slug"] == slug or (not slug and p["home"]))), None)
+        if place is None and slug:
+            # A SHARED WORKSPACE THE CALLER MAY WRITE, mounted or not (friction, app.dev 2026-10-16:
+            # an owner was told "no such workspace of yours" four times). Resolved through the one
+            # write gate every other write uses, `_read_target(write=True)`, which re-reads the role
+            # from the workspace's own `policy/members.json` and needs contributor or owner, so a
+            # viewer or a stranger is refused exactly as before.
+            try:
+                place = {"slug": slug, "dir": Path(_read_target(request, slug, write=True)),
+                         "home": False, "hidden": False}
+            except HTTPException as exc:
+                if exc.status_code != 403:
+                    raise
+        if place is None:
+            raise HTTPException(status_code=404, detail="no such workspace of yours is on")
+        text = _wp.read_text_inside(place["dir"], path)
+        if text is None:
+            raise HTTPException(status_code=404, detail="no such page")
+        keys: dict = {}
+        row = None
+        meeting_id = str(b.get("meeting_id") or "").strip()
+        if meeting_id:
+            row = _meeting_access(subject, meeting_id, within=_within(request))
+            if row is None:
+                raise HTTPException(status_code=403, detail="not authorized for this meeting")
+            ident = meeting_note_mod.row_identity(row)
+            keys.update({k: ident[k] for k in ("meeting", "native", "meeting_url", "calendar_event") if k in ident})
+            rec_path, rec_ws = meeting_note_mod.recorded_place(row)
+            if rec_path and not (rec_path == path and rec_ws == place["slug"]):
+                other = next((p for p in meeting_note_mod.note_places(wsr.root, subject)
+                              if not p["hidden"] and (p["slug"] == rec_ws or (not rec_ws and p["home"]))), None)
+                current = _wp.read_text_inside(other["dir"], rec_path) if other else None
+                if current is not None and not meeting_note_mod.nothing_written(current) and not b.get("replace"):
+                    raise HTTPException(status_code=409, detail={
+                        "refused": "this meeting already has a page",
+                        "current": {"path": rec_path, "workspace": rec_ws},
+                        "said": (f"Meeting {meeting_id} already has its page at {rec_path}"
+                                 f"{' in ' + rec_ws if rec_ws else ''}. A meeting has one page: merge "
+                                 f"what you need from one into the other, then attach again with "
+                                 f"replace=true.")})
+        else:
+            if b.get("native"):
+                keys["native"] = str(b["native"]).strip()
+            if b.get("meeting_url"):
+                keys["meeting_url"] = meeting_note_mod.normal_url(b["meeting_url"])
+            if b.get("calendar_event"):
+                keys["calendar_event"] = str(b["calendar_event"]).strip()
+            if not keys:
+                raise HTTPException(status_code=400, detail={
+                    "refused": "nothing names the meeting",
+                    "said": "Give meeting_id, or the meeting's link (meeting_url) / native id "
+                            "(parse_meeting_link) / calendar_event, so the meeting finds this page."})
+        if b.get("platform"):
+            keys.setdefault("platform", str(b["platform"]).strip())
+        stamped = meeting_note_mod.stamp_identity(text, keys)
+        if stamped != text:
+            _wp.write_text_inside(place["dir"], path, stamped)
+            try:
+                commit_entity(place["dir"], [path], subject_path=path, created=False,
+                              trailers=tuple(writer_trailers(request.headers)))
+            except Exception:  # noqa: BLE001 — a workspace with no repo keeps the file uncommitted
+                pass
+        recorded = False
+        if row is not None:
+            try:
+                recorded = bool(_meeting_note_recorder(str(subject), str(row.get("id")), path, place["slug"]))
+            except TypeError:
+                recorded = bool(_meeting_note_recorder(str(subject), str(row.get("id")), path))
+        return {"path": path, "workspace": place["slug"], "stamped": sorted(keys), "recorded": recorded}
+
+    @router.get("/api/meeting/terms")
+    def meeting_terms(meeting_id: str, request: Request):
+        """THIS MEETING'S ANNOTATION LAYER — `{"meeting", "cursor", "terms"}` (Vexa-ai/vexa#1595).
+
+        Founder, mid-meeting with Highlight pressed: *"we want transcript being attributed with
+        extracted entities when we get highlight — it should attribute the transcript in an
+        efficient way (no rewrite)"*. The map is what the canvas draws chips FROM; the transcript
+        itself is never touched, and the client re-finds each surface form in the words it is
+        already rendering, so every segment after the Highlight is attributed with no model call.
+
+        THE CANVAS ASKS ON OPEN. The chips also arrive live as the chat's `terms` event, and that is
+        still the fast path — but an event is a moment, and before this route a reload left the
+        transcript plain again because the only copy was that tab's memory. This is the copy that
+        survives, and it is on the SERVER rather than in browser storage so it is the same map on
+        the phone, the laptop and the reader who was handed the meeting.
+
+        AN EMPTY MAP IS THE ORDINARY ANSWER — nobody has highlighted this meeting — and the caller
+        must be able to tell it from a failure: the transcript renders exactly the plain text it did
+        before, which is what makes an un-highlighted meeting cost nothing.
+
+        OWNER-SCOPED BEFORE ANYTHING IS READ, exactly as `/api/meeting/note` above and
+        `/api/meeting/stream` below, and for the same reason: row ids are sequential ints, and this
+        answers with what was said on somebody's DESK."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        row = _meeting_access(subject, meeting_id, within=_within(request))
+        if row is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        return meeting_terms_mod.read(wsr.root, subject, meeting_id)
+    @router.post("/api/meeting/terms")
+    def publish_meeting_terms(request: Request, body: dict = Body(default={})):
+        """One Highlight's publish, ADDED to this meeting's map. Returns the whole map.
+
+        The writer is the ACT — `transcript_terms(..., keep=…)`, the same call whose result the
+        harness turns into the chat's `terms` event; the scan route below publishes through this
+        same `meeting_terms.extend`. One loop, one write surface: nothing else composes this file,
+        and the canvas only ever reads it.
+
+        APPEND-ONLY AND IDEMPOTENT (`meeting_terms.merge`): re-running Highlight extends the map,
+        the same publish twice changes nothing, and an empty publish is a non-event rather than an
+        empty map — an empty map would read as *"and now there are none"* and wipe the chips the
+        previous press put on the screen.
+
+        Owner-scoped like the read. `meeting_id` travels in the BODY here, with the terms it
+        annotates, so one publish is one object rather than a query string beside a payload."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        meeting_id = str((body or {}).get("meeting_id") or (body or {}).get("meeting") or "").strip()
+        row = _meeting_access(subject, meeting_id, within=_within(request))
+        if row is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        terms = (body or {}).get("terms")
+        if not isinstance(terms, list):
+            raise HTTPException(status_code=422, detail="terms must be a list")
+        return meeting_terms_mod.extend(wsr.root, subject, meeting_id, terms,
+                                        str((body or {}).get("cursor") or ""))
+    @router.post("/api/meeting/terms/scan")
+    def scan_meeting_terms(request: Request, body: TranscriptTermsBody = Body(...)):
+        """The things a meeting has NAMED so far — people, companies, projects, products — each with
+        where it was said and whether a page for it already exists where you can read it. The verb
+        behind `transcript_terms` and the Highlight button (PRD decision 35).
+
+        TWO CALLS, AND THE SECOND ONE IS THE PUBLISH. First with `meeting_id` (and `since`, the
+        cursor from your last call on this meeting): it lists every candidate and shows nothing to
+        anyone. Pick the ones that matter here, then call again with `keep="Acme, Ana Lima"` — those
+        become chips over the transcript, and stay there on reload. `keep="*"` publishes all of them,
+        which is right only when all of them genuinely matter.
+
+        A term whose `known` is null has no page anywhere you can read. A `502` is a failed READ of
+        the transcript — say that, never that nothing was said.
+
+        Owner-scoped like every route in this file: the caller's own meeting, one shared with them,
+        or one bound to a workspace they belong to; anything else is a 403 before a word is read."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        meeting_id = body.meeting_id.strip()
+        if _meeting_access(subject, meeting_id, within=_within(request)) is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        segments = _meeting_words(subject, meeting_id, within=_within(request))
+        if segments is None:
+            raise HTTPException(status_code=502, detail={
+                "read_ok": False, "meeting": meeting_id,
+                "error": "the transcript could not be read",
+                "tell_your_person": "Say the READ failed — never that nothing was said."})
+        return meeting_highlight_mod.highlight(
+            root=wsr.root, subject=subject, meeting_id=meeting_id, segments=segments,
+            index=meeting_highlight_mod.entity_index(_readable_mounts(subject, request)),
+            since=body.since.strip(), keep=body.keep)
+    @router.get("/api/meeting/stream")
+    def meeting_stream(meeting_id: str, session_uid: str, request: Request):
+        """SSE feed for a LIVE meeting: the transcript Stream (`tc:meeting:{id}`), and only that.
+        Segments as the bot hears them, `retract` when the collector withdraws a draft, and
+        `meeting-end` when the session closes. It used to MERGE a second stream — the copilot's
+        output (`unit:agent-meet-{sid}:out`: `card`s, `note`s, `model-error`, `message-delta`) —
+        and PRD decision 34 removed the producer of all of it, so the merge went with it.
+
+        RESUMABLE: every event carries an SSE ``id:`` = the per-stream redis cursors. On reconnect the
+        browser echoes the last one as ``Last-Event-ID``; we resume EXACTLY from there (redis streams are
+        durable + id-addressable) instead of re-seeding only the last N entries. Without this, a transient
+        disconnect (the 'Live stream disconnected — reconnecting' path) dropped every segment published in
+        the gap beyond the bounded replay window from the LIVE view — the real-time transcript-loss bug
+        (the durable store kept them, so they only reappeared post-time)."""
+        if not redis_url:
+            raise HTTPException(status_code=501, detail="redis not wired")
+
+        # P0 (cross-tenant leak fix — SSE sibling of the by-id REST ownership check): OWNER-SCOPE the live
+        # feed BEFORE opening any redis stream. `meeting_id` (row id) + `session_uid` arrive from the
+        # caller's query params; row ids are sequential ints, so without this an authenticated user B could
+        # `EventSource(...?meeting_id=<A_row>&session_uid=<A_native>)` and stream tenant A's live transcript
+        # (an ACTIVE, enumerable cross-tenant read). Mirror the WS `/ws` path: derive the
+        # caller identity (`subject_of` → 401 on no gateway-injected X-User-Id) and verify the caller OWNS
+        # the requested row (meeting-api `GET /meetings/{id}` owner-scopes in SQL: `Meeting.user_id ==
+        # user_id` → 404 for a foreign/absent row). Fail CLOSED (403) BEFORE the stream opens.
+        #
+        # THE SHARED-WORKSPACE GRANT IS NOW HONOURED HERE — this comment used to end "intentionally NOT
+        # honored here yet", and that gap is the bug: a bot requested inside a workspace makes the
+        # WORKSPACE's meeting, so every member is entitled to watch it, and owner-only scoping meant a
+        # member watching their own group's call saw an empty page while it was happening. The grant
+        # arrives through the seam the old comment named — `_meeting_access` → `_meeting_owner_lookup`
+        # with the caller's memberships — so the widening is meeting-api's ONE access union, not a
+        # second rule invented at this route. A caller who is neither owner, share recipient nor member
+        # is refused exactly as before.
+        subject = subject_of(request)  # 401 if no (gateway-injected) identity — fail closed
+        owned = _meeting_access(subject, meeting_id, within=_within(request))
+        if owned is None:
+            # Absent row, or a row this caller has no claim on → refuse (404-equivalent, no stream opened).
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        if transcript_erased(owned):
+            # The owner deleted this meeting's transcript. The row survives as history, so access
+            # alone would still pass; nothing is replayed from the stream, whatever it still holds.
+            raise HTTPException(status_code=410, detail="this meeting's transcript was deleted")
+        # `session_uid` is ALSO caller-supplied. The terminal passes the ROW id as `session_uid` for
+        # live rows (liveMeetings.ts `session_uid = live ? id : undefined`); the meeting's own native
+        # id is accepted for the legacy shape (native==row==session). Bind it to the OWNED row so a
+        # caller cannot pair its own row with someone else's key.
+        owned_native = str(owned.get("native_meeting_id") or "")
+        if session_uid not in (owned_native, str(meeting_id)):
+            raise HTTPException(status_code=403, detail="session_uid does not match this meeting")
+
+        resume_t = _decode_sse_cursor(request.headers.get("last-event-id"))
+        within = _within(request)
+
+        def still_allowed() -> bool:
+            """ACCESS IS RE-CHECKED WHILE THE STREAM IS OPEN, not only when it opens. The owner can
+            remove a person, or a workspace member can be removed, mid-meeting; the same access union
+            that admitted the caller (`_meeting_access`, meeting-api's one decision) is asked again
+            every `LIVE_ACCESS_RECHECK_SEC`. A refusal is asked twice, a moment apart, so one failed
+            hop to meeting-api does not end a stream the caller is still entitled to — and if it is
+            refused twice the stream ends with `access-revoked`, never with silence."""
+            def allowed() -> bool:
+                row = _meeting_access(subject, meeting_id, within=within)
+                # A transcript the owner DELETED while the stream was open ends it too: the row
+                # survives as history, so access alone would still pass (R1801-6).
+                return row is not None and not transcript_erased(row)
+            if allowed():
+                return True
+            time.sleep(LIVE_ACCESS_RETRY_SEC)
+            return allowed()
+
+        def gen():
+            import redis
+
+            r = redis.from_url(redis_url, decode_responses=True)
+            tkey = f"tc:meeting:{meeting_id}"
+            # Resume EXACTLY from the client's last-seen cursor when present (gapless reconnect);
+            # otherwise replay the entire history in bounded xread batches, then tail live.
+            last = {tkey: resume_t or "0-0"}
+            idle = 0
+            # A meeting row's transcript stream is REUSED across the meeting's sessions, so a
+            # `session_end` is not necessarily the end of the VIEW: a new session can resume on the
+            # same key moments later, and closing on the first marker painted "Meeting ended" over a
+            # live meeting. So an end ARMS a short drain (one poll) and a `session_start` or any real
+            # segment disarms it. This used to be a 45s bounded drain, because the copilot's final
+            # beat ran ~10s after session_end and its notes had to reach the view first; with that
+            # producer gone (PRD decision 34) the only thing that can still arrive is a resumed
+            # session, and one poll is enough to see it.
+            ending = False
+            checked_at = time.monotonic()
+
+            def cursor():
+                return _encode_sse_cursor(last, tkey)
+
+            def seg_events(payload):
+                for seg in payload.get("segments", []):
+                    yield ({"type": "transcript", "speaker": seg.get("speaker"),
+                            "text": seg.get("text"), "t": seg.get("start"),
+                            "tsMs": seg.get("abs_start_ms"),
+                            "completed": seg.get("completed", True),
+                            "id": seg.get("segment_id")}, cursor())
+
+            def retract_event(payload):
+                """A `retract` marker (the collector withdrew superseded/over-extended pending drafts) →
+                a `retract` SSE event so the terminal drops those segment ids from the live view."""
+                ids = payload.get("segment_ids") or []
+                if ids:
+                    yield ({"type": "retract", "segment_ids": ids}, cursor())
+
+            while True:
+                if time.monotonic() - checked_at >= LIVE_ACCESS_RECHECK_SEC:
+                    if not still_allowed():
+                        yield ({"type": "access-revoked",
+                                "message": "You no longer have access to this meeting."}, cursor())
+                        return
+                    checked_at = time.monotonic()
+                block = 1500 if ending else LIVE_READ_BLOCK_MS
+                resp = r.xread(last, count=500, block=block)
+                if not resp:
+                    if ending:
+                        live.drop(session_uid)  # leaves the terminal's live-meetings feed
+                        yield ({"type": "meeting-end"}, cursor())
+                        return
+                    idle += block
+                    if idle >= 600000:
+                        return
+                    if idle % LIVE_PING_EVERY_MS < block:
+                        yield ({"type": "ping"}, cursor())
+                    continue
+                idle = 0
+                for stream, entries in resp:
+                    for entry_id, fields in entries:
+                        last[stream] = entry_id
+                        if stream == tkey:
+                            payload = json.loads(fields.get("payload", "{}"))
+                            ptype = payload.get("type")
+                            if ptype == "session_end":
+                                ending = True            # a resumed session gets one poll to appear
+                                # Keep the exact cursor: later entries may resume this row,
+                                # including entries remaining in this batch.
+                                continue
+                            if ptype == "retract":
+                                yield from retract_event(payload)
+                                continue
+                            if ptype == "progress":
+                                # How far transcription is behind capture. Not a sign of a resumed
+                                # session: it never disarms a pending end.
+                                yield ({"type": "progress", "backlog_s": payload.get("backlog_s"),
+                                        "silence_s": payload.get("silence_s"),
+                                        "finishing": bool(payload.get("finishing"))}, cursor())
+                                continue
+                            # A `session_start` marker — or any real segment — after a prior
+                            # session_end means the meeting is LIVE again on this reused row: clear
+                            # the stale arm so the drain never fires a premature meeting-end.
+                            ending = False
+                            if ptype == "session_start":
+                                continue                 # marker only — nothing to render
+                            yield from seg_events(payload)
+
+        return StreamingResponse(
+            _sse(gen()), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    return router

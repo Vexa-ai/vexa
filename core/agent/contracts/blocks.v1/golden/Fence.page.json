@@ -1,0 +1,15 @@
+{
+ "v": 1,
+ "people": {"mira": {"name": "Mira Chen", "initials": "MC", "vexa": true, "account_id": "u_mira", "avatar": "g:0123456789abcdef0123456789abcdef", "logo": "d:northwind.example", "presence": "today"}},
+ "blocks": [
+  {"type": "title", "text": "Pilot: open items"},
+  {"type": "list", "rows": [
+   {"type": "row", "person": "mira", "text": "SSO list", "meta": "due Fri"},
+   {"type": "row", "text": "Usage report", "meta": "drafted"},
+   {"type": "row", "text": "November check-in", "meta": "booked"},
+   {"type": "row", "text": "Third team decision", "meta": "November"}]},
+  {"type": "group", "label": "Background", "collapsed": true, "summary": "Two teams now, a third decided in November", "blocks": [
+   {"type": "evidence", "items": [{"text": "Agreed on the pilot review", "source": "transcript"}]}]},
+  {"type": "action", "label": "Expand", "expand": true}
+ ]
+}

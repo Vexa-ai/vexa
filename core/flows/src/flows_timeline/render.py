@@ -34,6 +34,27 @@ def zone(tz: str):
     return UTC
 
 
+def now_label(epoch: float, tz: str) -> str:
+    """THE ONE SPELLING OF NOW (Vexa-ai/vexa#1783) — zone, abbreviation, UTC offset and UTC time:
+    `Tuesday 13 October 2026, 19:06 Europe/Lisbon (WEST, UTC+01:00); 18:06 UTC`.
+
+    Mirrors `core/agent/shared/clock_line.py::now_label` by format and by test; the worker refreshes
+    this line at turn time with that function, so the two must agree character for character. The
+    UTC half exists because tools answer in UTC (`…Z`): without it a local clock beside a UTC
+    timestamp reads as an hour of missing data. The offset is the zone's at THAT instant."""
+    u = datetime.datetime.fromtimestamp(float(epoch), UTC)
+    z = zone(tz) if tz and tz.upper() not in ("UTC", "ETC/UTC", "Z") else UTC
+    if z is UTC:
+        tail = "" if (tz or "").upper() in ("UTC", "ETC/UTC", "Z") else " (no timezone set)"
+        return f"{u.strftime('%A %d %B %Y')}, {u.strftime('%H:%M')} UTC{tail}"
+    local = u.astimezone(z)
+    secs = int(local.utcoffset().total_seconds())
+    sign, secs = ("+" if secs >= 0 else "-"), abs(secs)
+    off = f"UTC{sign}{secs // 3600:02d}:{secs % 3600 // 60:02d}"
+    return (f"{local.strftime('%A %d %B %Y')}, {local.strftime('%H:%M')} {tz} "
+            f"({local.tzname() or tz}, {off}); {u.strftime('%H:%M')} UTC")
+
+
 def clock(epoch: float, tz: str) -> str:
     """`HH:MM ZONE` — the house format, zone always attached."""
     z = zone(tz)
@@ -117,8 +138,9 @@ def render_preamble(payload: dict, tz: str = "", *, back: int = 5, ahead: int = 
     today = head.strftime("%Y-%m-%d")
     past, future = _split(events, now, back=back, ahead=ahead)
     out = ["## Where this person is in time\n",
-           f"**Now: {head.strftime('%A %d %B %Y')}, {clock(now, tz)}.** "
-           "State times in this zone; never a bare clock time from another one. "
+           f"**Now: {now_label(now, tz)}.** "
+           "State times in this zone; never a bare clock time from another one. Tool timestamps "
+           "ending in `Z` or `+00:00` are UTC: convert them before comparing with now. "
            "`timeline(since, until)` reaches further back or further forward than this block.\n"]
     if past:
         out.append("Last events concerning them:")

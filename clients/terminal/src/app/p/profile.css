@@ -1,0 +1,6 @@
+/* /p/<handle>: a public profile, readable at 360px */
+.vx-public-profile { max-width: 560px; margin: 0 auto; padding: 32px 16px; display: flex; flex-direction: column; gap: 8px; color: var(--t1); background: var(--bg); min-height: 100vh; }
+.vx-public-profile-name { font-size: 22px; font-weight: 600; margin: 0; }
+.vx-public-profile-line { color: var(--t2); margin: 0; }
+.vx-public-profile-bio { line-height: 1.5; white-space: pre-line; }
+.vx-public-profile-links { display: flex; gap: 12px; flex-wrap: wrap; list-style: none; padding: 0; margin: 0; }

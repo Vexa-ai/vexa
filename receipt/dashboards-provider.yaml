@@ -1,0 +1,9 @@
+# Throwaway rig only — the file-based dashboard provider Grafana needs to load a JSON off disk.
+# In a customer cluster this is the sidecar reading the ConfigMap by label; here it is a mount.
+apiVersion: 1
+providers:
+  - name: vexa
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

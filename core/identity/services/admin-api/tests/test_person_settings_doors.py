@@ -120,9 +120,9 @@ def test_apply_validates_every_key_before_writing_any():
         "mail_minutes": True, "mail_join": False, "timezone": "Europe/Lisbon"}
 
 
-def test_the_five_person_facts_are_what_the_read_door_serves():
+def test_the_person_facts_are_what_the_read_door_serves():
     facts = ps.read_person_facts({})
-    assert set(facts) == {"timezone", "mail_minutes", "mail_join", "mail_rsvp", "mail_prep"}
+    assert set(facts) == {"timezone", "mail_minutes", "mail_join", "mail_rsvp", "mail_prep", "presence"}
     assert ps.BOT_NAME_KEY not in facts
 
 

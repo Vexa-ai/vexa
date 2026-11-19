@@ -7,11 +7,29 @@
  * confirm with validateLoggedIn, optionally back the profile up, and close — which
  * flushes the persistent profile dir. That profile dir IS the saved session; a later
  * launchPersistentBrowser({dataDir: profileDir}) is authenticated.
+ *
+ * The person driving the browser over VNC types into its address bar, so the browser is confined
+ * before it opens anything: every navigation (top level, popup, frame) off the platform's sign-in and
+ * account domains (`SIGNIN_NAVIGATION_DOMAINS`) is aborted and logged — an internal service, a
+ * `file://` path or a `chrome://` page included. Subresources still load from the platform's CDNs.
+ * A company identity provider outside those domains (an Okta or ADFS tenant) is refused with them,
+ * unless the operator names it (`extraHosts`, from `VEXA_BOT_SIGNIN_EXTRA_HOSTS`): an exact host, over
+ * https only. An entry that is a wildcard, an IP literal, a bare label or localhost is dropped here as
+ * well as where it is configured.
  */
 import { AuthPlatform, LoginStatus } from './types';
 import { launchPersistentBrowser } from './browser';
 import { getBrowserSessionArgs } from './args';
 import { validateLoggedIn, AUTH_LOGIN_URLS } from './validate';
+import { AUTH_NAVIGATION_DOMAINS, extraHostEntry, restrictNavigation } from './navigation';
+
+/** Where a sign-in browser may navigate: the platform's own domains, and for Zoom the Google and
+ *  Microsoft account hosts its "sign in with" buttons hand over to. */
+export const SIGNIN_NAVIGATION_DOMAINS: Record<AuthPlatform, readonly string[]> = {
+  google: AUTH_NAVIGATION_DOMAINS.google,
+  teams: AUTH_NAVIGATION_DOMAINS.teams,
+  zoom: [...AUTH_NAVIGATION_DOMAINS.zoom, 'accounts.google.com', 'login.microsoftonline.com', 'login.live.com'],
+};
 import { saveSessionLocal, cleanStaleLocks, ensureBrowserDataDir } from './session-store';
 
 export interface ProvisionLoginOptions {
@@ -27,6 +45,13 @@ export interface ProvisionLoginOptions {
   timeoutMs?: number;
   /** Hold the browser open after detection so you can eyeball it in VNC. */
   keepOpenMs?: number;
+  /** Launch flags. Default getBrowserSessionArgs() (VNC + CDP debug port). A caller that must expose
+   *  nothing but its VNC bridge passes a set without CDP_DEBUG_ARGS. */
+  args?: string[];
+  /** The operator's extra sign-in hosts (exact or `*.suffix`, https only) — a company IdP. */
+  extraHosts?: readonly string[];
+  /** The launcher (default launchPersistentBrowser); a test passes a stand-in. */
+  launch?: typeof launchPersistentBrowser;
 }
 
 export async function provisionLogin(opts: ProvisionLoginOptions): Promise<LoginStatus> {
@@ -37,7 +62,10 @@ export async function provisionLogin(opts: ProvisionLoginOptions): Promise<Login
   ensureBrowserDataDir(opts.profileDir);
   cleanStaleLocks(opts.profileDir);
 
-  const { context, page } = await launchPersistentBrowser({ dataDir: opts.profileDir, args: getBrowserSessionArgs() });
+  const launch = opts.launch ?? launchPersistentBrowser;
+  const { context, page } = await launch({ dataDir: opts.profileDir, args: opts.args ?? getBrowserSessionArgs() });
+  const extra = (opts.extraHosts ?? []).map(extraHostEntry).filter((e): e is string => e !== null);
+  await restrictNavigation(context, SIGNIN_NAVIGATION_DOMAINS[opts.platform], undefined, extra);
   console.log(`[remote-browser] login: opened ${loginUrl} — sign in via VNC (:6080). Waiting up to ${Math.round(timeoutMs / 1000)}s...`);
   try { await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 }); } catch { /* keep polling regardless */ }
 

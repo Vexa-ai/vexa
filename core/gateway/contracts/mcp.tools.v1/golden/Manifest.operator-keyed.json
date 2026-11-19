@@ -1,0 +1,60 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "flows",
+  "source": "oss",
+  "owner": "core/flows",
+  "base_url_env": "FLOWS_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": [
+    "identity"
+  ],
+  "admin_auth": {
+    "header": "X-Flows-Operator-Key",
+    "key_env": "VEXA_FLOWS_API_KEY"
+  },
+  "tools": [
+    {
+      "name": "flows_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "flows"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/flows"
+      }
+    },
+    {
+      "name": "flows_admin_run",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": [
+        "identity",
+        "flows"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/admin/run"
+      },
+      "arguments": [
+        "flow"
+      ]
+    }
+  ],
+  "publishes_events": [
+    {
+      "event": "friction.reported",
+      "status": "published today",
+      "triggers": "friction_log v1"
+    }
+  ],
+  "handed_off_events": [
+    {
+      "event": "meeting.started",
+      "event_v2_owner": "meetings",
+      "note": "meeting-api publishes it too"
+    }
+  ]
+}

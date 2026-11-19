@@ -1,0 +1,21 @@
+/* /join: the quiet text buttons under Join ("Not now", "Not you? Use another address"; D26, D35).
+   A touch-sized target for the phone pass: 44px tall, the label wraps at 360px. */
+.vx-join-quiet { background: none; border: none; color: var(--t3); font-size: 12px; padding: 12px 0; min-height: 44px; cursor: pointer; align-self: flex-start; text-align: left; }
+
+/* The card, as the server renders it: classes, never a style attribute (the page's policy refuses
+   those, app/contentSecurityPolicy.ts). PHONE (PRD 0.13.4 §11): at 390px the card fills the width
+   inside a 16px gutter, nothing scrolls sideways (long addresses and names wrap anywhere), the page
+   scrolls vertically when the keyboard is up, and the one act on the page is full width and at least
+   44px tall. */
+.vx-join-shell { min-height: 100dvh; background: var(--bg); display: flex; align-items: center; justify-content: center; box-sizing: border-box; overflow-x: hidden; }
+.vx-join-card { width: 100%; max-width: 360px; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 14px; box-shadow: var(--shadow-join-card); }
+.vx-join-back { align-self: flex-start; min-height: 32px; cursor: pointer; }
+.vx-join-brand { display: flex; align-items: center; gap: 10px; }
+.vx-join-logo { display: block; flex: none; }
+.vx-join-sentence { font-size: 13px; color: var(--t1); line-height: 1.55; }
+.vx-join-muted { font-size: 11.5px; color: var(--t3); line-height: 1.5; }
+.vx-join-form { display: flex; flex-direction: column; gap: 10px; }
+.vx-join-form-tight { gap: 8px; }
+.vx-join-link { cursor: pointer; align-self: flex-start; }
+.vx-join-oauth { display: flex; align-items: center; justify-content: center; gap: 8px; background: var(--bg); color: var(--t1); border: 1px solid var(--line2); border-radius: 7px; padding: 11px 12px; font-size: 14px; font-weight: 500; cursor: pointer; width: 100%; min-height: 44px; }
+.vx-join-submit { background: var(--accent); color: var(--on-accent); border: none; border-radius: 7px; padding: 11px 12px; font-size: 14px; font-weight: 600; cursor: pointer; width: 100%; min-height: 44px; }

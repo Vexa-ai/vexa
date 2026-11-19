@@ -1,24 +1,21 @@
 import type { ComponentType } from "react";
 
+/** A stretch of captured audio that was never transcribed (prod-cutover R4) — drawn as a quiet
+ *  marker where the words would have been, never as a segment. */
+export interface TranscriptGap {
+  startMs?: number;           // ABSOLUTE wall-clock start, epoch ms
+  endMs?: number;
+  label: string;              // "gap mm:ss–mm:ss (not transcribed)", composed by meeting-api
+}
+
 export interface TranscriptSegment {
   id?: string;
   speaker?: string;
   text: string;
   ts?: number | string;       // meeting-relative time (seconds) — back-compat
+  endMs?: number;
   tsMs?: number;              // ABSOLUTE wall-clock time of the line, epoch ms (UTC). Renderer formats in local TZ.
   completed?: boolean;        // false = live pending (in-progress ASR); true/undefined = finalized
-}
-
-export interface ProcessedTranscriptNote {
-  id: string;
-  speaker?: string;
-  chapter?: string;
-  text: string;
-  ts?: number | string;       // meeting-relative time (seconds) — back-compat
-  tsMs?: number;              // ABSOLUTE wall-clock time of the line, epoch ms (UTC). Renderer formats in local TZ.
-  completed?: boolean;        // false = live pending (in-progress ASR); true/undefined = finalized
-  pass?: number;
-  frozen?: boolean;
 }
 
 export type EntityKind = "person" | "company" | "product" | "number" | "signal";
@@ -59,30 +56,33 @@ export interface MeetingDocLink {
   title?: string;
 }
 
+/** A fault in the meeting FEED. There is no "model" kind: the product runs no model calls of its
+ *  own beside the agent (PRD decision 34), so there is no inference to fail here. */
 export interface MeetingDiagnosticIssue {
-  kind: "stream" | "model" | "parse";
+  kind: "stream" | "parse" | "access";
   message: string;
   status?: number;
   at?: number;
-  model?: string;
-  stage?: string;
 }
 
 export interface MeetingState {
   meeting: {
     id: string;
     nativeId?: string;
+    platform?: string;          // "voice_note" picks the note's own words over the bot's
     title: string;
     status?: string;
     live?: boolean;             // true while the backend session is live (session_uid present)
     startedAt?: string;
     participants?: string[];
     docs?: { path: string; title?: string; kind?: string; present?: boolean }[];
+    deleted?: boolean;          // its owner deleted the transcript + recordings; nothing is shown
   };
   transcript: {
     segments: TranscriptSegment[];
     liveCaption?: string;
-    notes?: ProcessedTranscriptNote[];
+    /** Audio the meeting never transcribed — recorded meetings only. */
+    gaps?: TranscriptGap[];
   };
   entities: {
     people: any[];
@@ -97,6 +97,8 @@ export interface MeetingState {
     reconnects?: number;
     lastEventAt?: number;
     lastTranscriptAt?: number;
+    /** The bot's latest transcription progress report (seconds behind, seconds quiet, final pass). */
+    progress?: { backlogS: number; silenceS: number | null; finishing: boolean; at: number };
     issues?: MeetingDiagnosticIssue[];
   };
   metrics: Record<string, number | string>;

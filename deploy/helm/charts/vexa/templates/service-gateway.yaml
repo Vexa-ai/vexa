@@ -17,4 +17,25 @@ spec:
   selector:
     {{- include "vexa.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
+{{- if .Values.flows.enabled }}
+---
+{{- /* THE SERVICE DOOR, on its own ClusterIP Service so no gateway.service.type (LoadBalancer,
+NodePort) and no ingress ever publishes it. Reached by the flows tier, the signals service and the
+terminal only (networkpolicy-namespace.yaml, gateway-door-ingress). */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "gateway-door") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: door
+      port: 8002
+      targetPort: door
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+{{- end }}
 {{- end }}

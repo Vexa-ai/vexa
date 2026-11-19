@@ -8,6 +8,7 @@ Proves, in isolation from agent-api (injected FakeDownstream), the load-bearing 
   * chat (SSE) is STREAMED, not buffered, and carries the same injected identity.
 This is the seam every agent surface (sessions · routines · workspace · chat) rides for per-user scope.
 """
+import pytest
 from fastapi.testclient import TestClient
 
 from gateway import create_app
@@ -90,7 +91,7 @@ def test_agent_patch_method_forwards():
 def test_chat_is_streamed_not_buffered_with_injected_user():
     """POST /api/chat returns an SSE stream (text/event-stream), relays the downstream chunks, and
     carries the injected X-User-Id (so the streamed turn is scoped to the authenticated user)."""
-    client, downstream = _client(FakeDownstream(stream_chunks=[
+    client, downstream = _client(FakeDownstream(content_type="text/event-stream", stream_chunks=[
         b'data: {"type":"token","text":"he"}\n\n',
         b'data: {"type":"token","text":"llo"}\n\n',
         b'data: {"type":"done"}\n\n',
@@ -114,7 +115,7 @@ def test_chat_keyless_is_401():
 def test_meeting_stream_is_streamed_with_injected_user():
     """GET /api/meeting/stream (the live transcript SSE) is streamed (not buffered by the
     catch-all) and carries the injected X-User-Id, with its query (meeting_id/session_uid) forwarded."""
-    client, downstream = _client(FakeDownstream(stream_chunks=[
+    client, downstream = _client(FakeDownstream(content_type="text/event-stream", stream_chunks=[
         b'data: {"type":"transcript","text":"hello"}\n\n',
         b'data: {"type":"meeting-end"}\n\n',
     ]))
@@ -134,3 +135,28 @@ def test_verified_email_injected_and_spoof_stripped():
     client.post("/agent/workspace/invites/accept",
                 headers={**AUTH, "x-user-email": "attacker@evil.com"}, json={"token": "t"})
     assert downstream.last["headers"]["x-user-email"] == "u@example.com"  # resolved, not the spoof
+
+
+@pytest.mark.parametrize("path,method", [("/agent/chat", "POST"), ("/agent/meeting/stream", "GET")])
+@pytest.mark.parametrize("status,body", [
+    (403, {"detail": {"status": "refused", "reason": "delegated_dispatch"}}),
+    (404, {"detail": "unknown meeting"}),
+    (501, {"detail": "stream relay not wired"}),
+])
+def test_an_upstream_refusal_on_an_sse_route_keeps_its_own_status_and_body(path, method, status, body):
+    """The SSE leg relays a stream only when the upstream answered one. A refusal reaches the
+    caller as itself — its status and its body — not as a 200 event stream wrapped around it."""
+    import json as _json
+    client, _ = _client(FakeDownstream(status_code=status, content_type="application/json",
+                                       stream_chunks=[_json.dumps(body).encode()]))
+    r = client.request(method, path, headers=AUTH, json={"prompt": "hi"} if method == "POST" else None)
+    assert r.status_code == status
+    assert r.headers["content-type"].startswith("application/json")
+    assert r.json() == body
+
+
+def test_a_2xx_answer_that_is_not_a_stream_is_passed_through_as_itself():
+    client, _ = _client(FakeDownstream(status_code=200, content_type="application/json",
+                                       stream_chunks=[b'{"queued": true}']))
+    r = client.post("/agent/chat", headers=AUTH, json={"prompt": "hi"})
+    assert r.status_code == 200 and r.json() == {"queued": True}

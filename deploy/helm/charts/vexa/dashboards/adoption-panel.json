@@ -1,0 +1,543 @@
+{
+  "uid": "vexa-adoption-panel",
+  "title": "Vexa — Adoption",
+  "description": "Who inside this organisation is actually using Vexa, and whether it is spreading without us. Every number is computed inside your own cluster from your own two Postgres databases; nothing leaves it. Definitions, and the one that is still provisional, are in deploy/helm/charts/vexa/dashboards/README.md.",
+  "tags": [
+    "vexa",
+    "adoption"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 0,
+  "refresh": "",
+  "time": {
+    "from": "now-90d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "window_days",
+        "type": "textbox",
+        "label": "Trailing window (days)",
+        "query": "30",
+        "current": {
+          "text": "30",
+          "value": "30"
+        },
+        "options": [],
+        "hide": 0,
+        "description": "The trailing window every windowed panel uses. 30 is the provisional default for 'active user' (PRD §16.5)."
+      },
+      {
+        "name": "min_meetings",
+        "type": "textbox",
+        "label": "Captured meetings to count as active",
+        "query": "1",
+        "current": {
+          "text": "1",
+          "value": "1"
+        },
+        "options": [],
+        "hide": 0,
+        "description": "How many captured meetings a person must be present in, inside the window, to count as active. Provisional default 1."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Second-invite rate by a non-organizer",
+      "description": "P7 · Second-invite rate by a non-organizer — THE HEADLINE. Datasource: vexa-flows-db.\n\nThe loop this deployment spreads on, stated exactly (PRD §16.2 item 5, Intra-Company-PLG\nloop 2): a person who was an ATTENDEE on somebody else's invite, and who had never organized\none before that, LATER put the mailbox on a meeting of their own.\n\nThe cohort is everyone who was ever an attendee before they were ever an organizer. The\nnumerator is the share of that cohort who later organized. Both halves read `invite.received`\nrows only — the fact that a person invited the mailbox is the invite arriving, exactly the\nstage-3 test the adoption simulator uses (core/flows/eval/adoption/funnel.py:6).\n\nALL-TIME BY DESIGN, not windowed: conversion happens weeks after the attendance that seeded\nit, so a trailing window on the cohort would drop the very people who converted. P9 gives the\nrate its time shape; $window_days does not apply here.\n\nREADS BLANK, NEVER ZERO, when no invite carries an attendee roster: the cohort is empty, the\nNULLIF makes the rate NULL, and Grafana shows \"No data\". That is the honest state — check P10\nbefore reading this panel at all.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P7 · Second-invite rate by a non-organizer — THE HEADLINE. Datasource: vexa-flows-db.\n--\n-- The loop this deployment spreads on, stated exactly (PRD §16.2 item 5, Intra-Company-PLG\n-- loop 2): a person who was an ATTENDEE on somebody else's invite, and who had never organized\n-- one before that, LATER put the mailbox on a meeting of their own.\n--\n-- The cohort is everyone who was ever an attendee before they were ever an organizer. The\n-- numerator is the share of that cohort who later organized. Both halves read `invite.received`\n-- rows only — the fact that a person invited the mailbox is the invite arriving, exactly the\n-- stage-3 test the adoption simulator uses (core/flows/eval/adoption/funnel.py:6).\n--\n-- ALL-TIME BY DESIGN, not windowed: conversion happens weeks after the attendance that seeded\n-- it, so a trailing window on the cohort would drop the very people who converted. P9 gives the\n-- rate its time shape; $window_days does not apply here.\n--\n-- READS BLANK, NEVER ZERO, when no invite carries an attendee roster: the cohort is empty, the\n-- NULLIF makes the rate NULL, and Grafana shows \"No data\". That is the honest state — check P10\n-- before reading this panel at all.\nWITH inv AS (\n  SELECT r.subject_refs::jsonb AS refs, r.created_at AS ts\n  FROM reaction r\n  WHERE r.event_type = 'invite.received'\n),\norganized AS (\n  SELECT lower(btrim(refs->>'organizer')) AS email, min(ts) AS first_organized\n  FROM inv\n  WHERE btrim(coalesce(refs->>'organizer', '')) <> ''\n  GROUP BY 1\n),\nattended AS (\n  SELECT lower(btrim(p)) AS email, min(i.ts) AS first_attended\n  FROM inv i\n  CROSS JOIN LATERAL jsonb_array_elements_text(\n    CASE WHEN jsonb_typeof(i.refs->'participants') = 'array'\n         THEN i.refs->'participants' ELSE '[]'::jsonb END) AS p\n  WHERE btrim(p) <> ''\n  GROUP BY 1\n),\ncohort AS (\n  SELECT a.email, a.first_attended, o.first_organized\n  FROM attended a\n  LEFT JOIN organized o ON o.email = a.email\n  WHERE o.first_organized IS NULL OR o.first_organized > a.first_attended\n)\nSELECT round(100.0 * count(*) FILTER (WHERE first_organized IS NOT NULL)\n             / nullif(count(*), 0), 1) AS \"Second-invite rate %\"\nFROM cohort;\n"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Active users",
+      "description": "P1 · Active users (PROVISIONAL definition — see dashboards/README.md, and PRD §16.5).\nDatasource: vexa-flows-db (the flows database).\n\nA person is ACTIVE when, inside the trailing $window_days, they were present in at least\n$min_meetings meetings that were actually CAPTURED. \"Present\" is organizer OR attendee;\n\"captured\" is `meeting.completed`, which is only admitted once the bot ran, so a meeting the\nbot never joined can never make anyone active.\n\nDEGRADES, never errors: an invite whose ATTENDEE lines were never parsed (or a completion\npublished by meeting-api, whose domain holds no invite — core/flows/contracts/flows.v1/\ncarriers.json) carries no `participants`, and the jsonb_typeof guard makes that an empty\nroster rather than a failed query. The reading is then organizer-only, and P10 tells you by\nhow much.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P1 · Active users (PROVISIONAL definition — see dashboards/README.md, and PRD §16.5).\n-- Datasource: vexa-flows-db (the flows database).\n--\n-- A person is ACTIVE when, inside the trailing $window_days, they were present in at least\n-- $min_meetings meetings that were actually CAPTURED. \"Present\" is organizer OR attendee;\n-- \"captured\" is `meeting.completed`, which is only admitted once the bot ran, so a meeting the\n-- bot never joined can never make anyone active.\n--\n-- DEGRADES, never errors: an invite whose ATTENDEE lines were never parsed (or a completion\n-- published by meeting-api, whose domain holds no invite — core/flows/contracts/flows.v1/\n-- carriers.json) carries no `participants`, and the jsonb_typeof guard makes that an empty\n-- roster rather than a failed query. The reading is then organizer-only, and P10 tells you by\n-- how much.\nWITH completed AS (\n  SELECT r.subject_refs::jsonb AS refs\n  FROM reaction r\n  WHERE r.event_type = 'meeting.completed'\n    AND to_timestamp(r.created_at) >= now() - make_interval(days => ('$window_days')::int)\n),\npresent AS (\n  SELECT lower(btrim(refs->>'organizer')) AS email,\n         refs->>'meeting_id' AS meeting_id\n  FROM completed\n  WHERE btrim(coalesce(refs->>'organizer', '')) <> ''\n  UNION\n  SELECT lower(btrim(p)) AS email,\n         refs->>'meeting_id' AS meeting_id\n  FROM completed\n  CROSS JOIN LATERAL jsonb_array_elements_text(\n    CASE WHEN jsonb_typeof(refs->'participants') = 'array'\n         THEN refs->'participants' ELSE '[]'::jsonb END) AS p\n  WHERE btrim(p) <> ''\n)\nSELECT count(*)::bigint AS \"Active users\"\nFROM (\n  SELECT email\n  FROM present\n  WHERE meeting_id IS NOT NULL\n  GROUP BY email\n  HAVING count(DISTINCT meeting_id) >= ('$min_meetings')::int\n) t;\n"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Meetings captured",
+      "description": "P3 · Meetings captured (flows) — distinct meetings that reached `meeting.completed` inside\nthe trailing $window_days. Datasource: vexa-flows-db.\n\nCounted on the meeting id rather than on rows: a completion can be admitted by more than one\nproducer and the reaction table dedups on the source event id, not on the meeting.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P3 · Meetings captured (flows) — distinct meetings that reached `meeting.completed` inside\n-- the trailing $window_days. Datasource: vexa-flows-db.\n--\n-- Counted on the meeting id rather than on rows: a completion can be admitted by more than one\n-- producer and the reaction table dedups on the source event id, not on the meeting.\nSELECT count(DISTINCT r.subject_refs::jsonb->>'meeting_id')::bigint AS \"Meetings captured\"\nFROM reaction r\nWHERE r.event_type = 'meeting.completed'\n  AND to_timestamp(r.created_at) >= now() - make_interval(days => ('$window_days')::int);\n"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Teams covered",
+      "description": "P6 · Teams covered. Datasource: vexa-flows-db.\n\nA \"team\" is the `#group:<name>` tag the organizer put in the invite — the only place in the\nwhole substrate where a meeting declares which team it belongs to. THIS IS A LIMIT, not a\nmeasurement: a deployment that does not use the group convention reads 0 here forever while\nbeing fully adopted. Read it next to P11, which shows the untagged share explicitly.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P6 · Teams covered. Datasource: vexa-flows-db.\n--\n-- A \"team\" is the `#group:<name>` tag the organizer put in the invite — the only place in the\n-- whole substrate where a meeting declares which team it belongs to. THIS IS A LIMIT, not a\n-- measurement: a deployment that does not use the group convention reads 0 here forever while\n-- being fully adopted. Read it next to P11, which shows the untagged share explicitly.\nSELECT count(DISTINCT lower(btrim(r.subject_refs::jsonb->>'group')))::bigint AS \"Teams covered\"\nFROM reaction r\nWHERE r.event_type = 'meeting.completed'\n  AND btrim(coalesce(r.subject_refs::jsonb->>'group', '')) <> ''\n  AND to_timestamp(r.created_at) >= now() - make_interval(days => ('$window_days')::int);\n"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Invites carrying an attendee roster",
+      "description": "P10 · Invite roster coverage — READ THIS BEFORE P7. Datasource: vexa-flows-db.\n\nThe share of invites in the window that arrived carrying a non-empty attendee roster. It is\nnot an adoption metric; it is the trustworthiness gauge for every attendee-derived number on\nthis dashboard. At 0% the second-invite panels are blank because the input is missing, NOT\nbecause nobody forwarded an invite — and those two states look identical without this panel.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P10 · Invite roster coverage — READ THIS BEFORE P7. Datasource: vexa-flows-db.\n--\n-- The share of invites in the window that arrived carrying a non-empty attendee roster. It is\n-- not an adoption metric; it is the trustworthiness gauge for every attendee-derived number on\n-- this dashboard. At 0% the second-invite panels are blank because the input is missing, NOT\n-- because nobody forwarded an invite — and those two states look identical without this panel.\nSELECT round(100.0 * count(*) FILTER (\n         WHERE jsonb_typeof(r.subject_refs::jsonb->'participants') = 'array'\n           AND jsonb_array_length(r.subject_refs::jsonb->'participants') > 0)\n       / nullif(count(*), 0), 1) AS \"Invites carrying an attendee roster %\"\nFROM reaction r\nWHERE r.event_type = 'invite.received'\n  AND to_timestamp(r.created_at) >= now() - make_interval(days => ('$window_days')::int);\n"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Second invites per week",
+      "description": "P9 · Second invites per week — the spread curve. Datasource: vexa-flows-db.\n\nEach point is the number of people who, in that ISO week, organized their FIRST invite having\npreviously only ever been an attendee. This is P7's numerator given a time axis; it is the\nline the champion shows a department head, because it goes up without us in the room.\n\nCALENDAR BUCKETS ARE PINNED TO UTC (`AT TIME ZONE 'UTC'`), and that is load-bearing rather\nthan tidy: `to_timestamp` yields a timestamptz, `date_trunc` on a timestamptz resolves in the\nSESSION's timezone, and Grafana sets that from the dashboard's `timezone: browser`. Without\nthe pin the same database showed 2026-09 to one reader and 2026-08 to another — i.e. which\nbucket a person landed in depended on where the reader was sitting. Caught by rendering it;\none test session cannot see it.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "-- P9 · Second invites per week — the spread curve. Datasource: vexa-flows-db.\n--\n-- Each point is the number of people who, in that ISO week, organized their FIRST invite having\n-- previously only ever been an attendee. This is P7's numerator given a time axis; it is the\n-- line the champion shows a department head, because it goes up without us in the room.\n--\n-- CALENDAR BUCKETS ARE PINNED TO UTC (`AT TIME ZONE 'UTC'`), and that is load-bearing rather\n-- than tidy: `to_timestamp` yields a timestamptz, `date_trunc` on a timestamptz resolves in the\n-- SESSION's timezone, and Grafana sets that from the dashboard's `timezone: browser`. Without\n-- the pin the same database showed 2026-09 to one reader and 2026-08 to another — i.e. which\n-- bucket a person landed in depended on where the reader was sitting. Caught by rendering it;\n-- one test session cannot see it.\nWITH inv AS (\n  SELECT r.subject_refs::jsonb AS refs, r.created_at AS ts\n  FROM reaction r\n  WHERE r.event_type = 'invite.received'\n),\norganized AS (\n  SELECT lower(btrim(refs->>'organizer')) AS email, min(ts) AS first_organized\n  FROM inv\n  WHERE btrim(coalesce(refs->>'organizer', '')) <> ''\n  GROUP BY 1\n),\nattended AS (\n  SELECT lower(btrim(p)) AS email, min(i.ts) AS first_attended\n  FROM inv i\n  CROSS JOIN LATERAL jsonb_array_elements_text(\n    CASE WHEN jsonb_typeof(i.refs->'participants') = 'array'\n         THEN i.refs->'participants' ELSE '[]'::jsonb END) AS p\n  WHERE btrim(p) <> ''\n  GROUP BY 1\n),\ncohort AS (\n  SELECT a.email, a.first_attended, o.first_organized\n  FROM attended a\n  LEFT JOIN organized o ON o.email = a.email\n  WHERE o.first_organized IS NULL OR o.first_organized > a.first_attended\n)\nSELECT date_trunc('week', to_timestamp(first_organized) AT TIME ZONE 'UTC') AS \"time\",\n       count(*)::bigint AS \"second invites\"\nFROM cohort\nWHERE first_organized IS NOT NULL\nGROUP BY 1\nORDER BY 1;\n"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Distinct people in captured meetings, per week",
+      "description": "P2 · Distinct people in captured meetings, per week. Datasource: vexa-flows-db.\n\nNAMED FOR WHAT IT COMPUTES, deliberately. It is not \"active users over time\": active carries\na trailing window and a threshold ($window_days, $min_meetings), and a rolling re-evaluation\nof that per week is a different and much heavier query. This is the raw reach curve — how\nmany distinct people a captured meeting touched in each ISO week — and P1 is the thresholded\nnumber the meter reads. Do not quote this one as an active-user count.\n\nCALENDAR BUCKETS ARE PINNED TO UTC (`AT TIME ZONE 'UTC'`), and that is load-bearing rather\nthan tidy: `to_timestamp` yields a timestamptz, `date_trunc` on a timestamptz resolves in the\nSESSION's timezone, and Grafana sets that from the dashboard's `timezone: browser`. Without\nthe pin the same database showed 2026-09 to one reader and 2026-08 to another — i.e. which\nbucket a person landed in depended on where the reader was sitting. Caught by rendering it;\none test session cannot see it.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "-- P2 · Distinct people in captured meetings, per week. Datasource: vexa-flows-db.\n--\n-- NAMED FOR WHAT IT COMPUTES, deliberately. It is not \"active users over time\": active carries\n-- a trailing window and a threshold ($window_days, $min_meetings), and a rolling re-evaluation\n-- of that per week is a different and much heavier query. This is the raw reach curve — how\n-- many distinct people a captured meeting touched in each ISO week — and P1 is the thresholded\n-- number the meter reads. Do not quote this one as an active-user count.\n--\n-- CALENDAR BUCKETS ARE PINNED TO UTC (`AT TIME ZONE 'UTC'`), and that is load-bearing rather\n-- than tidy: `to_timestamp` yields a timestamptz, `date_trunc` on a timestamptz resolves in the\n-- SESSION's timezone, and Grafana sets that from the dashboard's `timezone: browser`. Without\n-- the pin the same database showed 2026-09 to one reader and 2026-08 to another — i.e. which\n-- bucket a person landed in depended on where the reader was sitting. Caught by rendering it;\n-- one test session cannot see it.\nWITH completed AS (\n  SELECT r.subject_refs::jsonb AS refs,\n         date_trunc('week', to_timestamp(r.created_at) AT TIME ZONE 'UTC') AS wk\n  FROM reaction r\n  WHERE r.event_type = 'meeting.completed'\n),\npresent AS (\n  SELECT wk, lower(btrim(refs->>'organizer')) AS email\n  FROM completed\n  WHERE btrim(coalesce(refs->>'organizer', '')) <> ''\n  UNION\n  SELECT wk, lower(btrim(p))\n  FROM completed\n  CROSS JOIN LATERAL jsonb_array_elements_text(\n    CASE WHEN jsonb_typeof(refs->'participants') = 'array'\n         THEN refs->'participants' ELSE '[]'::jsonb END) AS p\n  WHERE btrim(p) <> ''\n)\nSELECT wk AS \"time\",\n       count(DISTINCT email)::bigint AS \"people in captured meetings\"\nFROM present\nGROUP BY wk\nORDER BY wk;\n"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Second-invite cohort",
+      "description": "P8 · Second-invite cohort — the four numbers behind P7. Datasource: vexa-flows-db.\n\nSame cohort as P7, shown as counts rather than one percentage, because a rate on a cohort of\nthree is not a finding. The median is in DAYS: `first_organized`/`first_attended` are the\nreaction table's own clock — epoch SECONDS in a DOUBLE PRECISION column — so the difference\ndivides by 86400.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 12,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P8 · Second-invite cohort — the four numbers behind P7. Datasource: vexa-flows-db.\n--\n-- Same cohort as P7, shown as counts rather than one percentage, because a rate on a cohort of\n-- three is not a finding. The median is in DAYS: `first_organized`/`first_attended` are the\n-- reaction table's own clock — epoch SECONDS in a DOUBLE PRECISION column — so the difference\n-- divides by 86400.\nWITH inv AS (\n  SELECT r.subject_refs::jsonb AS refs, r.created_at AS ts\n  FROM reaction r\n  WHERE r.event_type = 'invite.received'\n),\norganized AS (\n  SELECT lower(btrim(refs->>'organizer')) AS email, min(ts) AS first_organized\n  FROM inv\n  WHERE btrim(coalesce(refs->>'organizer', '')) <> ''\n  GROUP BY 1\n),\nattended AS (\n  SELECT lower(btrim(p)) AS email, min(i.ts) AS first_attended\n  FROM inv i\n  CROSS JOIN LATERAL jsonb_array_elements_text(\n    CASE WHEN jsonb_typeof(i.refs->'participants') = 'array'\n         THEN i.refs->'participants' ELSE '[]'::jsonb END) AS p\n  WHERE btrim(p) <> ''\n  GROUP BY 1\n),\ncohort AS (\n  SELECT a.email, a.first_attended, o.first_organized\n  FROM attended a\n  LEFT JOIN organized o ON o.email = a.email\n  WHERE o.first_organized IS NULL OR o.first_organized > a.first_attended\n)\nSELECT\n  count(*)::bigint AS \"attendee-only cohort\",\n  count(*) FILTER (WHERE first_organized IS NOT NULL)::bigint AS \"later organized\",\n  round(100.0 * count(*) FILTER (WHERE first_organized IS NOT NULL)\n        / nullif(count(*), 0), 1) AS \"rate %\",\n  (SELECT round((percentile_cont(0.5) WITHIN GROUP (\n                   ORDER BY (first_organized - first_attended)) / 86400.0)::numeric, 1)\n   FROM cohort WHERE first_organized IS NOT NULL) AS \"median days to second invite\"\nFROM cohort;\n"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Coverage by team",
+      "description": "P11 · Coverage by team. Datasource: vexa-flows-db.\n\nMeetings and distinct people per `#group:` tag inside the window. Untagged meetings are NOT\ndropped — they land in one explicit \"(no team tag)\" row, so the reader can see how much of\nthe estate the team breakdown is actually describing.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P11 · Coverage by team. Datasource: vexa-flows-db.\n--\n-- Meetings and distinct people per `#group:` tag inside the window. Untagged meetings are NOT\n-- dropped — they land in one explicit \"(no team tag)\" row, so the reader can see how much of\n-- the estate the team breakdown is actually describing.\nWITH completed AS (\n  SELECT r.subject_refs::jsonb AS refs\n  FROM reaction r\n  WHERE r.event_type = 'meeting.completed'\n    AND to_timestamp(r.created_at) >= now() - make_interval(days => ('$window_days')::int)\n),\nroster AS (\n  SELECT coalesce(nullif(lower(btrim(refs->>'group')), ''), '(no team tag)') AS team,\n         refs->>'meeting_id' AS meeting_id,\n         lower(btrim(refs->>'organizer')) AS email\n  FROM completed\n  WHERE btrim(coalesce(refs->>'organizer', '')) <> ''\n  UNION\n  SELECT coalesce(nullif(lower(btrim(refs->>'group')), ''), '(no team tag)'),\n         refs->>'meeting_id',\n         lower(btrim(p))\n  FROM completed\n  CROSS JOIN LATERAL jsonb_array_elements_text(\n    CASE WHEN jsonb_typeof(refs->'participants') = 'array'\n         THEN refs->'participants' ELSE '[]'::jsonb END) AS p\n  WHERE btrim(p) <> ''\n)\nSELECT team AS \"team\",\n       count(DISTINCT meeting_id)::bigint AS \"meetings captured\",\n       count(DISTINCT email)::bigint AS \"people\"\nFROM roster\nGROUP BY team\nORDER BY 2 DESC, 1;\n"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Active users by calendar month (usage report)",
+      "description": "P12 · Active users by calendar month — THE CONSENTED USAGE REPORT.\nDatasource: vexa-flows-db.\n\nThe same definition as P1, bucketed by calendar month instead of a trailing window, because\nan invoice is issued per month and a trailing-30-day number is not a month. This table IS the\nartifact the customer exports and sends: it carries counts of people, never their addresses.\n\nThe definition it counts is PROVISIONAL and founder-open (PRD §16.5). Monthly-versus-weekly\nis worth seven figures at 40,000 staff (Grow-Vision § depth beats breadth) — so this table is\na proposal in a shape a human can argue with, not a settled bill.\n\nCALENDAR BUCKETS ARE PINNED TO UTC (`AT TIME ZONE 'UTC'`), and that is load-bearing rather\nthan tidy: `to_timestamp` yields a timestamptz, `date_trunc` on a timestamptz resolves in the\nSESSION's timezone, and Grafana sets that from the dashboard's `timezone: browser`. Without\nthe pin the same database showed 2026-09 to one reader and 2026-08 to another — i.e. which\nbucket a person landed in depended on where the reader was sitting. Caught by rendering it;\none test session cannot see it.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-flows-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-flows-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P12 · Active users by calendar month — THE CONSENTED USAGE REPORT.\n-- Datasource: vexa-flows-db.\n--\n-- The same definition as P1, bucketed by calendar month instead of a trailing window, because\n-- an invoice is issued per month and a trailing-30-day number is not a month. This table IS the\n-- artifact the customer exports and sends: it carries counts of people, never their addresses.\n--\n-- The definition it counts is PROVISIONAL and founder-open (PRD §16.5). Monthly-versus-weekly\n-- is worth seven figures at 40,000 staff (Grow-Vision § depth beats breadth) — so this table is\n-- a proposal in a shape a human can argue with, not a settled bill.\n--\n-- CALENDAR BUCKETS ARE PINNED TO UTC (`AT TIME ZONE 'UTC'`), and that is load-bearing rather\n-- than tidy: `to_timestamp` yields a timestamptz, `date_trunc` on a timestamptz resolves in the\n-- SESSION's timezone, and Grafana sets that from the dashboard's `timezone: browser`. Without\n-- the pin the same database showed 2026-09 to one reader and 2026-08 to another — i.e. which\n-- bucket a person landed in depended on where the reader was sitting. Caught by rendering it;\n-- one test session cannot see it.\nWITH completed AS (\n  SELECT r.subject_refs::jsonb AS refs,\n         date_trunc('month', to_timestamp(r.created_at) AT TIME ZONE 'UTC') AS mon\n  FROM reaction r\n  WHERE r.event_type = 'meeting.completed'\n),\npresent AS (\n  SELECT mon, lower(btrim(refs->>'organizer')) AS email, refs->>'meeting_id' AS meeting_id\n  FROM completed\n  WHERE btrim(coalesce(refs->>'organizer', '')) <> ''\n  UNION\n  SELECT mon, lower(btrim(p)), refs->>'meeting_id'\n  FROM completed\n  CROSS JOIN LATERAL jsonb_array_elements_text(\n    CASE WHEN jsonb_typeof(refs->'participants') = 'array'\n         THEN refs->'participants' ELSE '[]'::jsonb END) AS p\n  WHERE btrim(p) <> ''\n)\nSELECT to_char(mon, 'YYYY-MM') AS \"month\",\n       count(*)::bigint AS \"active users\"\nFROM (\n  SELECT mon, email\n  FROM present\n  WHERE meeting_id IS NOT NULL\n  GROUP BY mon, email\n  HAVING count(DISTINCT meeting_id) >= ('$min_meetings')::int\n) t\nGROUP BY mon\nORDER BY mon DESC;\n"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Accounts on the platform",
+      "description": "P5 · Accounts on the platform. Datasource: vexa-app-db.\n\nNOT the same number as P1, and the difference is the point: an account exists the moment\nsomebody is provisioned; an ACTIVE user is somebody a captured meeting actually touched. The\ninvoice reads P1. This panel is here so the gap between \"provisioned\" and \"active\" is visible\nrather than assumed.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-app-db"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 19,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-app-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P5 · Accounts on the platform. Datasource: vexa-app-db.\n--\n-- NOT the same number as P1, and the difference is the point: an account exists the moment\n-- somebody is provisioned; an ACTIVE user is somebody a captured meeting actually touched. The\n-- invoice reads P1. This panel is here so the gap between \"provisioned\" and \"active\" is visible\n-- rather than assumed.\nSELECT\n  count(*)::bigint AS \"Accounts\",\n  count(*) FILTER (\n    WHERE created_at >= (now() AT TIME ZONE 'utc')\n                        - make_interval(days => ('$window_days')::int))::bigint\n    AS \"New in window\"\nFROM users;\n"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Meetings completed (platform cross-check)",
+      "description": "P4 · Meetings completed (platform) — the INDEPENDENT cross-check on P3.\nDatasource: vexa-app-db (the application database).\n\nTwo counts of the same thing from two databases that do not talk to each other. They will not\nmatch exactly — the platform counts every bot dispatch that completed, flows counts only the\nones a flow reacted to — and the GAP is the finding: a large one means completions are not\nreaching flows, which silently flattens every adoption number on this dashboard.\n\n`meetings.created_at` is a naive UTC timestamp (server_default now() on a UTC server), so the\nwindow is computed in UTC rather than in the session's zone.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vexa-app-db"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 19,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vexa-app-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "-- P4 · Meetings completed (platform) — the INDEPENDENT cross-check on P3.\n-- Datasource: vexa-app-db (the application database).\n--\n-- Two counts of the same thing from two databases that do not talk to each other. They will not\n-- match exactly — the platform counts every bot dispatch that completed, flows counts only the\n-- ones a flow reacted to — and the GAP is the finding: a large one means completions are not\n-- reaching flows, which silently flattens every adoption number on this dashboard.\n--\n-- `meetings.created_at` is a naive UTC timestamp (server_default now() on a UTC server), so the\n-- window is computed in UTC rather than in the session's zone.\nSELECT count(*)::bigint AS \"Meetings completed (platform)\"\nFROM meetings\nWHERE status = 'completed'\n  AND created_at >= (now() AT TIME ZONE 'utc') - make_interval(days => ('$window_days')::int);\n"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    }
+  ]
+}

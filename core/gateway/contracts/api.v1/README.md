@@ -17,7 +17,9 @@ tale — it must be reconciled to the shapes below).
   `GET /recordings/{recording_id}`, `GET /meetings`.
 - **Shapes** (goldens conform to the frozen `#/components/schemas/*`): `MeetingResponse`,
   `MeetingListResponse`, `TranscriptionResponse`, `TranscriptionSegment`,
-  `BotStatusResponse`. Canonical `MeetingStatus` enum =
+  `BotStatusResponse`. One additive field since the capture: `MeetingResponse.data.artifact_deletion`
+  (`ArtifactDeletion`, `state: pending | completed`) — the stamp meeting-api writes when the owner
+  deletes a meeting's transcript and recordings, which agent-api and the terminal read. Canonical `MeetingStatus` enum =
   `[requested, joining, awaiting_admission, active, needs_human_help, stopping, completed, failed]`.
 
 ## The seam (what conforms to this)
@@ -81,8 +83,8 @@ that gap with the **reverse** check (contract ⊆ impl) plus a **golden-shape** 
   `running`) fails — not just a removed path.
 
 **`KNOWN_GAPS.json` is the audited exception path.** It records, with a reason + issue link for each
-row, the sealed routes the 0.12 core genuinely cannot serve yet (`known_gaps`: e.g. `POST .../chat`
-send, `POST /meetings/{id}/transcribe`, the bot-command avatar/screen/speak routes) and the prefixes
+row, the sealed routes the 0.12 core genuinely cannot serve yet (`known_gaps`: e.g.
+`POST /meetings/{id}/transcribe`, the bot-command avatar/screen/speak routes) and the prefixes
 owned by *other* services (`owned_elsewhere`: `/admin` → admin-api, `/api` → agent-api, `/mcp` → the
 mcp service, …). The gate prints every entry loudly (`SEALED-BUT-WAIVED` / `OWNED-ELSEWHERE`) on each
 run. Adding a row is a **deliberate, diff-visible change in this sealed dir** — and because the file is

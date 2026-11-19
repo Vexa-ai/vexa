@@ -13,19 +13,26 @@ HTTP status the gateway forwards verbatim:
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
-from typing import Optional
+import secrets
+from typing import Awaitable, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..collector.meeting_link import parse_meeting_url
+from ..meeting_url_redaction import redact_url, strip_host_tokens
+from .. import identity_token
+from ..regime import require_person_or_granted, shared_bot_workspace
+from ..workspace_write import require_writable, writable_workspaces
 from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
 )
 from .env_flags import InvalidFlagValue, resolve_spawn_flag
+from .meeting_host import MeetingHostRefused, meeting_host_allowance
 from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
@@ -38,17 +45,29 @@ from .ports import (
     TranscriptionNotConfigured,
 )
 from .invocation import SPAWNABLE_PLATFORMS
+from .transcription_language import LanguageRefused, legacy_spawn_language
 from .service import (
+    VOICE_NOTE_PLATFORM,
+    CALL_PLATFORM,
     DuplicateMeeting,
     construct_meeting_url,
     request_bot,
     resolve_teams_base_host,
+    teams_id_needs_meeting_url,
 )
 
 #: Max length of a native meeting id, mirroring the `meetings.platform_specific_id`
 #: varchar(255) column. Bounded at the request boundary so an over-long id is a typed
 #: 422 here rather than an asyncpg truncation 500 deep in the spawn path (#843).
 NATIVE_MEETING_ID_MAX_LEN = 255
+
+#: Max length of a requested bot display name. A meeting UI shows a few dozen characters; an
+#: unbounded name used to ride the whole spawn path into the runtime (a 12 MB name failed there
+#: with a 502 and left a created container behind; a 5,000-char one spawned a bot).
+BOT_NAME_MAX_LEN = 100
+
+#: The words that keep a bot's meeting private to the caller, whatever workspace their chat works in.
+PRIVATE_WORKSPACE_WORDS = frozenset({"personal", "desk"})
 
 #: URL-structural characters that must never appear in a native_meeting_id. The id is
 #: interpolated into a URL PATH SEGMENT (`construct_meeting_url` — google_meet/teams) and reused
@@ -157,17 +176,19 @@ def _validate_meeting_url(url: object) -> str:
       * must parse cleanly and use ``https`` (the bot joins real deployments over TLS only),
       * host must be non-empty and not ``localhost``/``*.localhost``,
       * host must not be an IP literal (deployments are hostname-addressed; IP literals are the
-        cheap way to reach loopback/link-local/private ranges — 10.x, 169.254.x, 127.x, …).
+        cheap way to reach loopback/link-local/private ranges — 10.x, 169.254.x, 127.x, …),
+        unless the operator's ``VEXA_MEETING_HOST_ALLOW`` lists its network.
 
-    Static checks only — no DNS resolution on the spawn path (a hostname that RESOLVES to a
-    private IP is contained by network policy around the bot runtime, and slow-fails there)."""
+    These are the static checks. The host rule — the host belongs to the platform, and every
+    address it resolves to is public or operator-listed — runs in ``request_bot``
+    (``meeting_host.check_meeting_url``) once the platform is known, on every spawn path."""
     if not isinstance(url, str) or not url.strip():
         raise HTTPException(status_code=422, detail="meeting_url must be a non-empty string")
     raw = url.strip()
     try:
         parsed = urlparse(raw)
     except ValueError:
-        raise HTTPException(status_code=422, detail=f"meeting_url does not parse as a URL: {raw!r}")
+        raise HTTPException(status_code=422, detail=f"meeting_url does not parse as a URL: {redact_url(raw)!r}")
     if parsed.scheme != "https":
         raise HTTPException(
             status_code=422,
@@ -185,15 +206,19 @@ def _validate_meeting_url(url: object) -> str:
             detail="meeting_url cannot target localhost",
         )
     try:
-        ipaddress.ip_address(host)
+        literal = ipaddress.ip_address(host)
     except ValueError:
         pass  # hostname, not an IP literal — OK
     else:
+        if meeting_host_allowance().admits_ip(literal):
+            return raw
         raise HTTPException(
             status_code=422,
             detail="meeting_url cannot be an IP literal — use the deployment's hostname",
         )
-    return raw
+    # A host-only token (Zoom's `zak`) starts the meeting AS ITS HOST; the bot joins as a guest and
+    # never uses it, so it is dropped here, before it can reach a stored row, a log or the bot.
+    return strip_host_tokens(raw)
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -250,6 +275,11 @@ def build_router(
     repo: MeetingRepo,
     runtime: RuntimeClient,
     authority=None,
+    *,
+    transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
+    redis_grant: "Optional[Callable[[str, int], Awaitable[str]]]" = None,
+    calls=None,
+    bot_accounts=None,
 ) -> APIRouter:
     """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` + authority ports.
 
@@ -263,17 +293,42 @@ def build_router(
     the service already has (``service._bot_name_from_context``)."""
     router = APIRouter()
 
-    @router.post("/bots", status_code=201)
+    # A worker dispatched without a person does not put a bot into a meeting (`regime.py`) — unless
+    # it is a routine its person granted `bot.request` when they made it (flows phase 0).
+    @router.post("/bots", status_code=201, dependencies=[Depends(require_person_or_granted("bot.request"))])
     async def create_bot(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
         x_user_limits: Optional[str] = Header(default=None),
+        # The caller's workspace memberships, injected by the gateway from identity. Read ONLY to
+        # authorize a `workspace_id` — named in the body or defaulted below — against membership.
+        x_user_workspaces: Optional[str] = Header(default=None),
+        # The chat's target workspace, on a worker's signed identity. A DEFAULT for `workspace_id`,
+        # never a grant: it binds only a workspace the caller is already a member of.
+        x_user_delegation_target: Optional[str] = Header(default=None),
         x_user_webhook_url: Optional[str] = Header(default=None),
         x_user_webhook_secret: Optional[str] = Header(default=None),
         x_user_webhook_events: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
         max_concurrent = _resolve_max_concurrent(x_user_limits)
+        # A ROOM'S BOT IS KEYED TO ITS PAYER (int-s1, D2): a workspace principal's own account owns
+        # nothing and may run no bot (`max_concurrent_bots` 0), so the bot — its row, its concurrency
+        # count and its spend — is the account the principal bills to (`x-user-bills-to`, signed by
+        # the gateway from identity's `principals` table). The principal and its workspace ride on the
+        # meeting's data (`data.room_principal`): the meeting is the ROOM'S, and no personal
+        # credential of the payer's owns it (collector.share_access.owns) — they read it as a member of
+        # its workspace. `shared_bot_workspace` below still binds the bot to a workspace in the room's
+        # ceiling, never to the payer's private meetings. identity answers the payer's cap.
+        room_principal = None
+        if identity_token.is_workspace_principal(request.headers):
+            payer = (request.headers.get(identity_token.DELEGATION_HEADERS["bills_to"]) or "").strip()
+            if not payer.isdigit():
+                raise HTTPException(status_code=403, detail="a workspace principal with no payer runs no bot")
+            room_principal = {"principal": str(user_id),
+                              "principal_workspace": (request.headers.get(
+                                  identity_token.DELEGATION_HEADERS["principal_workspace"]) or "").strip()}
+            user_id = int(payer)
         # Per-user webhook config the gateway forwarded from identity (persisted into meeting.data).
         webhook_events = None
         if x_user_webhook_events:
@@ -312,6 +367,51 @@ def build_router(
         platform = str(body.get("platform", "")).strip()
         native_meeting_id = str(body.get("native_meeting_id", "")).strip()
         meeting_url = body.get("meeting_url")
+        # A VOICE NOTE (#1783) has no meeting to join: no URL, and its id is ours to mint when the
+        # caller sends none. Its audio arrives over WS /voice-notes/{native_meeting_id}/stream.
+        speaker_name = None
+        if platform == VOICE_NOTE_PLATFORM:
+            if meeting_url is not None or body.get("passcode") or body.get("teams_base_host"):
+                raise HTTPException(
+                    status_code=422,
+                    detail="a voice_note has no meeting to join: send no meeting_url, passcode or "
+                           "teams_base_host",
+                )
+            if not native_meeting_id:
+                native_meeting_id = f"vn-{secrets.token_hex(6)}"
+            speaker_name = body.get("speaker_name")
+            if speaker_name is not None:
+                if not isinstance(speaker_name, str) or not speaker_name.strip() or len(speaker_name) > 120:
+                    raise HTTPException(status_code=422,
+                                        detail="'speaker_name' must be a non-empty string of at most 120 characters")
+                speaker_name = speaker_name.strip()
+        # A CALL (#1783) is a room on this deployment's LiveKit server: no URL, an id we mint, and
+        # the room created (with its transcription notice) before the row and the listener exist.
+        prepared_call = None
+        if platform == CALL_PLATFORM:
+            if meeting_url is not None or body.get("passcode") or body.get("teams_base_host") or native_meeting_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="a vexa_call is a room we create: send no meeting_url, passcode, "
+                           "teams_base_host or native_meeting_id",
+                )
+            from ..calls import CallsNotDeployed, prepare_call
+            try:
+                prepared_call = await prepare_call(calls, user_id=user_id, session_id=body.get("session_id"),
+                                                   transcribe=body.get("transcribe"))
+            except CallsNotDeployed as e:
+                raise HTTPException(status_code=503, detail={"error": "calls_not_deployed", "message": str(e)})
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            native_meeting_id = prepared_call.native_meeting_id
+            # AN UNTRANSCRIBED CALL STARTS NO TRANSCRIBER (a private or incognito chat's call): no
+            # listener joins the room, so nothing captures its audio, and no meeting row keeps a
+            # trace of it. The room alone is the call; it closes on its own when it empties.
+            if not prepared_call.transcribed:
+                return JSONResponse(status_code=201, content={
+                    "id": None, "platform": CALL_PLATFORM, "native_meeting_id": native_meeting_id,
+                    "status": "active", "transcribed": False, "data": {"call": prepared_call.data},
+                })
         # A caller-supplied meeting_url is an any-URL passthrough to the bot's browser
         # (zoom/jitsi) — validate at the point of entry (SSRF hygiene, 422 on violation).
         if meeting_url is not None:
@@ -350,7 +450,7 @@ def build_router(
                     status_code=422,
                     detail=(
                         "'native_meeting_id' is required: it could not be derived from "
-                        f"meeting_url '{meeting_url}' (unrecognized meeting link)"
+                        f"meeting_url '{redact_url(meeting_url)}' (unrecognized meeting link)"
                     ),
                 )
             derived_platform, native_meeting_id = derived
@@ -408,6 +508,20 @@ def build_router(
                         "'passcode' or supply the full 'meeting_url' instead"
                     ),
                 )
+        # A Teams THREAD id without its link is an address Teams answers with a sign-in page: the
+        # tenant that makes it joinable rides in the link's `context`, not in the id
+        # (`service._TEAMS_THREAD_ID`). Accepting it was a 201 for a bot that could only end
+        # `teams_auth_redirect`; refuse it here, before any DB write, and name the fix.
+        if platform == "teams" and not meeting_url and teams_id_needs_meeting_url(native_meeting_id or ""):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "a Teams meeting-thread id ('19:…@thread.v2') cannot be joined on its own: "
+                    "Teams needs the organizer's tenant from the link's 'context' and otherwise "
+                    "sends the bot to a sign-in page — supply the full 'meeting_url' (the Join link "
+                    "as Teams gave it), or the meeting's numeric ID with its 'passcode'"
+                ),
+            )
         # Reject a platform the meeting-bot flow cannot invoke, up front (→ 422) and BEFORE any DB
         # write. Without this, a platform outside the sealed invocation.v1 enum but WITH a
         # meeting_url (api.v1 seals more platforms than invocation.v1 — `browser_session`, #816)
@@ -434,7 +548,8 @@ def build_router(
         # CONSTRUCTIBLE — the platform has a URL template (google_meet/teams), or the caller supplied an
         # explicit meeting_url (required for zoom AND jitsi — a jitsi room name is deployment-scoped, so
         # only the full URL says WHICH deployment to join).
-        if not meeting_url and construct_meeting_url(platform, native_meeting_id) is None:
+        if (platform not in (VOICE_NOTE_PLATFORM, CALL_PLATFORM) and not meeting_url
+                and construct_meeting_url(platform, native_meeting_id) is None):
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -444,6 +559,29 @@ def build_router(
             )
 
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
+        if prepared_call is not None:
+            # A call's transcription is the room's notice: one source, set when the room was made.
+            transcribe_enabled = prepared_call.transcribed
+
+        # WHICH BOT ACCOUNT THE BOT JOINS AS (ADR-0049). Optional: an id, "default" (also when the
+        # field is absent) or "none". "default" is the caller's most recently verified account for
+        # this platform, else a company account they may use, else none — today's bot, unchanged.
+        # Resolved BEFORE any DB write: an explicit account that cannot be used is a typed refusal,
+        # never a row that then fails.
+        bot_account_choice = body.get("bot_account")
+        if bot_account_choice is not None and not isinstance(bot_account_choice, str):
+            raise HTTPException(status_code=422,
+                                detail="bot_account must be a bot account id, 'default' or 'none'")
+        bot_account = None
+        if bot_accounts is not None:
+            from ..bot_accounts import BotAccountRefused
+
+            try:
+                bot_account = await bot_accounts.resolve_for_spawn(user_id, platform, bot_account_choice)
+            except BotAccountRefused as e:
+                raise HTTPException(status_code=e.status, detail=e.detail)
+        elif bot_account_choice not in (None, "default", "none"):
+            raise HTTPException(status_code=409, detail="bot accounts are not configured on this deployment")
 
         # THE NAME THIS PERSON'S BOT SHOWS UP AS — an explicit name on THIS request, and nothing
         # else here. `request_bot` fills in this person's default from identity out of the bot
@@ -451,34 +589,118 @@ def build_router(
         # decision, bot name), and the deployment default underneath that. A FAILED LOOKUP NEVER
         # STOPS THE SPAWN: a name is a nicety, joining the call is the product.
         bot_name = body.get("bot_name")
+        if bot_name is not None:
+            if not isinstance(bot_name, str):
+                raise HTTPException(status_code=422, detail="bot_name must be a string")
+            if len(bot_name) > BOT_NAME_MAX_LEN:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"bot_name is {len(bot_name)} characters; "
+                        f"the maximum is {BOT_NAME_MAX_LEN}"
+                    ),
+                )
 
+        # WHICH WORKSPACE THIS MEETING BELONGS TO. Optional and additive: a caller that sends nothing
+        # gets exactly the meeting it got before — its own, visible to itself alone.
+        #
+        # The caller's OWN membership is what makes this safe to accept from a request body. The
+        # gateway resolves the api key to an identity and injects `x-user-workspaces` from that
+        # identity's memberships; the body cannot forge that header. So a `workspace_id` the caller
+        # does not belong to is REFUSED here rather than persisted — without the check, anyone with an
+        # api key could publish a meeting into a workspace they are not in, and every member of it
+        # would find a stranger's call in their list, on their meeting page and in its live
+        # transcript, since `data.workspace_id` is exactly what those surfaces trust.
+        #
+        # A WORKER'S BOT BELONGS TO WHERE ITS CHAT IS WORKING. An agent worker carries its chat's
+        # target workspace on the signed identity; with no `workspace_id` of its own, a bot it sends
+        # is that workspace's meeting when the caller is a member of it — the target may be their own
+        # desk, which is not a membership, and that is a private meeting as before. `personal` (or
+        # `desk`) keeps any bot private explicitly.
+        #
+        # A MEMBER WHO MAY ONLY READ cannot put a meeting into the workspace (`workspace_write`):
+        # binding publishes it to every member, which is a write. A worker's default follows the same
+        # rule — a read-only target leaves the bot private rather than failing the spawn.
+        workspace_id = body.get("workspace_id")
+        member_of = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        may_write = writable_workspaces(request.headers)
+        if isinstance(workspace_id, str) and workspace_id.strip() in PRIVATE_WORKSPACE_WORDS:
+            workspace_id = None
+        elif workspace_id is None:
+            target = (x_user_delegation_target or "").strip()
+            workspace_id = target if target and target in member_of and target in may_write else None
+        elif not isinstance(workspace_id, str) or not workspace_id.strip():
+            raise HTTPException(
+                status_code=422, detail="'workspace_id' must be a non-empty string")
+        else:
+            workspace_id = workspace_id.strip()
+            if workspace_id not in member_of:
+                raise HTTPException(
+                    status_code=403, detail=f"not a member of workspace '{workspace_id}'")
+            require_writable(workspace_id, request.headers)
+        shared_bot_workspace(request, workspace_id)
+
+        # 0.12 request shapes (`en-US`, `EN`, `English`) are read as the code they name — 0.12
+        # forwarded `language` untouched, so its callers never saw a 422 for them.
+        spawn_language, language_note = legacy_spawn_language(
+            body.get("language"), body.get("allowed_languages"))
+        if language_note:
+            logging.getLogger(__name__).info("legacy_spawn_language: %s", language_note)
         try:
-            meeting = await request_bot(
-                repo,
-                runtime,
-                authority=authority,
-                user_id=user_id,
-                platform=platform,
-                native_meeting_id=native_meeting_id,
-                bot_name=bot_name,
-                passcode=passcode,
-                meeting_url=meeting_url,
-                teams_base_host=teams_base_host,
-                language=body.get("language"),
-                task=body.get("task"),
-                transcription_tier=body.get("transcription_tier", "realtime"),
-                recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
-                transcribe_enabled=transcribe_enabled,
-                automatic_leave=_resolve_automatic_leave(body.get("automatic_leave")),
-                # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
-                # has no additionalProperties:false), so the wire is not rejected; documenting it as
-                # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.
-                continue_meeting=bool(body.get("continue_meeting", False)),
-                max_concurrent=max_concurrent,
-                webhook_url=x_user_webhook_url,
-                webhook_secret=x_user_webhook_secret,
-                webhook_events=webhook_events,
-            )
+            try:
+                meeting = await request_bot(
+                    repo,
+                    runtime,
+                    authority=authority,
+                    user_id=user_id,
+                    platform=platform,
+                    native_meeting_id=native_meeting_id,
+                    bot_name=bot_name,
+                    passcode=passcode,
+                    meeting_url=meeting_url,
+                    teams_base_host=teams_base_host,
+                    # transcription-language.v1 SpawnFields: request_bot checks them first and resolves
+                    # them against the person's and the deployment's defaults.
+                    language=spawn_language,
+                    allowed_languages=body.get("allowed_languages"),
+                    task=body.get("task"),
+                    transcription_tier=body.get("transcription_tier", "realtime"),
+                    recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
+                    transcribe_enabled=transcribe_enabled,
+                    automatic_leave=_resolve_automatic_leave(body.get("automatic_leave")),
+                    # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
+                    # has no additionalProperties:false), so the wire is not rejected; documenting it as
+                    # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.
+                    continue_meeting=bool(body.get("continue_meeting", False)),
+                    workspace_id=workspace_id,
+                    max_concurrent=max_concurrent,
+                    webhook_url=x_user_webhook_url,
+                    webhook_secret=x_user_webhook_secret,
+                    webhook_events=webhook_events,
+                    transcript_stream_purge=transcript_stream_purge,
+                    redis_grant=redis_grant,
+                    speaker_name=speaker_name,
+                    call_invocation=prepared_call.invocation if prepared_call else None,
+                    call_data=prepared_call.data if prepared_call else None,
+                    bot_account=bot_account,
+                    room_principal=room_principal,
+                )
+            except Exception:
+                # The room exists before the meeting does; a spawn refused or failed takes it away.
+                if prepared_call is not None:
+                    from ..calls import discard_call
+                    await discard_call(calls, prepared_call)
+                raise
+            if prepared_call is not None:
+                from ..calls import record_meeting
+                await record_meeting(calls, prepared_call, int(meeting["id"]))
+            if room_principal is not None:
+                logging.getLogger(__name__).info(
+                    "room bot: meeting=%s keyed to payer=%s for principal=%s workspace=%s",
+                    meeting.get("id"), user_id, room_principal["principal"],
+                    room_principal["principal_workspace"])
+        except (LanguageRefused, MeetingHostRefused) as e:
+            raise HTTPException(status_code=422, detail=str(e))
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))
         except AuthSessionNotConfigured as e:

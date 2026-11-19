@@ -13,7 +13,9 @@ import {
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
-import { resolveBotUiLocale } from "../browser-args";
+import { PINNED_UI_LOCALE, checkUiLocale } from "../shared/ui-locale";
+import { redactMeetingUrl, rethrowRedacted } from "../shared/url-redaction";
+import { watchGoogleJoinRefusal, throwIfGoogleJoinRefused } from "./refusal";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -171,7 +173,7 @@ async function firstVisibleSelector(
  */
 async function observedPageContext(page: Page): Promise<string> {
   let url = "?";
-  try { url = page.url(); } catch { /* best-effort */ }
+  try { url = redactMeetingUrl(page.url()); } catch { /* best-effort */ }
   try {
     const ctx: any = await page.evaluate(() => ({
       lang: document.documentElement.getAttribute("lang") || "",
@@ -212,16 +214,19 @@ export async function describeSelectorMiss(
  * Wait for the FIRST of an ordered selector list to become visible
  * (locale-agnostic selectors first, English text fallbacks last). Returns the
  * matched handle and the selector that won. On total failure: screenshot + LOUD
- * throw carrying the observed locale/URL.
+ * throw carrying the observed locale/URL. `guard` runs before every poll and
+ * ends the wait by throwing (Meet refusing the join, refusal.ts).
  */
 export async function waitForAnySelector(
   page: Page,
   selectors: string[],
   timeoutMs: number,
-  label: string
+  label: string,
+  guard?: () => Promise<void>
 ): Promise<{ handle: ElementHandle<Element>; selector: string }> {
   const started = Date.now();
   do {
+    if (guard) await guard();
     const hit = await firstVisibleSelector(page, selectors);
     if (hit) {
       log(`Located ${label} via selector: ${hit.selector}`);
@@ -256,7 +261,8 @@ export async function waitForLobbyCta(
   page: Page,
   selectors: string[],
   timeoutMs: number,
-  label: string
+  label: string,
+  guard?: () => Promise<void>
 ): Promise<{ handle: ElementHandle<Element>; selector: string }> {
   const started = Date.now();
   const graceMs = Math.min(CTA_SCAN_GRACE_MS, Math.floor(timeoutMs / 3));
@@ -265,6 +271,7 @@ export async function waitForLobbyCta(
   // no text-labelled button", never "the scan never got to look".
   let lastLabels: string[] | null = null;
   do {
+    if (guard) await guard();
     const hit = await firstVisibleSelector(page, selectors);
     if (hit) {
       log(`Located ${label} via selector: ${hit.selector}`);
@@ -291,8 +298,8 @@ export async function waitForLobbyCta(
 }
 
 /**
- * Append `?hl=<lang>` to the Meet URL so the lobby renders in the pinned UI
- * language (#856). This is the lever that matters specifically on the
+ * Append `?hl=<lang>` to the Meet URL so the lobby renders in the pinned English
+ * UI (#856). This is the lever that matters specifically on the
  * BOT_AUTHENTICATED path: a signed-in Google account's own language preference
  * otherwise wins over the browser's --lang/context locale. `hl` takes the bare
  * language subtag (en-US → en). An existing `hl` on the caller's URL is
@@ -316,8 +323,12 @@ export async function joinGoogleMeeting(
   botName: string,
   botConfig: BotConfig
 ): Promise<void> {
-  const navUrl = withPinnedMeetLocale(meetingUrl, resolveBotUiLocale());
-  await page.goto(navUrl, { waitUntil: "domcontentloaded" });
+  // Before navigating: Meet can refuse the join during the lobby load or on the click, and
+  // answers on the network first (refusal.ts). Every lobby wait below stops on that refusal.
+  watchGoogleJoinRefusal(page);
+  const refused = (stage: string) => () => throwIfGoogleJoinRefused(page, stage);
+  const navUrl = withPinnedMeetLocale(meetingUrl, PINNED_UI_LOCALE);
+  await page.goto(navUrl, { waitUntil: "domcontentloaded" }).catch(rethrowRedacted);
   await page.bringToFront();
 
   // Take screenshot after navigation
@@ -332,10 +343,10 @@ export async function joinGoogleMeeting(
   // Brief wait for page elements to settle (networkidle already ensures page loaded)
   await page.waitForTimeout(1000);
 
-  // Record the resolved UI locale on the SUCCESS path too (#856): the locale used
-  // to be invisible until a failure. observedPageContext reads navigator.language
-  // and <html lang> — with the pin in place these should read en-US / en.
+  // The lobby must render in the pinned English; a page that does not (a signed-in
+  // account's own language) is reported as ui_locale_mismatch (shared/ui-locale.ts).
   log(`Lobby locale (#856): ${await observedPageContext(page)}`);
+  await checkUiLocale(page, "google_meet", "lobby");
 
   // --- Humanized input layer (defeats Google Meet input-authenticity detection) ---
   const uiMode = resolveUiInteractionMode(botConfig);
@@ -426,7 +437,8 @@ export async function joinGoogleMeeting(
       page,
       googleAuthJoinCtaSelectors,
       30000,
-      "authenticated join CTA"
+      "authenticated join CTA",
+      refused("lobby, authenticated join CTA")
     );
 
     // Signed-out guard: a guest lobby (name input rendered) means the persisted
@@ -455,7 +467,8 @@ export async function joinGoogleMeeting(
       page,
       googleNameInputSelectors,
       120000,
-      "name input"
+      "name input",
+      refused("lobby, name input")
     );
     log("Name input field found.");
 
@@ -482,7 +495,8 @@ export async function joinGoogleMeeting(
       page,
       googleJoinButtonSelectors,
       60000,
-      "join button"
+      "join button",
+      refused("lobby, join button")
     );
     await clickHandle(joinHandle!, "ask_to_join");
     log(`${botName} joined the Google Meet Meeting.`);

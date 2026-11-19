@@ -73,6 +73,10 @@ export async function POST(request: NextRequest) {
     const scopes = body.scopes || body.scope; // "bot,tx" or "bot" — accept both
     const name = body.name;
     const expiresIn = body.expires_in; // seconds until expiry
+    // the terminal sign-in's own name — a key minted here is never a sign-in
+    if (typeof name === "string" && name.trim().toLowerCase() === "terminal-login") {
+      return NextResponse.json({ error: "That key name is reserved" }, { status: 422 });
+    }
 
     const params = new URLSearchParams();
     if (scopes) params.set("scopes", scopes);

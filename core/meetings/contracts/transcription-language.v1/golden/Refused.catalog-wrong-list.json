@@ -1,0 +1,1 @@
+{"shape": "LanguageCatalog", "value": {"languages": [{"code": "en", "name": "English"}, {"code": "fr", "name": "French"}], "default": {"language": null, "allowed_languages": []}, "model": "tiny.en", "source": "provider"}, "reason": "tiny.en is English-only; the list is exactly the catalog's"}

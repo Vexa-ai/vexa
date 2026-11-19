@@ -1,0 +1,1 @@
+{ "shape": "UserPreferenceUpdate", "value": { "language": "fr", "allowed_languages": ["de", "en"] }, "reason": "language must be one of allowed_languages" }

@@ -58,3 +58,6 @@ export * from "./disposable";
 export * from "./signal";
 export * from "./keybindings";
 export * from "./lifecycle";
+// the shared vocabulary of window events and chat-turn marks (constants only)
+export * from "./events";
+export * from "./turnMarks";

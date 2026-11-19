@@ -1,0 +1,18 @@
+{
+  "aud": "vexa-mcp",
+  "exp": 1767229200,
+  "iat": 1767225600,
+  "jti": "vec-granted-0001",
+  "scope": {
+    "flow": "user:42/bot-at-1213",
+    "grants": [
+      "bot.request",
+      "flow.retire_self"
+    ],
+    "regime": "autonomous",
+    "workspaces": [
+      "42"
+    ]
+  },
+  "sub": "42"
+}

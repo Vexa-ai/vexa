@@ -30,9 +30,9 @@ import flows_steps.common as common  # noqa: E402
 def identity(monkeypatch):
     """The identity edge, recorded. Returns the call log.
 
-    The internal secret is set because a flows deployment without one genuinely cannot call the
-    internal tier — `require_internal_secret` refusing is correct and is not weakened here."""
-    monkeypatch.setenv("INTERNAL_API_SECRET", "s" * 40)
+    The flows key is set because a flows deployment without one genuinely cannot reach identity —
+    `require_service_key` refusing is correct and is not weakened here."""
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s" * 40)
     # The identity DOOR must be named too. `ADMIN_API` is no longer a module constant with a
     # host-port default — flows-no-agents made it a lazy door that RAISES when
     # VEXA_FLOWS_ADMIN_API_URL is unset, on the grounds that a default names whatever else is
@@ -59,7 +59,8 @@ def test_a_setting_is_read_from_identity(identity):
     assert method == "GET"
     assert "/internal/users/57/settings" in url
     assert url.startswith(common.ADMIN_API), "flows must ask identity, not the gateway"
-    assert "X-Internal-Secret" in headers or "X-Admin-API-Key" in headers
+    assert headers.get("X-Vexa-Service-Key") == "s" * 40, "identity is reached through the service door"
+    assert "X-Internal-Secret" not in headers and "X-Admin-API-Key" not in headers
 
 
 def test_no_person_fact_reaches_the_agent_domain(identity):
@@ -100,7 +101,7 @@ def test_an_unreachable_identity_is_a_retry_and_never_a_default(monkeypatch):
     It mattered more than one wrong mail because the answer was CACHED with no expiry: a single
     refused connection during a rolling restart pinned that person to defaults for the life of the
     worker, while the identity row said something else the whole time."""
-    monkeypatch.setenv("INTERNAL_API_SECRET", "s" * 40)
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s" * 40)
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api.test")
     common.forget_person_settings()
     monkeypatch.setattr(common, "http", lambda *a, **k: (0, None))
@@ -115,7 +116,7 @@ def test_an_unreachable_identity_is_a_retry_and_never_a_default(monkeypatch):
 def test_a_failed_read_is_never_cached(monkeypatch):
     """THE HALF THAT OUTLIVED THE MAIL. The old shape cached whatever it decided, including the
     defaults it decided on a failure — so the wrong answer was permanent, not momentary."""
-    monkeypatch.setenv("INTERNAL_API_SECRET", "s" * 40)
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s" * 40)
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api.test")
     common.forget_person_settings()
     answers = [(503, {"detail": "identity restarting"}),

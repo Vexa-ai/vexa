@@ -5,6 +5,7 @@
   "reserved_note": "superuser_reserved_connections + migrations/admin/ad-hoc psql headroom",
   "services": {
     "admin-api": { "helm_key": "adminApi", "pool_size": 5, "max_overflow": 10 },
-    "meeting-api": { "helm_key": "meetingApi", "pool_size": 5, "max_overflow": 10 }
+    "meeting-api": { "helm_key": "meetingApi", "pool_size": 5, "max_overflow": 10 },
+    "agent-api": { "helm_key": "agentApi", "pool_size": 5, "max_overflow": 0, "note": "ADR-0048: the session store holds ONE DB-API connection per replica (control_plane/session_store.py, no pool); budgeted at 5 because the gate compares any explicit pool literal in the tree against every service's ceiling, so a ceiling under the smallest literal it may meet would read as an under-count. Over-counts by 4 per replica, never under" }
   }
 }

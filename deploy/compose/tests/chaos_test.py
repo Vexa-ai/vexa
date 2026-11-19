@@ -59,9 +59,10 @@ def _restart_state(service: str) -> tuple[int, str]:
     return int(rc), _inspect(cid, "{{.State.StartedAt}}")
 
 
-def _redis_network(cid: str) -> str:
-    nets = _inspect(cid, "{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}").split()
-    return nets[0] if nets else ""
+def _redis_networks(cid: str) -> list[str]:
+    """Every network redis sits on (the control plane plus the bot and worker networks): a partition
+    must take it off all of them, or a dependent simply reaches it over another."""
+    return _inspect(cid, "{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}").split()
 
 
 def _compose(*args: str):
@@ -139,6 +140,17 @@ def test_chaos_redis_refused_then_restored_no_restart(stack):
     time.sleep(45)
     _compose("start", "redis")
     assert _wait_redis_dependents_healthy(stack), "meeting-api /health never recovered after redis restart"
+    # A restarted Redis has lost every bot's ACL user until meeting-api defines it again, and the bot
+    # re-subscribes to its command channel only then: the bot recovering IS part of what this proves.
+    m = _meeting(stack, user_id, native_id)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        out = stack.redis_cli("PUBSUB", "NUMSUB", f"bot_commands:meeting:{m['id']}").split()
+        if len(out) >= 2 and out[-1].isdigit() and int(out[-1]) >= 1:
+            break
+        time.sleep(1)
+    else:
+        raise AssertionError("the bot never re-subscribed to its command channel after the redis restart")
 
     _stop_bot(stack, user_id, native_id)
     term = _wait_meeting(stack, user_id, native_id, statuses={"completed", "failed"}, timeout=90)
@@ -155,17 +167,20 @@ def test_chaos_redis_silent_drop_no_restart(stack):
     socket_timeout + health checks the dead socket raises and the pool revalidates; the run recovers
     with zero dependent restarts. Base: the client hangs on the dead socket indefinitely → stall."""
     cid = _container_id("redis")
-    net = _redis_network(cid)
-    assert cid and net, "could not resolve redis container/network"
+    nets = _redis_networks(cid)
+    assert cid and nets, "could not resolve redis container/network"
     before = {s: _restart_state(s) for s in _REDIS_DEPENDENTS}
     user_id = _create_user(stack, max_bots=5)
     native_id, _ = _spawn(stack, user_id, "immediate-stop")
     assert _wait_meeting(stack, user_id, native_id,
                          statuses={"active", "joining", "awaiting_admission"}, timeout=60), "no live meeting"
 
-    subprocess.run(["docker", "network", "disconnect", net, cid], capture_output=True, timeout=30)
+    for net in nets:
+        subprocess.run(["docker", "network", "disconnect", net, cid], capture_output=True, timeout=30)
     time.sleep(60)  # long enough that a bare (no-timeout) client would sit on the dead socket forever
-    subprocess.run(["docker", "network", "connect", net, cid], capture_output=True, timeout=30)
+    for net in nets:
+        subprocess.run(["docker", "network", "connect", "--alias", "redis", net, cid],
+                       capture_output=True, timeout=30)
     assert _wait_redis_dependents_healthy(stack), "meeting-api /health never recovered after redis reconnect"
 
     _stop_bot(stack, user_id, native_id)

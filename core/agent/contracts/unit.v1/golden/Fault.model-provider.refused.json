@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "refused",
+  "provider": "openrouter.ai",
+  "model": "no/such-model",
+  "status": 400,
+  "detail": "invalid model id",
+  "remedy": "Check the model name and its settings under Settings → Models."
+}

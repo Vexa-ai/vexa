@@ -8,18 +8,18 @@
 # A cache miss costs nothing — the build just proceeds cold, exactly as before.
 services:
   admin-api:
-    build: { cache_from: ["vexaai/v012-admin-api:buildcache"] }
+    build: { cache_from: ["vexaai/vexa-admin-api:buildcache"] }
   runtime:
-    build: { cache_from: ["vexaai/v012-runtime:buildcache"] }
+    build: { cache_from: ["vexaai/vexa-runtime:buildcache"] }
   agent-worker:
-    build: { cache_from: ["vexaai/v012-agent-worker:buildcache"] }
+    build: { cache_from: ["vexaai/vexa-agent-worker:buildcache"] }
   agent-api:
-    build: { cache_from: ["vexaai/v012-agent-api:buildcache"] }
+    build: { cache_from: ["vexaai/vexa-agent-api:buildcache"] }
   meeting-api:
-    build: { cache_from: ["vexaai/v012-meeting-api:buildcache"] }
+    build: { cache_from: ["vexaai/vexa-meeting-api:buildcache"] }
   gateway:
-    build: { cache_from: ["vexaai/v012-gateway:buildcache"] }
+    build: { cache_from: ["vexaai/vexa-gateway:buildcache"] }
   mcp:
-    build: { cache_from: ["vexaai/v012-mcp:buildcache"] }
+    build: { cache_from: ["vexaai/vexa-mcp:buildcache"] }
   terminal:
-    build: { cache_from: ["vexaai/v012-terminal:buildcache"] }
+    build: { cache_from: ["vexaai/vexa-terminal:buildcache"] }

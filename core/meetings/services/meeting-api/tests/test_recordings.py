@@ -214,7 +214,7 @@ def test_upload_route_requires_token():
 
 def test_upload_route_accepts_valid_token():
     client = _client()
-    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET, session_uid=SESSION_UID)
     r = client.post(
         "/internal/recordings/upload",
         headers={"Authorization": f"Bearer {token}"},

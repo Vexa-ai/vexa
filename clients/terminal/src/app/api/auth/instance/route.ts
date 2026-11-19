@@ -1,17 +1,27 @@
 /** Instance status for the login surface — UNAUTHENTICATED by design: the sign-in screen needs
- *  to know, before any identity exists, whether to show the one-time "set up your instance"
- *  admin-claim variant. Exposes ONLY {admin_exists} — a boolean a visitor could infer anyway
- *  (a claim screen is showing or it isn't); the internal secret stays server-side. Providers
- *  are NOT repeated here — the client already discovers them via /api/auth/providers.
+ *  to know, before any identity exists, one thing it cannot ask an authenticated edge for.
+ *
+ *  Exposes exactly TWO BOOLEANS, which a visitor infers from the screen anyway:
+ *    • `admin_exists` — is a claim screen showing or isn't it.
+ *    • `email_link` — does the card offer the emailed link (`VEXA_SIGNIN_METHODS`, oidcConfig.mjs).
+ *
+ *  It used to carry `global_setup` too (the company-layer gate, founder ruling 2026-09-02). That
+ *  gate is gone (founder ruling 2026-10-08: "let's remove global setup at all so that there is no
+ *  need to setup global at all - let it be empty with no data - it's fine"), and so is the field.
+ *  Nothing else crosses: in particular the company name, which would identify a customer to anyone
+ *  who curls an anonymous endpoint on a self-hosted box.
+ *
+ *  The internal secret stays server-side. OAuth providers are NOT repeated here — the client already
+ *  discovers them via /api/auth/providers. The emailed link is not a NextAuth provider, so whether it
+ *  is offered is said here.
  */
 import { NextResponse } from "next/server";
-import { instanceHasAdmin } from "../adminApi";
+import { instanceState } from "../adminApi";
+import { signinMethodEnabled } from "../oidcConfig.mjs";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json(
-    { admin_exists: await instanceHasAdmin() },
-    { headers: { "Cache-Control": "no-store" } },
-  );
+  const state = await instanceState();
+  return NextResponse.json({ admin_exists: state.admin_exists, email_link: signinMethodEnabled("email") }, { headers: { "Cache-Control": "no-store" } });
 }

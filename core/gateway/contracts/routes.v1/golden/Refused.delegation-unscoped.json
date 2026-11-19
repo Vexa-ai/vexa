@@ -1,0 +1,21 @@
+{
+  "why": "an unscoped row never reaches the authorizer that reads delegation",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "POST",
+        "path": "/agent/x",
+        "scopes": [],
+        "delegation": true
+      }
+    ]
+  }
+}

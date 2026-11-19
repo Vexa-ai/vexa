@@ -1,0 +1,18 @@
+{
+  "type": "transcription",
+  "session_uid": "abc-defg-hij",
+  "meeting_id": "abc-defg-hij",
+  "segments": [
+    {
+      "speaker": "Ada",
+      "text": "Shall we start?",
+      "start": 12.4,
+      "end": 14.1,
+      "abs_start_ms": 12400,
+      "absolute_start_time": "2026-10-09T09:00:12.400Z",
+      "completed": true,
+      "language": "en",
+      "segment_id": "sess-uid:s1:0"
+    }
+  ]
+}

@@ -36,8 +36,8 @@ import pytest
 from sqlite_double import SqliteDB
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-operator-tier",
-        "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://operator-tier:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://operator-tier:unreachable@127.0.0.1:1/flows"}
 
 #: The narrow key, for the tests that install one. Deliberately not a value in `_ENV`: whichever
 #: test module imports `flows_api` first wins, so an import-time constant is not a thing this file
@@ -224,9 +224,10 @@ def test_the_timeline_key_must_name_its_subject_too(api, narrow_key):
 def test_the_timeline_key_never_mints_a_token_on_the_named_persons_account(api, narrow_key,
                                                                           monkeypatch):
     """THE SHARPEST HALF OF E1c. `meetings=true` is the DEFAULT, and that path runs
-    `flows_timeline.service.fetch_meetings` -> `_user_key(uid)` -> `flows_steps.common.user_api_key`,
-    which asks admin-api to mint a `["bot","browser","tx"]` gateway token ON THE SUBJECT'S ACCOUNT.
-    A write, on a third party, from the credential documented as read-only and one-route.
+    `flows_timeline.service.fetch_meetings`, which reads meetings AS THE SUBJECT through the
+    gateway's service door. (It once minted a `["bot","browser","tx"]` gateway token on the
+    subject's account to do it.) Acting as a third party is not something the credential documented
+    as read-only and one-route may reach.
 
     The spy is on `fetch_meetings` as the route holds it — the single door to that whole chain — and
     it EXPLODES rather than returning, so a regression cannot pass by ignoring a return value."""

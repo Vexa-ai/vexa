@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/sdk-join.v1",
+  "$defs": {
+    "Config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "meetingId": {
+          "type": "string",
+          "pattern": "^[0-9]{9,11}$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "jwt": {
+          "type": "string",
+          "maxLength": 16384,
+          "minLength": 1
+        },
+        "password": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "onBehalfToken": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "zak": {
+          "type": "string",
+          "maxLength": 16384
+        }
+      },
+      "required": [
+        "meetingId",
+        "displayName",
+        "jwt"
+      ]
+    },
+    "Command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "start"
+            },
+            "config": {
+              "$ref": "#/$defs/Config"
+            }
+          },
+          "required": [
+            "version",
+            "kind",
+            "config"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "stop"
+            }
+          },
+          "required": [
+            "version",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "leave"
+            }
+          },
+          "required": [
+            "version",
+            "kind"
+          ]
+        }
+      ]
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "state"
+            },
+            "state": {
+              "enum": [
+                "initializing",
+                "authenticating",
+                "connecting",
+                "waiting_for_host",
+                "waiting_room",
+                "in_meeting",
+                "reconnecting",
+                "disconnecting",
+                "ended"
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "kind",
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "failure"
+            },
+            "code": {
+              "enum": [
+                "invalid_config",
+                "runtime_missing",
+                "native_error",
+                "authentication_failed",
+                "join_failed",
+                "protocol_error",
+                "process_exit",
+                "timeout",
+                "cancelled",
+                "left",
+                "ended_before_admission"
+              ]
+            },
+            "nativeCode": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "version",
+            "kind",
+            "code"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "secret": "delegation.v1-published-test-vector-key",
+  "now": 1767225600,
+  "subject": "42",
+  "regime": "autonomous",
+  "workspaces": [
+    "standup-notes",
+    "acme-account"
+  ],
+  "ttl_sec": 900,
+  "jti": "vec-auto-0001",
+  "header": {
+    "alg": "HS256",
+    "typ": "vxdlg"
+  },
+  "claims": {
+    "aud": "vexa-mcp",
+    "exp": 1767226500,
+    "iat": 1767225600,
+    "jti": "vec-auto-0001",
+    "scope": {
+      "regime": "autonomous",
+      "workspaces": [
+        "acme-account",
+        "standup-notes"
+      ]
+    },
+    "sub": "42"
+  },
+  "token": "vxd_eyJhbGciOiJIUzI1NiIsInR5cCI6InZ4ZGxnIn0.eyJhdWQiOiJ2ZXhhLW1jcCIsImV4cCI6MTc2NzIyNjUwMCwiaWF0IjoxNzY3MjI1NjAwLCJqdGkiOiJ2ZWMtYXV0by0wMDAxIiwic2NvcGUiOnsicmVnaW1lIjoiYXV0b25vbW91cyIsIndvcmtzcGFjZXMiOlsiYWNtZS1hY2NvdW50Iiwic3RhbmR1cC1ub3RlcyJdfSwic3ViIjoiNDIifQ.x4Yr_QL2IzI7cS_LhSXkHUvq1MupkIzExb92AW48oBE"
+}

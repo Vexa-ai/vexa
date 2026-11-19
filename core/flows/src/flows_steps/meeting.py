@@ -10,7 +10,8 @@ from flows import Block, Done, StepCtx, StepError, Wait
 # of real work, which the loop reports as "unexpected: NameError(...)" against the gateway rather
 # than against this file. Found while adding the prep step, not by a test: nothing exercises
 # dispatch_bot outside a live meeting.
-from .common import http, meetings_door, setting, user_api_key
+from .common import door_headers, http, meetings_door, setting
+from meeting_url_redaction import redact_url, redact_urls_in
 
 # THE FIXTURE-TRANSCRIPT INJECTION IS GONE (PRD decision 18d). When a rehearsed meeting completed
 # with no segments, this file used to write seven canned transcript rows into the MEETINGS database
@@ -21,10 +22,72 @@ from .common import http, meetings_door, setting, user_api_key
 # the words, and reaches flows the same way a real one does: through the gateway.
 
 
+def meeting_ref(uid: str, url: str) -> str:
+    """What a terminal deeplink calls this meeting.
+
+    The platform ROW id when the row exists; the NATIVE id when it does not yet — the row is
+    minted at bot dispatch (start − 2 min) and a prepare link is sent long before that. The
+    terminal resolves either against the person's own meeting list, so the earlier link is not a
+    worse link once the row lands. A lookup that fails degrades to the native id rather than
+    raising: a mail with a slightly weaker link beats no mail.
+    """
+    native = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+    try:
+        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(uid))
+    except StepError:
+        return native
+    rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
+    ids = [int(m["id"]) for m in rows
+           if isinstance(m, dict) and m.get("native_meeting_id") == native and m.get("id") is not None]
+    return str(max(ids)) if ids else native
+
+
+def ensure_meeting_row(uid: str, url: str, title: str | None = None,
+                       start_epoch: float | None = None) -> str:
+    """The row a person is about to be SHOWN must exist before they are shown it.
+
+    A prepare mail goes out long before dispatch_bot mints the meeting row, so its link used
+    to carry the NATIVE id — a Zoom number — and the terminal substituted that number into the
+    prep preset as the meeting's name. The agent then held nothing under it, said so, and reached
+    for the only meeting it could find. The meeting the invite described was never in the product.
+
+    So plan it here, as the organiser, out of what the invite already knew: the title, the start,
+    and the link. POST /meetings writes an INTENT row (scheduled), and dispatch_bot's
+    guarded create CLAIMS that same row in place at start − 2 min rather than inserting a second
+    (bot_spawn/adapters.py create_meeting_guarded, step 2b) — so the plan, the prep chat and
+    the transcript all live on ONE id.
+
+    auto_join is FALSE on purpose. The row carries a time, and the auto-join sweep would
+    otherwise dispatch its own bot on that time — a second dispatcher for a meeting this flow
+    already dispatches. One loop, one write surface.
+
+    Never raises: a link to a native id is weaker than a link to a row, and both beat no mail.
+    """
+    import datetime
+
+    native = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+    existing = meeting_ref(uid, url)
+    if existing != native:
+        return existing                      # a row already exists (calendar sync, a retry, us)
+    body: dict = {"meeting_url": url, "auto_join": False}
+    if title:
+        body["title"] = title
+    if start_epoch:
+        body["scheduled_at"] = datetime.datetime.fromtimestamp(
+            float(start_epoch), datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    try:
+        st, row = http("POST", f"{meetings_door()}/meetings", door_headers(uid), body)
+    except StepError:
+        return native
+    if st in (200, 201) and isinstance(row, dict) and row.get("id") is not None:
+        return str(row["id"])
+    return meeting_ref(uid, url)             # 409 = someone minted it in the gap; read it back
+
+
 def meeting_row(uid: str, meeting_id, native: str | None = None):
     """This user's meeting row from the gateway, or None. One read, several callers."""
     try:
-        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(str(uid))})
+        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(str(uid)))
     except StepError:
         return None
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
@@ -60,6 +123,12 @@ class ShareMintError(StepError):
         super().__init__(
             f"share mint failed for meeting {meeting_id} as {identity}: HTTP {status} — {detail}",
             retryable=retryable)
+
+
+def _native_of(url: str) -> str:
+    """The link's last path segment — the meeting id — without its query or fragment, which carry
+    the passcode on Zoom (`?pwd=`) and Teams (`?p=`)."""
+    return str(url).split("#", 1)[0].split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
 
 
 def _http_detail(body) -> str:
@@ -99,7 +168,7 @@ def mint_transcript_share(uid: str, meeting_id, email: str,
     a capability and did not get one, and the reason it did not is worth the same noise.
     """
     st, body = http("POST", f"{meetings_door()}/meetings/{meeting_id}/share",
-                    {"X-API-Key": user_api_key(str(uid))},
+                    door_headers(str(uid)),
                     {"mode": "restricted", "allowed_emails": [email],
                      "expires_in_sec": int(expires_in_sec)})
     token = body.get("token") if isinstance(body, dict) else None
@@ -131,7 +200,7 @@ def meeting_start(uid: str, meeting_id, native: str | None = None):
     """
     import datetime
     try:
-        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(str(uid))})
+        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(str(uid)))
     except StepError:
         return None
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
@@ -177,7 +246,7 @@ def transcript_text(uid: str, meeting_id) -> str | None:
     """
     try:
         _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
-                         {"X-API-Key": user_api_key(str(uid))})
+                         door_headers(str(uid)))
     except StepError:
         return None
     if not isinstance(body, dict) or "segments" not in body:
@@ -186,7 +255,7 @@ def transcript_text(uid: str, meeting_id) -> str | None:
     return "\n".join(str(g.get("text") or "") for g in segs)
 
 
-def transcript_segment_count(uid: str, meeting_id) -> int | None:
+def transcript_segment_count(uid: str, meeting_id, tickets=None) -> int | None:
     """HOW MANY SEGMENTS this meeting captured — or **None** when it could not be read at all.
 
     The same read `transcript_text` does, through the same owning-service endpoint, answering the
@@ -197,10 +266,14 @@ def transcript_segment_count(uid: str, meeting_id) -> int | None:
 
     THE THREE ANSWERS ARE THREE: `None` unreadable, `0` a meeting that captured nothing, `n` a
     meeting that did. A caller deciding *has this person seen Vexa work yet* must not read a
-    gateway restart as a person who never tried."""
+    gateway restart as a person who never tried.
+
+    `tickets` are the subject tickets of the fact that names this meeting when it is not the
+    running reaction's own (a `meeting.completed` read from another reaction's row): the door
+    reads a transcript only for a ticket that names this meeting."""
     try:
         _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
-                         {"X-API-Key": user_api_key(str(uid))})
+                         door_headers(str(uid), tickets=tickets))
     except StepError:
         return None
     if not isinstance(body, dict) or "segments" not in body:
@@ -254,7 +327,7 @@ def speaking_seconds(uid: str, meeting_id) -> dict:
     invite's own order stands. It is not a reason to fail a meeting."""
     try:
         _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
-                         {"X-API-Key": user_api_key(str(uid))})
+                         door_headers(str(uid)))
     except StepError:
         return {}
     segs = (body or {}).get("segments") or [] if isinstance(body, dict) else []
@@ -328,8 +401,12 @@ def room_order(uid: str, meeting_id, participants: list, names: dict,
 
 
 def _phrases(text: str, n: int = 6) -> set:
+    # WORDS IN ANY SCRIPT (app.dev 2026-10-18). `[a-z0-9']` saw no word in a Russian or Portuguese
+    # transcript, so its phrase set was empty, nothing could ever intersect it, and every report on
+    # a non-English meeting was refused as "not grounded" — after the agent had read the transcript
+    # and quoted it verbatim. `\w` is Unicode in Python 3; `_` is not a word character of speech.
     import re as _re
-    ws = _re.findall(r"[a-z0-9']+", (text or "").lower())
+    ws = [w for w in _re.findall(r"[\w']+", (text or "").lower()) if w.strip("_'")]
     return {" ".join(ws[i:i + n]) for i in range(len(ws) - n + 1)
             if any(len(w) >= 6 for w in ws[i:i + n])}
 
@@ -343,7 +420,13 @@ def grounded_in(note: str, transcript: str) -> bool:
     meeting with no captured speech must still be writable."""
     if not transcript.strip():
         return True
-    return bool(_phrases(note) & _phrases(transcript))
+    said = _phrases(transcript)
+    if not said:
+        # NOTHING IN IT CAN BE QUOTED: a test call of fillers and single words carries no six-word
+        # run with a content word, so no note could ever match it. That is the same absence of
+        # evidence as an empty transcript, not evidence of fabrication.
+        return True
+    return bool(_phrases(note) & said)
 
 
 def await_start(ctx: StepCtx):
@@ -356,10 +439,10 @@ def await_start(ctx: StepCtx):
 
 def dispatch_bot(ctx: StepCtx):
     """Spawn the REAL bot via gateway POST /bots (transcribe per deployment; 409 = adopt the
-    existing meeting). Prior: ensure_user (for the key) · Effect: bot container
+    existing meeting). Prior: ensure_user (the subject) · Effect: bot container
     Result: {meeting_id, native, platform}."""
     uid = ctx.prior["ensure_user"]["uid"]
-    key = user_api_key(uid)
+    hdr = door_headers(uid)
     # transcribe_enabled is NOT passed. It used to be hardcoded False here, against this step's
     # own docstring, which is why a standup recorded audio and captured no words. The platform
     # defaults it to True and resolves TRANSCRIBE_ENABLED per deployment — so naming it here
@@ -370,21 +453,30 @@ def dispatch_bot(ctx: StepCtx):
     # step used to read a `bot_name` key out of `.settings.json` in the AGENT domain, which is how
     # one fact came to have three stores and why the same person's bot showed up under one name
     # when a calendar armed it and another when a flow did (founder ruling, 2026-09-02).
-    st, body = http("POST", f"{meetings_door()}/bots", {"X-API-Key": key},
-                    {"meeting_url": ctx.refs["url"]})
+    # THE MEETING GOES INTO THE INVITE'S WORKSPACE (founder 2026-10-14): the invite sensor reads the
+    # workspace link out of the event body and the invite carries it as `workspace`. meeting-api binds
+    # it only when the organizer is a member (`workspace_id`, authorized against the signed
+    # memberships); refused, the bot still goes, to the organizer's default, and the reason is kept.
+    ws = str(ctx.refs.get("workspace") or ctx.refs.get("workspace_id") or "").strip()
+    st, body = http("POST", f"{meetings_door()}/bots", hdr,
+                    {"meeting_url": ctx.refs["url"], **({"workspace_id": ws} if ws else {})})
+    if ws and st in (400, 403, 422):
+        ctx.scratch["workspace_refused"] = f"{st}: {_http_detail(body)}"[:200]
+        st, body = http("POST", f"{meetings_door()}/bots", hdr,
+                        {"meeting_url": ctx.refs["url"]})
     if st == 409:
-        st2, existing = http("GET", f"{meetings_door()}/bots", {"X-API-Key": key})
+        st2, existing = http("GET", f"{meetings_door()}/bots", hdr)
         rows = existing if isinstance(existing, list) else existing.get("meetings", [])
         for m in rows:
-            if m.get("native_meeting_id") == ctx.refs["url"].rsplit("/", 1)[1]:
+            if m.get("native_meeting_id") == _native_of(ctx.refs["url"]):
                 return Done({"meeting_id": m["id"], "native": m["native_meeting_id"],
                              "platform": m.get("platform", "google_meet")},
                             provider_ref=str(m["id"]))
         raise StepError(f"409 but meeting not found")
     if st not in (200, 201):
-        raise StepError(f"spawn failed {st}: {str(body)[:120]}")
+        raise StepError(f"spawn failed {st}: {redact_urls_in(str(body))[:120]}")
     return Done({"meeting_id": body["id"],
-                 "native": body.get("native_meeting_id") or ctx.refs["url"].rsplit("/", 1)[1],
+                 "native": body.get("native_meeting_id") or _native_of(ctx.refs["url"]),
                  "platform": body.get("platform", "google_meet")},
                 provider_ref=str(body["id"]))
 
@@ -416,10 +508,10 @@ def _status(ctx: StepCtx) -> dict:
     happen (worth counting, and worth giving up on). `unreadable` is the second, and it carries the
     code so an operator reading the reason knows which door said what."""
     d = ctx.prior["dispatch_bot"]
-    key = user_api_key(ctx.prior["ensure_user"]["uid"])
+    hdr = door_headers(ctx.prior["ensure_user"]["uid"])
     try:
         st, body = http("GET", f"{meetings_door()}/transcripts/{d['platform']}/{d['native']}",
-                        {"X-API-Key": key})
+                        hdr)
     except StepError as e:
         return {"status": STATUS_UNREADABLE, "http": None, "detail": str(e)[:200]}
     if st == 200 and isinstance(body, dict):
@@ -442,10 +534,10 @@ def _stop_bot(ctx: StepCtx, d: dict):
     Anything else is counted in the reaction's durable scratch, so the count survives the worker:
     once, the platform may be restarting; `STOP_ATTEMPTS_MAX` times running is a fact about this
     meeting, and the caller escalates."""
-    key = user_api_key(ctx.prior["ensure_user"]["uid"])
+    hdr = door_headers(ctx.prior["ensure_user"]["uid"])
     try:
         st, body = http("DELETE", f"{meetings_door()}/bots/{d['platform']}/{d['native']}",
-                        {"X-API-Key": key})
+                        hdr)
     except StepError as e:
         st, body = None, str(e)[:200]
     try:
@@ -518,3 +610,114 @@ def run_meeting(ctx: StepCtx):
     if s == "failed":
         raise StepError(f"meeting failed: {m.get('completion_reason')}", retryable=False)
     return Wait(seconds=6)
+
+
+# ── a bot at a time, with no agent run (flows phase 0) ──────────────────────────────────────────
+
+def _routine_chat(flow) -> str:
+    """The chat a person's flow reports into: the one it was made in, else its own thread."""
+    from . import routine
+    thread = str(flow.param("thread", "") or "").strip()
+    if thread and thread.lower() not in ("flow", "new") and routine.CHAT_THREAD.match(thread):
+        return thread
+    return routine.thread_session(getattr(flow, "scope", "instance"), flow.name)
+
+
+def _say(ctx: StepCtx, uid: str, text: str) -> None:
+    """One line in the routine's chat. Never fails the step: the run's status says it either way."""
+    if ctx.scratch.get("noticed"):
+        return
+    try:
+        from . import routine
+        flow = ctx.flow
+        routine.post_notice(uid, _routine_chat(flow), text, name=flow.name,
+                            scope=getattr(flow, "scope", ""), version=getattr(flow, "version", 0))
+        ctx.scratch["noticed"] = True
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _slot(value, refs: dict) -> str:
+    """A param, or `{{payload.<ref>}}` — the event's own value copied into a declared slot (ADR-0050
+    decision 2.3: an untrusted event's fields only ever fill slots, never become instructions)."""
+    text = str(value or "").strip()
+    if text.startswith("{{") and text.endswith("}}"):
+        path = text[2:-2].strip()
+        if path.startswith("payload."):
+            path = path[len("payload."):]
+        cur = refs or {}
+        for part in path.split("."):
+            cur = cur.get(part) if isinstance(cur, dict) else None
+        return str(cur or "").strip()
+    return text
+
+
+def register_user_steps(reg) -> None:
+    @reg.step(needs=("meetings",), user_allowed=True)
+    def request_meeting_bot(ctx: StepCtx):
+        """Send the flow owner's bot into `params.meeting_url` — no agent run (flows phase 0). Use it
+        with a one-shot trigger for "a bot to this meeting at 12:13". The routine must carry the grant
+        `bot.request` (`params.grants`, capped by `_global/POLICIES.md`); without it the step refuses
+        and says so in the routine's chat. A meeting the bot is already in is adopted, not re-sent.
+        Says the outcome in one line in the routine's chat. Result: {meeting_id, native, platform}."""
+        if ctx.scratch.get("sent"):
+            return Done(ctx.scratch["sent"], provider_ref=str(ctx.scratch["sent"].get("meeting_id")))
+        flow = ctx.flow
+        uid = str(getattr(flow, "owner", "") or "").strip()
+        url = _slot(flow.param("meeting_url", ""), ctx.refs)
+        if not uid or not url:
+            raise StepError("request_meeting_bot needs the flow's owner and params.meeting_url",
+                            retryable=False)
+        from . import grants
+        if "bot.request" not in grants.effective(flow, uid):
+            _say(ctx, uid, "Couldn't send the bot: this routine isn't allowed to send bots on its "
+                           "own. Remake it allowing that, or ask in chat.")
+            raise StepError("refused: no bot.request grant on this routine (or the policy no longer "
+                            "allows it)", retryable=False)
+        hdr = door_headers(uid)
+        ws = _slot(flow.param("workspace_id", ""), ctx.refs) or str(
+            ctx.refs.get("workspace") or "").strip()
+        st, body = http("POST", f"{meetings_door()}/bots", hdr,
+                        {"meeting_url": url, **({"workspace_id": ws} if ws else {})})
+        st = int(st or 0)
+        if st == 409:
+            sent = {"meeting_id": None, "native": _native_of(url),
+                    "platform": "", "already": True}
+            _say(ctx, uid, f"The bot is already in {redact_url(url)}.")
+        elif 200 <= st < 300 and isinstance(body, dict):
+            sent = {"meeting_id": body.get("id"), "native": body.get("native_meeting_id"),
+                    "platform": body.get("platform")}
+            _say(ctx, uid, f"Sent the bot to {redact_url(url)} — admit it from the lobby when it asks.")
+        else:
+            detail = body.get("detail") if isinstance(body, dict) else body
+            if st in (400, 403, 404, 422) or not st:
+                _say(ctx, uid, f"Couldn't send the bot to {redact_url(url)}: {redact_urls_in(detail)[:160]}")
+                raise StepError(f"bot refused {st}: {redact_urls_in(detail)[:200]}", retryable=False)
+            raise StepError(f"bot request failed {st}: {redact_urls_in(detail)[:200]}", retryable=True)
+        flows_log = __import__("logging").getLogger("flows.grants")
+        flows_log.info("routine_grant_used action=bot.request flow=%s", getattr(flow, "ident", ""))
+        ctx.scratch["sent"] = sent
+        return Done(sent, provider_ref=str(sent.get("meeting_id") or sent.get("native") or ""))
+
+
+def register_light_steps(reg) -> None:
+    @reg.step(needs=("agent",), user_allowed=True)
+    def post_message(ctx: StepCtx):
+        """Post one line into the flow's chat — no agent run (ADR-0050 decision 4.1). `params.text`,
+        where `{{payload.<ref>}}` slots copy the event's own values (never instructions) and
+        `{{date}}` is today's date (UTC). Result: {posted}."""
+        if ctx.scratch.get("posted"):
+            return Done({"posted": True})
+        flow = ctx.flow
+        uid = str(getattr(flow, "owner", "") or ctx.refs.get("uid") or "").strip()
+        text = str(flow.param("text", "") or "")
+        if not uid or not text.strip():
+            raise StepError("post_message needs the flow's owner and params.text", retryable=False)
+        import re as _re
+        text = text.replace("{{date}}", time.strftime("%A %d %B %Y", time.gmtime(ctx.clock_now)))
+        text = _re.sub(r"\{\{\s*payload\.[A-Za-z0-9_.]+\s*\}\}", lambda m: _slot(m.group(0), ctx.refs), text)
+        _say(ctx, uid, text[:2000])
+        if not ctx.scratch.get("noticed"):
+            raise StepError("the chat did not take the line", retryable=True)
+        ctx.scratch["posted"] = True
+        return Done({"posted": True})

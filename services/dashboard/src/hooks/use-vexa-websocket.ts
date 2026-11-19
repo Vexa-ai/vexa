@@ -78,10 +78,9 @@ async function fetchConfig(): Promise<{ wsUrl: string; authToken: string | null 
   }
 }
 
-function buildWsUrl(baseUrl: string, authToken: string | null): string {
-  if (!authToken) return baseUrl;
-  const separator = baseUrl.includes("?") ? "&" : "?";
-  return `${baseUrl}${separator}api_key=${encodeURIComponent(authToken)}`;
+// ws.v1 § Connect: a browser cannot set x-api-key, so the key rides the subprotocol list.
+function wsProtocols(authToken: string | null): string[] | undefined {
+  return authToken ? ["vexa.v1", `vexa.key.${authToken}`] : undefined;
 }
 
 export function useVexaWebSocket(
@@ -252,11 +251,11 @@ export function useVexaWebSocket(
     await bootstrapFromRest();
 
     const config = await fetchConfig();
-    const wsUrl = buildWsUrl(config.wsUrl, config.authToken);
-    console.log("WebSocket: Connecting to", wsUrl.replace(/api_key=([^&]+)/, "api_key=***"));
+    const wsUrl = config.wsUrl;
+    console.log("WebSocket: Connecting to", wsUrl);
 
     try {
-      const ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(wsUrl, wsProtocols(config.authToken));
       wsRef.current = ws;
 
       ws.onopen = () => {

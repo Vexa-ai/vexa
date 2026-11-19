@@ -19,18 +19,23 @@ import json
 import logging
 import os
 import re
-import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
 
 import yaml
 
-from shared.gitenv import pinned_git_env, scrubbed_git_env
+from shared.git_egress import GitEgressRefused
+from shared.gitenv import git_transport
+from shared.gitexec import run_git
 from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
+from shared import git_provider, obs, runtime_fault
+from shared.token_destination import embed_token
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.adapters")
 
@@ -59,21 +64,23 @@ def parse_entity(text: str) -> tuple[dict, str]:
 def _git(cwd: Path, *args: str, token: str | None = None, url: str | None = None) -> str:
     """Run a git command in ``cwd``; return trimmed stdout. ``token`` (if given) is passed via env
     for the duration of the call only and is NEVER placed on the argv (which can leak via ps).
-    Always runs on a scrubbed env — a hook-exported GIT_DIR must never re-point the workspace op
-    at the hook's repo (see shared/gitenv.py).
+    Always runs through ``shared.gitexec``: nothing the repository configures runs, and a
+    hook-exported GIT_DIR can never re-point the workspace op at the hook's repo.
 
     ``url`` marks this call as a NETWORK op against that remote and pins git's transport allow-list
-    to what the URL legitimately needs, so a remote reference can never reach a transport that runs a
+    to what the URL legitimately needs and the connection to the remote's checked addresses
+    (``git_transport``), so a remote reference can never reach a transport that runs a
     command (``ext::``) or reads this host's disk (``file://``)."""
-    overrides = {"GIT_ASKPASS": "true"} if token is not None else {}
-    env = pinned_git_env(url, **overrides) if url is not None else scrubbed_git_env(**overrides)
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    env = {"GIT_ASKPASS": "true"} if token is not None else {}
+    config: tuple = ()
+    if url is not None:
+        try:
+            transport = git_transport(url)
+        except GitEgressRefused as exc:
+            raise RuntimeError(f"git {args[0] if args else ''} refused: {exc}") from None
+        env.update(transport.env)
+        config = transport.config
+    proc = run_git(cwd, *config, *args, env=env)
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout.strip()
@@ -113,7 +120,9 @@ def workspace_write_lock(work_dir: Path, timeout: float = WRITE_LOCK_TIMEOUT_S):
     git_dir = work_dir / ".git"
     lock_path = (git_dir if git_dir.exists() else work_dir) / ".vexa-writer.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    # never through a link at the lock's name (beside the tree there is no `.git` to keep it ours)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                 0o600)
     try:
         start = time.monotonic()
         while True:
@@ -138,7 +147,7 @@ class GitPushError(RuntimeError):
 
 
 def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str | None,
-                    *, remote: str = _PUSH_REMOTE) -> str:
+                    *, remote: str = _PUSH_REMOTE, force: bool = False) -> str:
     """THE shared governed-push mechanic: push ``ref`` to ``remote_url`` over a DEDICATED remote so
     the repo's ``origin`` is never clobbered. The token (if any) rides on the remote URL for the
     push's duration ONLY, then the persisted remote is scrubbed back to the token-free URL (P15).
@@ -148,14 +157,20 @@ def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str 
     Both credential flows converge here: ``GitHubVcs.push`` (brokered secret store) and the
     per-call-token workspace publish (``control_plane.workspace_publish``)."""
     work = Path(work_dir)
-    if token and "://" in remote_url:
-        proto, rest = remote_url.split("://", 1)
-        auth_url = f"{proto}://{token}@{rest}"
-    else:
-        auth_url = remote_url
+    # A credential rides only over https (``token_destination``); any other URL is pushed without one
+    # (and fails loud if the remote needs it).
+    auth_url = embed_token(remote_url, token)
+
+    # Every spelling of the credential that can appear in git's text: the token as given, its password
+    # half, and the userinfo the URL actually carried (percent-encoded, provider-shaped).
+    known = sorted({k for k in ((token or "").strip(), git_provider.secret_of(token),
+                                git_provider.userinfo(remote_url, token) if token else "") if k},
+                   key=len, reverse=True)
 
     def redact(text: str) -> str:
-        return text.replace(token, "***") if token else text
+        for k in known:
+            text = text.replace(k, "***")
+        return text
 
     try:
         # (Re-)point the dedicated remote at the authenticated URL — `set-url` on a re-publish,
@@ -166,7 +181,9 @@ def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str 
             _git(work, "remote", "add", remote, auth_url, token=token)
         try:
             # The push is the network op — pin the transports to what ``remote_url`` needs.
-            _git(work, "push", remote, ref, token=token, url=remote_url)
+            # ``force`` is the forget's push alone (Vexa-ai/vexa#1783): its rewritten history replaces
+            # the remote's, and only on the person's explicit go. Every other push stays ff-only.
+            _git(work, "push", *(["--force"] if force else []), remote, ref, token=token, url=remote_url)
             return _git(work, "rev-parse", "HEAD", token=token)
         finally:
             # Strip the token from the persisted remote so it can't leak to the repo/object store.
@@ -198,10 +215,9 @@ class RealGitWorkspace(WorkspacePort):
             return
         # Local clone (file path or file:// URL) — derived from parent git_clone_init. The transport
         # allow-list is pinned to what this reference needs; `--` keeps a leading `-` a repository.
-        subprocess.run(
-            ["git", "clone", "--", repo_url, str(self.work_dir)],
-            capture_output=True, text=True, check=True, env=pinned_git_env(repo_url),
-        )
+        transport = git_transport(repo_url)
+        run_git(None, *transport.config, "clone", "--", repo_url, str(self.work_dir),
+                env=transport.env, check=True)
         name, email = self._identity
         _git(self.work_dir, "config", "user.name", name)
         _git(self.work_dir, "config", "user.email", email)
@@ -212,13 +228,16 @@ class RealGitWorkspace(WorkspacePort):
             pass
 
     def read(self, path: str) -> str | None:
-        f = self.work_dir / path
-        return f.read_text() if f.exists() else None
+        # checked once, read nofollow through what was checked (`workspace_paths.locate_inside`)
+        try:
+            base, rel = wpaths.locate_inside(self.work_dir, path)
+        except wpaths.PathRefused:
+            return None
+        return wpaths.read_text_inside(base, rel) if rel else None
 
     def write(self, write: WorkspaceWrite) -> None:
-        f = self.work_dir / write.path
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(render_entity(write))
+        base, rel = wpaths.locate_inside(self.work_dir, write.path)
+        wpaths.write_text_inside(base, rel, render_entity(write))
         # NOTE: deliberately no ``git add`` here. On a SHARED repo, staging grabs .git/index.lock and
         # would race a concurrent member's turn (proven: writes get dropped with "index.lock: File
         # exists"). Record the path; commit() stages it under the write lock (Lane W).
@@ -294,31 +313,72 @@ class GitHubVcs(VcsPort):
         return push_with_token(work, remote_url, ref, brokered.reveal(), remote=_PUSH_REMOTE)
 
 
+def runtime_caller_headers(token: str) -> dict[str, str]:
+    """The runtime caller credential as request headers. The runtime answers 401 to anything else,
+    so an empty token is refused here rather than discovered as a 401 on the first dispatch."""
+    if not token:
+        raise ValueError("the runtime caller credential (RUNTIME_API_TOKEN) is required")
+    return {"Authorization": f"Bearer {token}"}
+
+
 class RuntimeHttpClient(RuntimePort):
     """A ``RuntimePort`` over runtime.v1's HTTP surface (``POST /workloads``) — the control-plane→kernel
     edge. agent-api never runs a worker in-process (P7); it asks the runtime kernel to spawn the
     ``agent`` workload. Uses stdlib urllib (no extra dep); the spec body is the runtime.v1 WorkloadSpec.
     """
 
-    def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
+    def __init__(self, base_url: str, *, token: str, timeout: float = 10.0) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
+        self._auth = runtime_caller_headers(token)
+
+    def _call(self, op: str, req: urllib.request.Request):
+        """THE ONE PLACE THIS ADAPTER TALKS HTTP, and the one place its failures are translated
+        (P5's failure half, P18). Every error a runtime call can end in — an HTTP refusal, a
+        connection that never opened, a body that is not runtime.v1 — leaves here as a typed
+        :class:`shared.runtime_fault.RuntimeFault`, never as a bare ``HTTPError`` for the dispatch
+        path to answer with a 500. ``tests/test_runtime_fault.py`` holds the class to it."""
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:  # noqa: S310 — the runtime's URL from Settings
+                return json.loads(r.read())
+        except Exception as exc:  # noqa: BLE001 — every failure is translated, none escapes raw
+            raise runtime_fault.translate(op, exc) from exc
 
     def spawn(self, workload_id: str, profile: str, env: dict[str, str]) -> str:
         body = json.dumps({"workloadId": workload_id, "profile": profile, "env": env}).encode()
         req = urllib.request.Request(
             f"{self._base}/workloads", data=body,
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={"Content-Type": "application/json", **self._auth, **obs.trace_headers()}, method="POST",
         )
-        with urllib.request.urlopen(req, timeout=self._timeout) as r:
-            status = json.loads(r.read())
-        return status.get("workloadId", workload_id)
+        status = self._call("spawn", req)
+        return status.get("workloadId", workload_id) if isinstance(status, dict) else workload_id
+
+    def live_workloads(self) -> list[str]:
+        """The ids of the workloads the runtime reports starting or running.
+
+        AN ANSWER THAT IS NOT A LIST OF WORKLOADS IS AN ERROR, never "nothing is live" (P18, P21).
+        Both unit-end sweepers read this set and act on what is ABSENT from it — the delegation
+        reaper revokes those units' tokens, the Redis ACL sweeper deletes their workers' users — so
+        reading an unreadable answer as empty would end every live worker's tools and Redis access
+        at once. A body that is not a list, or a row that is not a workload, raises the runtime's
+        ``bad_response`` fault; both sweepers skip a sweep that raises."""
+        req = urllib.request.Request(f"{self._base}/workloads", headers={**self._auth, **obs.trace_headers()}, method="GET")
+        rows = self._call("list", req)
+        if not isinstance(rows, list):
+            raise runtime_fault.from_bad_body(
+                "list", ValueError(f"GET /workloads answered {type(rows).__name__}, not a list"))
+        bad = [s for s in rows if not (isinstance(s, dict) and isinstance(s.get("workloadId"), str)
+                                       and s.get("workloadId") and isinstance(s.get("state"), str))]
+        if bad:
+            raise runtime_fault.from_bad_body(
+                "list", ValueError(f"GET /workloads answered {len(bad)} row(s) that are not workloads"))
+        return [s["workloadId"] for s in rows if s["state"] in ("starting", "running")]
 
     def await_done(self, workload_id: str, timeout_sec: float = 0.0) -> str:
-        req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", method="GET")
-        with urllib.request.urlopen(req, timeout=self._timeout) as r:
-            status = json.loads(r.read())
-        return status.get("state", "unknown")
+        req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", headers={**self._auth, **obs.trace_headers()},
+                                     method="GET")
+        status = self._call("status", req)
+        return status.get("state", "unknown") if isinstance(status, dict) else "unknown"
 
 
 def _b64u(raw: bytes) -> str:
@@ -337,6 +397,9 @@ class LocalIdentityMinter(IdentityPort):
     """Dev-tier ``IdentityPort`` — signs a per-dispatch token with a shared key (HS256)."""
 
     def __init__(self, signing_key: str, *, ttl_sec: int = 900) -> None:
+        # A token signed with an empty key would verify for anyone who guessed the format.
+        if not signing_key:
+            raise ValueError("dispatch signing key is required")
         self._key = signing_key
         self._ttl = ttl_sec
 
@@ -369,9 +432,22 @@ class LocalIdentityMinter(IdentityPort):
         return f"{signing_input}.{_b64u(sig)}"
 
 
+def _fault_since(client, unit_id: str, since: float):
+    """The fault agent-api recorded on this unit after ``since`` (see ``RedisStreamReader.read``)."""
+    try:
+        raw = client.get(f"unit:{unit_id}:fault")
+        f = json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001 — an unreadable record ends nothing
+        return None
+    if not isinstance(f, dict) or float(f.get("at") or 0) < since:
+        return None
+    return {k: f.get(k) for k in ("source", "kind", "op", "status", "detail", "remedy")}
+
+
 class RedisStreamReader(StreamReader):
     """Dev-tier ``StreamReader`` — ``XREAD`` a dispatch's output Stream ``unit:<id>:out`` and yield each
-    UnitEvent until a terminal event (``done`` / ``turn-complete``) or an idle give-up. ``redis`` is
+    UnitEvent until every turn accepted on the view has reached ``turn-complete`` (and every job it
+    watched start has ended), or an idle give-up. ``redis`` is
     imported LAZILY (the unit tests inject a fake reader)."""
 
     def __init__(self, redis_url: str, *, block_ms: int = 15000, idle_giveup_ms: int = 600000) -> None:
@@ -383,7 +459,7 @@ class RedisStreamReader(StreamReader):
         self._block = block_ms
         self._giveup = idle_giveup_ms
 
-    def read(self, unit_id: str, *, resume: str | None = None):
+    def read(self, unit_id: str, *, resume: str | None = None, fresh: bool = False):
         import redis
 
         client = redis.from_url(self._url, decode_responses=True)
@@ -397,11 +473,48 @@ class RedisStreamReader(StreamReader):
         # output arrived' failure was the reader giving up / the stream ending before any resume).
         last_id = resume or "$"
         waited = 0
+        # A JOB OUTLIVES ITS TURN (Vexa-ai/vexa#1584), so `turn-complete` is no longer the whole
+        # answer to "is this view finished". The turn that spawns a job completes in a second; its
+        # job keeps writing progress to this same Stream for another two minutes, and closing the
+        # view on that first `turn-complete` would drop every one of those events on the floor.
+        # So the view closes when the turn is done AND no job it watched start is still open.
+        # With no job in play both lines are dead weight and the behaviour is exactly what it was.
+        open_jobs: set[str] = set()
+        turn_done = False
+        # …AND A TURN CAN OUTLIVE THE NEXT ONE'S START. The worker's write-back trailer (F161) runs
+        # a turn's paperwork AFTER its `done` and BEFORE its `turn-complete`, on a thread, so the
+        # serve loop is already taking the next message: on this Stream turn t2 is accepted, streams
+        # and may even finish before t1's `turn-complete` arrives. A view that closed on that first
+        # `turn-complete` cut off the turn the person had just asked for — the founder's "chat does
+        # not answer if asked while it's not yet answered". So every turn ACCEPTED on this view is
+        # open until its own `turn-complete`, and the view closes only when none is. A view resumed
+        # mid-turn never saw that turn's `turn-accepted`; its `turn-complete` still closes the view,
+        # exactly as before, when nothing else is open.
+        open_turns: set[str] = set()
+        # …AND A FRESH TURN'S VIEW WAITS FOR THAT TURN. ``fresh``: this view belongs to a turn the
+        # request just dispatched, attached at the pre-dispatch tail. The turn in front may still be
+        # writing its write-back there, so its `turn-complete` can arrive BEFORE this turn is
+        # accepted — and closing on it ended the view with no answer at all (the flaky "a new turn
+        # continues the chat" probe). Such a view closes only once something was accepted on it: a
+        # turn of its own (closed by that turn's completion, as above), or a message injected into
+        # the running turn (no turn of its own, so the running turn's completion is its end).
+        accepted = not fresh
+        # A UNIT THAT IS GONE ENDS ITS VIEW (app.dev 2026-10-16). agent-api records why a unit
+        # stopped (`unit:{id}:fault`, `control_plane.unit_faults`); a record made after this view
+        # opened means no worker will write here again, so the view says so and closes instead of
+        # ticking "still working" until its give-up.
+        opened_at = time.time()
         while True:
             resp = client.xread({topic: last_id}, count=50, block=self._block)
             if not resp:
                 waited += self._block
                 if waited >= self._giveup:
+                    return
+                gone = _fault_since(client, unit_id, opened_at)
+                if gone is not None:
+                    from shared import runtime_fault  # noqa: PLC0415
+                    yield {"type": "error", "message": runtime_fault.sentence(gone), "fault": gone}
+                    yield {"type": "turn-complete"}
                     return
                 yield None  # idle tick → SSE ``: keepalive`` comment (bytes keep flowing mid-think)
                 continue
@@ -414,7 +527,29 @@ class RedisStreamReader(StreamReader):
                     yield (ev, entry_id)
                     # `turn-complete` is the worker's terminal marker — it comes AFTER `done` + `commit`,
                     # so stopping on `done` would drop the commit. Close the view only on turn-complete.
-                    if ev.get("type") == "turn-complete":
+                    kind = ev.get("type")
+                    # `job-queued` opens a job for the same reason `job-started` does
+                    # (Vexa-ai/vexa#1610): a second act on the same page now WAITS for the first
+                    # instead of being refused, so closing the view on its turn's `turn-complete`
+                    # would drop the very thing the person is waiting to see — the moment it starts,
+                    # its steps, and the line it posts when it lands.
+                    if kind in ("job-started", "job-queued") and ev.get("job_id"):
+                        open_jobs.add(str(ev["job_id"]))
+                    elif kind in ("job-done", "job-failed"):
+                        open_jobs.discard(str(ev.get("job_id") or ""))
+                    elif kind == "turn-accepted":
+                        accepted = True
+                        if ev.get("turn_id"):
+                            open_turns.add(str(ev["turn_id"]))
+                    elif kind == "turn-complete":
+                        if not accepted:
+                            continue   # the tail of a turn that began before this view's own
+                        turn_done = True
+                        if ev.get("turn_id"):
+                            open_turns.discard(str(ev["turn_id"]))
+                        else:
+                            open_turns.clear()   # a completion naming no turn ends them all
+                    if turn_done and not open_jobs and not open_turns:
                         return
 
 
@@ -422,27 +557,29 @@ class SchedulerHttpClient(SchedulerPort):
     """A ``SchedulerPort`` over the runtime's ``/schedule`` surface (schedule.v1) — the control-plane→cron
     edge. agent-api authors routine jobs here; the runtime owns the durable cron. Stdlib urllib, no dep."""
 
-    def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
+    def __init__(self, base_url: str, *, token: str, timeout: float = 10.0) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
+        self._auth = runtime_caller_headers(token)
 
     def schedule(self, job: dict) -> dict:
         body = json.dumps(job).encode()
         req = urllib.request.Request(
             f"{self._base}/schedule", data=body,
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={"Content-Type": "application/json", **self._auth, **obs.trace_headers()}, method="POST",
         )
         with urllib.request.urlopen(req, timeout=self._timeout) as r:
             return json.loads(r.read())
 
     def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
         q = f"?limit={limit}" + (f"&status={status}" if status else "")
-        req = urllib.request.Request(f"{self._base}/schedule{q}", method="GET")
+        req = urllib.request.Request(f"{self._base}/schedule{q}", headers={**self._auth, **obs.trace_headers()}, method="GET")
         with urllib.request.urlopen(req, timeout=self._timeout) as r:
             return json.loads(r.read())
 
     def cancel_job(self, job_id: str) -> dict | None:
-        req = urllib.request.Request(f"{self._base}/schedule/{job_id}", method="DELETE")
+        req = urllib.request.Request(f"{self._base}/schedule/{job_id}", headers={**self._auth, **obs.trace_headers()},
+                                     method="DELETE")
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as r:
                 return json.loads(r.read())
@@ -468,7 +605,7 @@ class AdminApiMembershipIndex:
         self._timeout = timeout
 
     def _headers(self) -> dict[str, str]:
-        h = {"Content-Type": "application/json"}
+        h = {"Content-Type": "application/json", **obs.trace_headers()}
         if self._secret:
             h["X-Internal-Secret"] = self._secret
         return h
@@ -509,12 +646,138 @@ class AdminApiMembershipIndex:
             raise
 
 
+class AdminApiPolicyStore:
+    """The workspace REGISTRY in the identity database (admin-api ``/internal/registry/*``,
+    MIGRATION-0009, PRD 0.13.4 D5): a ``PolicyStore`` (control_plane.workspace_membership) for the
+    roster, visibility, connections and invites. Identity is the one writer; this is agent-api's port.
+
+    Unlike the membership index it is AUTHORITATIVE, so it is not best-effort: every failure but a
+    404 raises, and the caller turns that into a refusal (fail closed, FD3). A PRESENT workspace's
+    document is read from the registry on every access decision (``ttl`` 0): a member removed by any
+    writer — another replica, admin-api's own account merge — is refused at once, never after a
+    process-local cache expires. Inside one request's read scope the membership module answers a
+    repeated read itself (``workspace_membership.store_get``). An ABSENT workspace is remembered for
+    ``absent_ttl``: absence grants nothing (no roster, no member), so a stale absence can only refuse,
+    and a ``put`` through this port drops it. ``root`` is accepted and ignored: the registry is not on
+    this filesystem."""
+
+    def __init__(self, base_url: str, internal_secret: str, *, timeout: float = 5.0, ttl: float = 0.0,
+                 absent_ttl: float = 30.0) -> None:
+        self._base = base_url.rstrip("/") + "/internal/registry"
+        self._secret = internal_secret
+        self._timeout = timeout
+        self._ttl = ttl
+        # AN ABSENT WORKSPACE IS REMEMBERED (perf, app.dev 2026-10-17). Every enumeration
+        # (`list_memberships`, the people rosters) asks about EVERY directory on the host, and most
+        # of them — people's own desks — are not in the registry at all; asking each time is a GET
+        # per desk per listing (~14 req/s to admin-api, ~120-190 ms per listing). An absence grants
+        # nothing, and a `put` through this port drops it, so it cannot hide a grant this process made.
+        self._absent_ttl = max(absent_ttl, ttl)
+        self._docs: dict[str, tuple[float, Optional[dict]]] = {}
+
+    def _req(self, method: str, path: str, body: Optional[dict] = None):
+        h = {"Content-Type": "application/json", **obs.trace_headers()}
+        if self._secret:
+            h["X-Internal-Secret"] = self._secret
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{self._base}{path}", data=data, headers=h, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                return json.loads(r.read() or b"null")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+
+    @staticmethod
+    def _q(value: str) -> str:
+        return urllib.parse.quote(str(value), safe="")
+
+    def _doc(self, workspace_id: str) -> Optional[dict]:
+        hit = self._docs.get(workspace_id)
+        if hit is not None and time.monotonic() - hit[0] < (self._ttl if hit[1] is not None else self._absent_ttl):
+            return hit[1]
+        doc = self._req("GET", f"/workspaces/{self._q(workspace_id)}")
+        self._docs[workspace_id] = (time.monotonic(), doc)
+        return doc
+
+    def has(self, root, workspace_id: str) -> bool:
+        return self._doc(workspace_id) is not None
+
+    def get(self, root, workspace_id: str, name: str):
+        if name == "invites":
+            out = self._req("GET", f"/workspaces/{self._q(workspace_id)}/invites")
+            return None if out is None else list(out.get("invites") or [])
+        doc = self._doc(workspace_id)
+        if doc is None:
+            return None
+        ws = doc.get("workspace") or {}
+        if name == "members":
+            return list(doc.get("members") or [])
+        if name == "visibility":
+            return {"visibility": ws.get("visibility") or "closed"}
+        if name == "connections":
+            return list(ws.get("connections") or [])
+        if name == "kind":
+            # the registry keeps the kind only; a pair's people are its roster (both owners)
+            return None if (ws.get("kind") or "normal") == "normal" else {"kind": ws.get("kind")}
+        raise ValueError(f"unknown policy record {name!r}")
+
+    def put(self, root, workspace_id: str, name: str, value) -> None:
+        self._docs.pop(workspace_id, None)
+        if name == "invites":
+            self._req("PUT", f"/workspaces/{self._q(workspace_id)}/invites", {"invites": list(value or [])})
+            return
+        if name == "members":
+            body = {"members": list(value or [])}
+        elif name == "visibility":
+            body = {"visibility": (value or {}).get("visibility", "closed") if isinstance(value, dict) else value}
+        elif name == "connections":
+            body = {"connections": list(value or [])}
+        elif name == "kind":
+            body = {"kind": str((value or {}).get("kind") or "normal")}
+        else:
+            raise ValueError(f"unknown policy record {name!r}")
+        self._req("PUT", f"/workspaces/{self._q(workspace_id)}", body)
+
+    def drop(self, root, workspace_id: str) -> bool:
+        self._docs.pop(workspace_id, None)
+        out = self._req("DELETE", f"/workspaces/{self._q(workspace_id)}")
+        return bool((out or {}).get("dropped"))
+
+    # ── closed rooms' members (0.13.4 S4, D36): the registry's ``room:<id>`` rows ──────────────
+    def room_get(self, root, room_id: str):
+        out = self._req("GET", f"/rooms/{self._q(room_id)}/members")
+        return None if out is None else list(out.get("members") or [])
+
+    def room_put(self, root, room_id: str, rows: list) -> None:
+        self._req("PUT", f"/rooms/{self._q(room_id)}/members", {"members": list(rows or [])})
+
+    def room_drop(self, root, room_id: str) -> bool:
+        out = self._req("DELETE", f"/rooms/{self._q(room_id)}/members")
+        return bool((out or {}).get("dropped"))
+
+    def principal_rooms(self, root, subject: str) -> list:
+        out = self._req("GET", f"/principals/{self._q(subject)}/rooms")
+        return list((out or {}).get("rooms") or [])
+
+    def member_workspaces(self, root, subject: str) -> list:
+        out = self._req("GET", f"/principals/{self._q(subject)}/memberships")
+        return list((out or {}).get("memberships") or [])
+
+    def invite_by_hash(self, root, token_hash: str):
+        out = self._req("GET", f"/invites/{self._q(token_hash)}")
+        if not out:
+            return None
+        return str(out["workspace_id"]), dict(out["invite"])
+
+
 class AdminApiModelConfig:
     """The subject's EFFECTIVE model config (user pref > platform setting, resolved by admin-api's
     ``/internal/users/{id}/model-config``) over the same internal edge as the membership index.
 
     Dispatch-time seam for the Settings → Models surface: the returned
-    ``{mode, model, meeting_model, base_url, api_key}`` (all optional) overlays the deployment env
+    ``{mode, model, base_url, api_key}`` (all optional) overlays the deployment env
     defaults in ``build_unit_env``. Best-effort by contract: the caller catches failures and
     dispatches on env defaults — a down identity service must never block a turn. The ``api_key``
     is a SECRET riding one internal hop into the worker's brokered env; never log the payload."""
@@ -525,7 +788,7 @@ class AdminApiModelConfig:
         self._timeout = timeout
 
     def resolve(self, subject: str) -> dict:
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", **obs.trace_headers()}
         if self._secret:
             headers["X-Internal-Secret"] = self._secret
         req = urllib.request.Request(

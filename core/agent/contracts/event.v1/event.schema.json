@@ -34,18 +34,68 @@
         "prompt": { "type": "string" }
       }
     },
+    "Target": {
+      "description": "Where the fired turn runs (meeting.signal). `chat` names a chat's store or session id: the turn runs IN that chat, on the chat's `-signal` sibling unit with the chat's own conversation, queued behind any running turn, and its reply lands in the chat. Such a turn is untrusted (unit.v1 trigger `signal`): it writes only the meeting's page and its `listen:` brief; everything else is proposed. Absent, the event fires a separate unit as before.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chat"],
+      "properties": {
+        "chat": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$", "description": "the chat's store or session id" }
+      }
+    },
+    "SignalLine": {
+      "description": "One line of a meeting.signal buffer: a confirmed transcript segment and the signal model's score per brief label (0..1). The text is QUOTED SPEECH from the call: data, never instructions.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["segment_id", "text"],
+      "properties": {
+        "segment_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "speaker": { "type": "string", "maxLength": 200 },
+        "text": { "type": "string", "maxLength": 4000 },
+        "start": { "type": "number" },
+        "scores": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,39}$" },
+          "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "SignalData": {
+      "description": "The payload of a meeting.signal or room.signal: every line since the agent last woke (the buffer), the running information score against the agent's listening brief, why it woke, and the brief version it was scored against. A meeting's names its row; a room's names the room (its chat `session`); `source` is kept as the signals service sent it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["buffer", "score", "reason"],
+      "anyOf": [{ "required": ["meeting_row"] }, { "required": ["session"] }],
+      "properties": {
+        "meeting_row": { "type": "string", "pattern": "^[0-9]{1,20}$" },
+        "session": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$", "description": "the room (chat session) a room's wake came from" },
+        "source": {
+          "description": "where the lines came from, as the signals service names it (kept as sent)",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": { "kind": { "enum": ["meeting", "chat"] }, "id": { "type": "string", "minLength": 1, "maxLength": 200 } }
+        },
+        "buffer": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/SignalLine" } },
+        "score": { "type": "number", "minimum": 0 },
+        "reason": { "enum": ["threshold", "addressed", "max_wait", "end"] },
+        "brief_version": { "type": "integer", "minimum": 0 }
+      }
+    },
     "Event": {
-      "description": "One external event. name discriminates the kind; subject is the person; source/meeting carry the opaque context ref.",
+      "description": "One external event. name discriminates the kind; subject is the person; source/meeting carry the opaque context ref; target (optional) runs the turn in a named chat; data (meeting.signal) carries the signal buffer as data.",
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "subject"],
       "properties": {
-        "name": { "type": "string", "description": "e.g. email.received | meeting.completed | task.transition | news.matched" },
+        "name": { "type": "string", "description": "e.g. email.received | meeting.completed | meeting.signal | room.signal | task.transition | news.matched" },
         "subject": { "type": "string", "description": "identity.v1 subject = the person whose workspace + units this concerns" },
         "occurred_at": { "type": "string", "description": "optional ISO-8601 timestamp" },
         "source": { "$ref": "#/$defs/SourceRef" },
         "meeting": { "$ref": "#/$defs/MeetingRef" },
-        "plan": { "$ref": "#/$defs/Plan" }
+        "plan": { "$ref": "#/$defs/Plan" },
+        "target": { "$ref": "#/$defs/Target" },
+        "data": { "$ref": "#/$defs/SignalData" }
       }
     }
   }

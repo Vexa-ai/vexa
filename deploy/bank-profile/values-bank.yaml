@@ -1,0 +1,137 @@
+# The bank profile's values, layered AFTER the chart's values-openshift.yaml (run.sh install):
+#
+#   helm install vexa deploy/helm/charts/vexa -n vexa \
+#     -f deploy/helm/charts/vexa/values-openshift.yaml -f deploy/bank-profile/values-bank.yaml \
+#     --set global.imageTag=<tag> --set runtime.browserImage=<the mock bot>
+#
+# Every value here is one a bank operator would set: their own Postgres, S3, model, STT and IdP, their
+# corporate CA, an egress allowlist, single replicas for one node. Nothing here loosens a policy.
+fullnameOverride: vexa
+
+global:
+  imagePullPolicy: IfNotPresent
+  # The corporate CA (a ConfigMap the deployer creates): every Vexa Pod and every Pod the runtime
+  # spawns trusts it. The model, STT and IdP serve certificates issued by it and nothing else.
+  extraCA:
+    configMap: corp-root-ca
+
+# ── the bank's own services ──────────────────────────────────────────────────────────────────────
+postgres:
+  enabled: false
+database:
+  host: pg.bank-db.svc.cluster.local
+  port: 5432
+  name: vexa
+  user: vexa
+  existingSecret: bank-db-app          # POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD
+  sslMode: disable
+
+storage:
+  s3:
+    endpoint: http://s3-fixture.bank-ext.svc.cluster.local:7070
+    bucket: vexa-recordings
+    existingSecret: bank-s3-recordings
+
+models:
+  # No Anthropic endpoint: the in-house model speaks the OpenAI dialect, with tool calling.
+  runner: openai-agent
+  llmBaseUrl: https://model.bank-ext.svc.cluster.local/v1
+  agentModel: bank-stub
+  # The model needs no key, so none is set: the openai-agent runner and llmBaseUrl configure it.
+
+meetingApi:
+  replicaCount: 1
+  transcriptionServiceUrl: https://stt.bank-ext.svc.cluster.local/v1/audio/transcriptions
+
+terminal:
+  replicaCount: 1
+  # The bank's TLS front door (an ingress or edge route; the profile's `vexa` service in bank-ext).
+  publicUrl: https://vexa.bank-ext.svc.cluster.local
+  signinMethods: oidc
+  oidc:
+    issuer: https://idp.bank-ext.svc.cluster.local/adfs
+    clientId: vexa-terminal
+    existingSecret: bank-oidc
+    existingSecretKey: client-secret
+    scopes: "openid email profile allatclaims"
+    resource: vexa-terminal
+    displayName: Bank login
+    # ADFS issues no email_verified claim; the IdP stub omits it the same way.
+    requireEmailVerified: "0"
+    caBundle:
+      configMap: corp-root-ca
+      key: ca.crt
+
+adminApi:
+  replicaCount: 1
+  adminEmails: profile.user@bank.example
+
+agentApi:
+  replicaCount: 1
+  workspaces:
+    # One node: the chart's RWX default (values-openshift.yaml) has no RWX class to bind on kind.
+    accessMode: ReadWriteOnce
+    storageClassName: standard
+    size: 1Gi
+  sessions:
+    s3:
+      bucket: vexa-sessions
+      existingSecret: bank-s3-sessions
+
+crm:
+  enabled: true
+  orgId: bank-profile
+  orgName: Bank Profile
+
+features: "crm"
+
+gateway: {replicaCount: 1}
+mcp: {replicaCount: 1}
+runtime:
+  replicaCount: 1
+  backend: k8s
+  botSandbox:
+    # restricted-v2 admits seccomp runtime/default only; no custom SCC lists a Localhost profile.
+    enabled: false
+
+redis:
+  persistence: {size: 1Gi}
+
+podDisruptionBudgets:
+  gateway: {enabled: false}
+  adminApi: {enabled: false}
+  meetingApi: {enabled: false}
+  runtime: {enabled: false}
+  agentApi: {enabled: false}
+
+# ── egress: none but the declared endpoints ──────────────────────────────────────────────────────
+# The chart's control-plane policies reach an endpoint whose address they are not given (the object
+# store, the database, the API server) at 0.0.0.0/0 minus egressExcept, on its port. Excepting the
+# whole address space (two halves: an `except` must be a strict subset) leaves DNS, the release's own
+# Pods and the extraEgress below. Spawned workloads get the same through privateCidrs.
+networkPolicy:
+  enabled: true
+  defaultDeny: {enabled: true}
+  # This cluster's DNS is kind's kube-dns; values-openshift.yaml points DNS at openshift-dns, which
+  # a kind node does not run, so without this every name lookup is refused.
+  dns:
+    to:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+        podSelector: {matchLabels: {k8s-app: kube-dns}}
+    ports: [53]
+  controlPlane:
+    egressExcept:
+      ipv4: [0.0.0.0/1, 128.0.0.0/1]
+      ipv6: ["::/1", "8000::/1"]
+    extraEgress:
+      - to: [{namespaceSelector: {matchLabels: {bank-profile/zone: ext}}}]
+        ports: [{port: 8443, protocol: TCP}, {port: 7070, protocol: TCP}]
+      - to: [{namespaceSelector: {matchLabels: {bank-profile/zone: db}}}]
+        ports: [{port: 5432, protocol: TCP}]
+      # the Kubernetes API, for the runtime that spawns bots and agent workers (filled by run.sh)
+      - to: [{ipBlock: {cidr: __APISERVER__/32}}]
+        ports: [{port: 6443, protocol: TCP}]
+  workloads:
+    privateCidrs:
+      ipv4: [0.0.0.0/1, 128.0.0.0/1]
+      ipv6: ["::/1", "8000::/1"]

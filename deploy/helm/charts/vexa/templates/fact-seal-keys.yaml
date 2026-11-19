@@ -1,0 +1,68 @@
+{{- /*
+event.v2 — the CRM's fact seal keypair (PRD 0.13.4 D8).
+
+The crm outbox signs every card fact's envelope with the CRM's OWN Ed25519 PRIVATE key, kept in the
+Secret below and mounted by crm-outbox alone. flows-api verifies under the PUBLIC key, `crm.pem` in
+the fact-verify-keys ConfigMap below, and cannot sign. No other workload holds either, and no other
+producer's key verifies as `crm`. A producer that starts sealing gets a keypair of its own the same
+way, its public half another `<producer>.pem` in the ConfigMap.
+
+Generated once, then reused — the same lifecycle as the gateway's identity keypair
+(identity-keys.yaml): an explicit factSeal.crm.signingKey wins, then the key the release's Secret
+already holds (lookup, so an upgrade keeps it), and only a brand-new install mints one. The Secret
+is kept through an uninstall (resource-policy). `helm template` cannot look the Secret up and mints
+a new pair on every render — set factSeal.crm.signingKey, or factSeal.crm.existingSecret with
+factSeal.crm.publicKey, when a GitOps tool renders the chart.
+
+The public key is DERIVED from the private key on every render (the self-signed-certificate lift
+identity-keys.yaml documents), so the two never disagree.
+*/}}
+{{- if and .Values.crm.enabled .Values.flows.enabled }}
+{{- $public := "" }}
+{{- if .Values.factSeal.crm.existingSecret }}
+{{- $public = required "factSeal.crm.publicKey is required with factSeal.crm.existingSecret — the PEM public key of the Secret's signing-key.pem (`openssl pkey -in signing-key.pem -pubout`)" .Values.factSeal.crm.publicKey | trim }}
+{{- else }}
+{{- $signingName := include "vexa.componentName" (list . "fact-seal-crm-key") }}
+{{- $pem := .Values.factSeal.crm.signingKey | default "" }}
+{{- if not $pem }}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace $signingName).data | default dict }}
+{{- if hasKey $existing "signing-key.pem" }}
+{{- $pem = index $existing "signing-key.pem" | b64dec }}
+{{- end }}
+{{- end }}
+{{- if not $pem }}
+{{- $pem = genPrivateKey "ed25519" }}
+{{- end }}
+{{- $cert := genSelfSignedCertWithKey "vexa-fact-seal-crm" nil nil 1 $pem }}
+{{- $der := $cert.Cert | replace "-----BEGIN CERTIFICATE-----" "" | replace "-----END CERTIFICATE-----" "" | nospace | b64dec }}
+{{- $spki := "\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00" }}
+{{- $pub := (split $spki $der)._1 | trunc 32 }}
+{{- if ne (len $pub) 32 }}
+{{- fail "factSeal.crm.signingKey must be an Ed25519 private key in PKCS#8 PEM (`openssl genpkey -algorithm ed25519`), or empty to generate one" }}
+{{- end }}
+{{- $public = printf "-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----" (printf "%s%s" $spki $pub | b64enc) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $signingName }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: crm-outbox
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  signing-key.pem: {{ $pem | b64enc }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vexa.componentName" (list . "fact-verify-keys") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: flows-api
+data:
+  crm.pem: |
+    {{- $public | nindent 4 }}
+{{- end }}

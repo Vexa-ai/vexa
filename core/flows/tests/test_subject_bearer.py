@@ -38,8 +38,8 @@ from sqlite_double import SqliteDB  # noqa: E402
 # (`fa.db.execute(...)`), so `fa.db` is swapped for a real, working `SqliteDB` right after import
 # — laziness proves the app composes with no database; the swap gives the tests one that works.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
-        "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://subject-bearer:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://subject-bearer:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:
@@ -119,8 +119,8 @@ def identity(monkeypatch):
 
     ident = Identity()
     ident.set({
-        "anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"]}),
-        "ben-key": (200, {"user_id": 512, "email": "ben@vexa.test", "scopes": ["legacy"]}),
+        "anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"], "credential_class": "session"}),
+        "ben-key": (200, {"user_id": 512, "email": "ben@vexa.test", "scopes": ["legacy"], "credential_class": "session"}),
     })
     return ident
 
@@ -234,12 +234,12 @@ def test_the_operator_key_still_opens_every_one_of_them(client, identity, method
 
 # ── A4 · the admin routes are still admin-keyed ──────────────────────────────────────────────────
 
+#: `POST /flows` and the lifecycle verb left this list with ADR-0046: a person now authors and
+#: retires flows of their OWN (tests/test_user_flows.py holds what they may not touch).
 ADMIN_ONLY = [
-    ("POST", "/flows", {"name": "x", "on_event": "e", "steps": ["email_minutes"]}),
     ("POST", "/events", {"event_type": "meeting.completed", "source_event_id": "s1", "refs": {}}),
     ("POST", "/events/batch", {"meetings": [{"url": "https://m.test/a", "organizer": "a@b.test",
                                              "start": T0}]}),
-    ("POST", "/flows/post_meeting/1/retire", {}),
 ]
 
 
@@ -314,10 +314,12 @@ def test_our_own_internal_secret_being_wrong_is_not_the_callers_fault(client, id
 
 def test_the_resolver_is_the_one_the_gateway_asks(client, identity):
     """P23 — one resolver of who the caller is. Not a second lookup of our own: the same
-    `/internal/validate`, over the internal secret, that `gateway/adapters.py` posts to."""
+    `/internal/validate` that `gateway/adapters.py` posts to — reached through the gateway's
+    service door with the flows key, never with an internal secret flows does not hold."""
     client.get("/reactions", headers=bearer("anna-key"))
     base, token, secret = identity.calls[-1]
-    assert token == "anna-key" and secret == "test-internal-secret"
+    assert token == "anna-key" and secret == "test-flows-service-key-not-a-placeholder"
+    assert secret == fa.DOOR_KEY
 
 
 # ── the other two subject-scoped routes ──────────────────────────────────────────────────────────
@@ -358,13 +360,28 @@ def test_the_old_name_still_opens_the_door_for_one_release(client, identity):
     ).status_code != 401
 
 
+def _prose(out: str) -> str:
+    """Stdout minus the logevent.v1 lines every request now emits (one JSON object per line, with a
+    `trace_id`): what these tests read is the human-facing deprecation notice, not the trace."""
+    import json as _j
+    kept = []
+    for line in out.splitlines(keepends=True):
+        try:
+            if "trace_id" in _j.loads(line):
+                continue
+        except ValueError:
+            pass
+        kept.append(line)
+    return "".join(kept)
+
+
 def test_the_old_name_says_once_that_it_is_deprecated(client, identity, capsys):
     fa._DEPRECATED_HEADER_SAID.clear()
     client.get("/reactions", headers=admin_old_name())
-    first = capsys.readouterr().out
+    first = _prose(capsys.readouterr().out)
     assert "X-Flows-Admin-Key" in first and "X-Flows-Operator-Key" in first
     client.get("/reactions", headers=admin_old_name())
-    assert capsys.readouterr().out == "", "once per process, not once per request"
+    assert _prose(capsys.readouterr().out) == "", "once per process, not once per request"
 
 
 def test_the_new_name_wins_when_both_are_sent(client, identity):
@@ -387,7 +404,7 @@ def queue_subject(monkeypatch):
     here; `tests/test_queue_waiting.py` owns what the projection answers."""
     asked = []
 
-    def waiting(_db, *, subject, flows, limit, identity=None):
+    def waiting(_db, *, subject, flows, limit, identity=None, room=None):
         # `identity=` is B1: the route hands the projection the (uid, email) pair it already
         # resolved from the caller's own credential, rather than making it re-ask admin-api for a
         # fact `/internal/validate` returned on the way in.
@@ -436,3 +453,321 @@ def test_the_operator_read_still_honours_the_stamped_identity(client, identity, 
 def test_the_queue_needs_a_credential(client, identity, queue_subject):
     assert client.get("/queue/waiting", params={"subject": "126"}).status_code == 401
     assert queue_subject == []
+
+
+# ── a worker acting for a person (a delegation token) ────────────────────────────────────────────
+#
+# Identity answers a worker's `vxd_` token with the person it acts for plus `delegation`, the
+# dispatch's ceiling — and only to a resolver that declares it reads one. Flows declares it, carries
+# the delegation on `Caller`, and refuses a worker with nobody in the loop every route
+# `DELEGATED_REACH` classifies PERSON_ONLY. The cases below are GENERATED from that one table.
+
+def _worker_answer(regime, *, uid=126, email="anna@vexa.test"):
+    """What `/internal/validate` answers a declared caller for a worker acting for Anna."""
+    body = {"user_id": uid, "email": email, "scopes": ["bot", "tx"], "is_admin": False,
+            "person_is_admin": False}
+    if regime is not ...:
+        body["delegation"] = {"workspaces": "*"} if regime is None else {"regime": regime,
+                                                                         "workspaces": "*"}
+    return 200, body
+
+
+#: Every regime that leaves nobody in the loop: the sealed unwatched one, an empty one, one identity
+#: does not seal, a missing `regime`, and an answer that lost `delegation` altogether (`...`).
+UNWATCHED = ["autonomous", "", "root", None, ...]
+
+
+@pytest.fixture
+def workers(identity):
+    """Anna's own key, plus one worker token acting for Anna per regime."""
+    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"], "credential_class": "session"}),
+             "vxd_human": _worker_answer("human"),
+             "vxd_human_upper": _worker_answer(" Human ")}
+    for i, regime in enumerate(UNWATCHED):
+        table[f"vxd_unwatched_{i}"] = _worker_answer(regime)
+    identity.set(table)
+    return identity
+
+
+UNWATCHED_TOKENS = [f"vxd_unwatched_{i}" for i in range(len(UNWATCHED))]
+PERSON_ONLY_ROUTES = sorted(k for k, v in fa.DELEGATED_REACH.items() if v == fa.PERSON_ONLY)
+OPEN_ROUTES = sorted(k for k, v in fa.DELEGATED_REACH.items() if v == fa.OPEN)
+#: A concrete URL for each templated path: Anna's own reaction, the verb that calls off her join.
+PATH_PARAMS = {"reaction_id": "r-anna-uid", "verb": "cancel",
+               "name": "annas-brief", "version": 1, "action": "pause", "kind": "minutes"}
+#: The body each POST needs to get past validation — a person's own routine for `POST /flows`.
+BODIES = {"/flows": {"name": "annas-brief", "trigger": {"kind": "schedule", "cron": "0 7 * * *"},
+                     "steps": ["agent_run"], "params": {"instruction": "brief me"}},
+          "/flows/{name}/claim": {"thread": "pchat-anna"},
+          "/concerns/stage": {"thread": "pchat-anna", "stage": "waiting"},
+          "/sinks": {"thread": "pchat-anna", "name": "annas-brief", "event": "mail.received"},
+          "/sensors": {"name": "annas-new-sensor", "kind": "calendar"},
+          "/sensors/{name}/connect": {"thread": "pchat-anna"},
+          "/routines/triggers": {"thread": "pchat-anna", "name": "annas-check",
+                                 "trigger": {"kind": "schedule", "cron": "0 8 * * *"},
+                                 "instruction": "check"}}
+
+
+def _url(path):
+    return path.format(**PATH_PARAMS)
+
+
+def _call(client, method, path, token):
+    fa.db.execute("DELETE FROM flow_version WHERE scope = 'user:126'")
+    fa.db.execute("INSERT INTO flow_version (scope, name, version, on_event, cron, steps, params, "
+                  "status, created_by, created_at) VALUES ('user:126','annas-brief',1,"
+                  "'schedule.due','0 7 * * *','[\"agent_run\"]','{\"instruction\":\"x\"}',"
+                  "'active','t',1.0)")
+    # …and her own sensor of the same name (ADR-0050), for the sensor verbs
+    fa.db.execute("DELETE FROM sensor WHERE scope = 'user:126'")
+    fa.db.execute("INSERT INTO sensor (scope, name, kind, interval_s, version, status, mode, "
+                  "next_due_at, failures, created_at) VALUES ('user:126','annas-brief','calendar',"
+                  "60,1,'draft','poll',0,0,1.0)")
+    return client.request(method, _url(path), headers=bearer(token),
+                          json=BODIES.get(path, {}) if method == "POST" else None)
+
+
+def _subject_routes():
+    """(METHOD, path) of every route a person's credential reaches — the ones whose dependencies
+    include `subject_or_operator` or `timeline_reader`."""
+    from fastapi.routing import APIRoute
+
+    def deps(dependant):
+        for d in dependant.dependencies:
+            yield d.call
+            yield from deps(d)
+
+    doors = {fa.subject_or_operator, fa.timeline_reader}
+    return {(m, r.path) for r in fa.app.routes if isinstance(r, APIRoute)
+            for m in r.methods if doors & set(deps(r.dependant))}
+
+
+def test_every_route_a_person_reaches_is_classified_for_a_worker():
+    """ONE table says what a worker with nobody in the loop may do. A new subject-scoped route that
+    is not in it is refused to such a worker (fail closed) and fails here until it is classified."""
+    assert _subject_routes() == set(fa.DELEGATED_REACH)
+    assert set(fa.DELEGATED_REACH.values()) <= {fa.PERSON_ONLY, fa.OPEN}
+    assert PERSON_ONLY_ROUTES, "steering a reaction acts as the person"
+
+
+def test_flows_declares_to_identity_that_it_reads_a_delegation(monkeypatch):
+    """Identity answers a worker's token only to a resolver that declares it reads `delegation`
+    (identity.v1 AcceptsDelegationHeader). Flows sends it beside its flows key, through the
+    gateway's service door."""
+    import flows_steps.common as common
+    seen = []
+    monkeypatch.setattr(common, "http", lambda method, url, headers, body=None, timeout=20, **_:
+                        seen.append((method, url, headers, body)) or (200, {}))
+    subject_auth._validate("http://admin-api:8001", "vxd_tok", "the-secret")
+    (method, url, headers, body), = seen
+    assert (method, url, body) == ("POST", "http://admin-api:8001/internal/validate",
+                                   {"token": "vxd_tok"})
+    assert headers[subject_auth.ACCEPTS_DELEGATION_HEADER] == "1"
+    assert headers["X-Vexa-Service-Key"] == "the-secret"
+    assert "X-Internal-Secret" not in headers
+
+
+def test_the_declaration_is_identitys_sealed_header():
+    root = next(p for p in Path(__file__).resolve().parents if (p / "core" / "identity").is_dir())
+    schema = json.loads(
+        (root / "core/identity/contracts/identity.v1/identity.schema.json").read_text())
+    assert (subject_auth.ACCEPTS_DELEGATION_HEADER
+            == schema["$defs"]["AcceptsDelegationHeader"]["const"])
+
+
+def test_a_workers_caller_carries_its_delegation(monkeypatch, workers):
+    monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
+    caller = subject_auth.resolve("vxd_human", secret="s")
+    assert (caller.kind, caller.uid, caller.email) == ("subject", "126", "anna@vexa.test")
+    assert caller.delegation == {"regime": "human", "workspaces": "*"}
+    assert caller.is_delegated and caller.regime == "human" and not caller.is_unwatched
+    person = subject_auth.resolve("anna-key", secret="s")
+    assert person.delegation is None and not person.is_delegated and not person.is_unwatched
+
+
+@pytest.mark.parametrize("token", UNWATCHED_TOKENS)
+def test_a_worker_with_nobody_in_the_loop_is_unwatched(monkeypatch, workers, token):
+    """`identity_token.is_unwatched`'s rule: delegated, and a regime other than `human` — an empty,
+    unknown or missing one included, and a `vxd_` answer that lost its delegation too."""
+    monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
+    caller = subject_auth.resolve(token, secret="s")
+    assert caller.is_delegated and caller.is_unwatched and caller.uid == "126"
+
+
+@pytest.mark.parametrize("token", UNWATCHED_TOKENS)
+@pytest.mark.parametrize("method,path", PERSON_ONLY_ROUTES)
+def test_a_worker_with_nobody_in_the_loop_is_refused_every_person_only_verb(
+        client, workers, method, path, token):
+    r = _call(client, method, path, token)
+    assert r.status_code == 403, f"{method} {path} as {token} -> {r.status_code}: {r.text[:200]}"
+    assert r.json()["detail"] == subject_auth.REFUSAL
+    assert fa.db.execute(
+        "SELECT status FROM reaction WHERE reaction_id='r-anna-uid'")[0][0] == "admitted"
+
+
+#: The mail-design writes are PERSON_ONLY for a worker AND the admin account's alone — a second gate
+#: an everyday person does not pass (`test_mail_admin.py::test_refusals`), so they are not in the
+#: "an everyday person is admitted" set below.
+ADMIN_ACCOUNT_ROUTES = {r for r in PERSON_ONLY_ROUTES if r[1].startswith("/mail/")}
+
+
+@pytest.mark.parametrize("token", ["vxd_human", "vxd_human_upper", "anna-key"])
+@pytest.mark.parametrize("method,path", [r for r in PERSON_ONLY_ROUTES if r not in ADMIN_ACCOUNT_ROUTES])
+def test_a_worker_in_the_loop_and_the_person_are_admitted_to_person_only_verbs(
+        client, workers, method, path, token, monkeypatch):
+    from flows_steps import common, routine
+    monkeypatch.setattr(common, "AGENT_API", "http://agent-api.test")   # past the door, agent-api answers
+    monkeypatch.setattr(routine, "http", lambda m, u, h, b=None, timeout=20: (200, {"ok": True}))
+    r = _call(client, method, path, token)
+    assert r.status_code in (200, 201), (
+        f"{method} {path} as {token} -> {r.status_code}: {r.text[:200]}")
+
+
+@pytest.mark.parametrize("token", UNWATCHED_TOKENS)
+@pytest.mark.parametrize("method,path", OPEN_ROUTES)
+def test_a_worker_with_nobody_in_the_loop_still_reads_and_reports(
+        client, workers, monkeypatch, method, path, token):
+    """The OPEN routes are not refused to it — whatever each answers past the door is its own."""
+    monkeypatch.setattr(fa, "fetch_meetings", lambda uid: [])
+    r = _call(client, method, path, token)
+    assert r.status_code not in (401, 503), f"{method} {path} -> {r.status_code}: {r.text[:200]}"
+    detail = r.json().get("detail") if r.headers.get("content-type", "").startswith(
+        "application/json") and isinstance(r.json(), dict) else None
+    assert detail != subject_auth.REFUSAL, f"{method} {path} refused an unwatched worker"
+
+
+def test_the_refusal_is_the_one_every_service_answers_with():
+    """gateway-identity.v1's `REFUSAL`, word for word (gate:fact-parity holds the copy)."""
+    assert subject_auth.REFUSAL["status"] == "refused"
+    assert subject_auth.REFUSAL["reason"] == "human_session_required"
+    assert subject_auth.REFUSAL["remedy"] == "ask_in_chat"
+    assert "ask in chat" in subject_auth.REFUSAL["tell_your_person"]
+
+
+# ── a worker whose turn other people read (delegation.shared, ADR-0048 decision 4) ─────────────
+#
+# A person's flows, reactions, timeline and queue are theirs alone; a shared conversation's answer
+# may use only what every participant can read. So a shared worker is refused every route here but
+# filing a friction report into Vexa's own sink, with the body every service answers it with.
+
+SHARED_OPEN = {("POST", "/friction")}
+#: …and the one route that ANSWERS a shared turn with less instead of refusing it (friction 7,
+#: 2026-10-16): `whats_waiting`, narrowed to what every reader of the room can see.
+SHARED_NARROWED = {("GET", "/queue/waiting")}
+
+
+@pytest.fixture
+def shared_workers(identity):
+    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"], "credential_class": "session"}),
+             "vxd_shared": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["bot"],
+                                  "is_admin": False, "person_is_admin": False,
+                                  "delegation": {"regime": "human", "workspaces": ["team"],
+                                                 "shared": True}}),
+             "vxd_private": _worker_answer("human"),
+             # D2: a room's turn as the WORKSPACE principal; refused even if `shared` went missing
+             "vxd_room": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["bot", "tx"],
+                                "is_admin": False, "person_is_admin": False,
+                                "delegation": {"regime": "human", "workspaces": ["team"],
+                                               "principal_kind": "workspace", "principal_workspace": "team",
+                                               "on_behalf_of": "127", "bills_to": 126}})}
+    identity.set(table)
+    return identity
+
+
+def test_a_shared_workers_caller_says_so(monkeypatch, shared_workers):
+    monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
+    assert subject_auth.resolve("vxd_shared", secret="s").is_shared
+    assert subject_auth.resolve("vxd_room", secret="s").is_shared, "a workspace principal is shared (D2)"
+    assert not subject_auth.resolve("vxd_private", secret="s").is_shared
+    assert not subject_auth.resolve("anna-key", secret="s").is_shared
+
+
+@pytest.mark.parametrize("method,path", sorted(set(fa.DELEGATED_REACH) - SHARED_OPEN - SHARED_NARROWED))
+@pytest.mark.parametrize("token", ["vxd_shared", "vxd_room"])
+def test_a_shared_turn_is_refused_every_flows_route(client, shared_workers, monkeypatch, method, path,
+                                                     token):
+    monkeypatch.setattr(fa, "fetch_meetings", lambda uid: [])
+    r = _call(client, method, path, token)
+    assert r.status_code == 403, f"{method} {path} -> {r.status_code}: {r.text[:200]}"
+    assert r.json()["detail"] == subject_auth.SHARED_REFUSAL
+    assert fa.db.execute(
+        "SELECT status FROM reaction WHERE reaction_id='r-anna-uid'")[0][0] == "admitted"
+
+
+@pytest.mark.parametrize("method,path", sorted(set(fa.DELEGATED_REACH) - SHARED_OPEN))
+def test_a_private_turn_is_not_refused_by_the_shared_rule(client, shared_workers, monkeypatch,
+                                                          method, path):
+    monkeypatch.setattr(fa, "fetch_meetings", lambda uid: [])
+    r = _call(client, method, path, "vxd_private")
+    detail = r.json().get("detail") if r.headers.get("content-type", "").startswith(
+        "application/json") and isinstance(r.json(), dict) else None
+    assert detail != subject_auth.SHARED_REFUSAL
+
+
+#: Anna's queue as the room sees it: the two private rows above (her standup, her invite) plus one
+#: item scoped to the room's workspace `team`, one to a workspace the room cannot read, and one to
+#: her own home (the workspace named by her uid) — which is private however it is spelled.
+ROOM_ROWS = {
+    "r-anna-team": {"uid": "126", "workspace": "team", "title": "Team retro"},
+    "r-anna-elsewhere": {"uid": "126", "workspace": "board", "title": "Board prep"},
+    "r-anna-home": {"uid": "126", "workspace": "126", "title": "Anna's own notes"},
+    "r-anna-mail": {"organizer": "anna@vexa.test", "workspace": "", "title": "Anna's private mail"},
+}
+
+
+def _seed_room_rows():
+    for rid, refs in ROOM_ROWS.items():
+        fa.db.execute(
+            """INSERT INTO reaction (reaction_id, source_event_id, event_type, subject_refs,
+                                     flow, flow_version, step, status, attempt, next_run_at,
+                                     reason, created_at, updated_at)
+               VALUES (:rid,:sid,'meeting.completed',:refs,'post_meeting',1,'email_minutes',
+                       'admitted',0,0,NULL,:c,:c)""",
+            {"rid": rid, "sid": f"{rid}::post_meeting", "refs": json.dumps(refs), "c": T0})
+
+
+def test_a_shared_turn_gets_the_room_scoped_queue_not_a_refusal(client, shared_workers):
+    """Friction 7 (live 12:42): `whats_waiting` in a room answers with what every reader of the
+    room can see — items scoped to a workspace on the shared ceiling — instead of 403."""
+    _seed_room_rows()
+    r = client.get("/queue/waiting", headers=bearer("vxd_shared"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["scope"] == "room"
+    assert {x["id"] for x in body["items"]} == {"r-anna-team"}
+    assert body["waiting"] == 1
+
+
+def test_the_room_scoped_queue_never_carries_the_persons_private_items(client, shared_workers):
+    """THE LEAK RULE (ADR-0048 decision 4): nothing of the person's private queue — her meetings,
+    invites, mail, home-workspace items, other workspaces — and not even how many were withheld."""
+    _seed_room_rows()
+    body = client.get("/queue/waiting", headers=bearer("vxd_shared")).json()
+    text = json.dumps(body)
+    for private in ("r-anna-uid", "r-anna-email", "r-anna-elsewhere", "r-anna-home", "r-anna-mail",
+                    "standup", "Anna's invite", "Board prep", "own notes", "private mail"):
+        assert private not in text, private
+    assert body["quiet"] == 0 and "withheld" not in body
+    # …and the same person in her private chat still sees her whole queue
+    whole = client.get("/queue/waiting", headers=bearer("anna-key")).json()
+    assert {"r-anna-uid", "r-anna-email", "r-anna-team", "r-anna-home"} <= {x["id"] for x in whole["items"]}
+    assert "scope" not in whole
+
+
+def test_a_shared_turn_with_no_readable_workspace_sees_an_empty_queue(client, identity):
+    """FAILS CLOSED: a shared ceiling that names no workspace (or `*`, never a shared answer) gets
+    nothing, not the person's queue."""
+    for ws in ([], "*", None):
+        identity.set({"vxd_shared": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["bot"],
+                                           "delegation": {"regime": "human", "workspaces": ws,
+                                                          "shared": True}})})
+        _seed_room_rows() if not fa.db.execute(
+            "SELECT 1 FROM reaction WHERE reaction_id='r-anna-team'") else None
+        r = client.get("/queue/waiting", headers=bearer("vxd_shared"))
+        assert r.status_code == 200, r.text
+        assert r.json()["items"] == [] and r.json()["scope"] == "room"
+
+
+def test_the_shared_refusal_is_the_one_every_service_answers_with():
+    assert subject_auth.SHARED_REFUSAL["status"] == "refused"
+    assert subject_auth.SHARED_REFUSAL["reason"] == "shared_conversation"

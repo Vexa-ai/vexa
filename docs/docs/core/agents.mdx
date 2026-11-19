@@ -47,3 +47,25 @@ What an agent may do is set by where its input came from, enforced at the bounda
 - **Untrusted** (an email, a web page) → the agent runs **propose-only**: it suggests actions
   (record a task, draft a reply, send) as cards; a human approves, and trusted code applies them.
   Irreversible effects (send, order) are always gated.
+
+## Skills and hooks in the worker
+
+The Claude Code worker loads its skills fresh on every turn, under rules the workspace cannot change:
+
+- **No hooks run.** Every launch passes `disableAllHooks`, so no hook from any settings file or
+  skill runs in the worker.
+- **Platform skills and workspace skills load together.** The platform's skills come from the
+  deployment's workspace template; the workspace's own skills come from its `skills/` folder.
+- **A workspace skill cannot grant tools.** It loads without its `allowed-tools` and `hooks` fields,
+  so it cannot let the agent use a tool the turn was not given. Platform skills are unchanged.
+- **The platform wins a name clash.** When a workspace skill has the same name as a platform skill,
+  the platform's skill loads.
+- **A workspace skill is staged as a copy of its regular files.** A link, a hard-linked file, a
+  special file (a FIFO, a device) or a hidden entry is left out. A skill folder or `SKILL.md` that
+  is a link, or a skill holding a second `SKILL.md` below its top, is not staged at all.
+- **Staging is bounded.** One turn stages at most 2000 files and 64 MiB of workspace skills, and a
+  skill nests at most 16 folders deep. A skill that would pass the limit is not staged; the turn
+  still runs.
+- **`CLAUDE.md` still loads.** The workspace's `CLAUDE.md` is read as before.
+
+The worker image runs Node.js 22, the version the pinned Claude Code release requires.

@@ -1,0 +1,7 @@
+{
+  "secret": "unit-input-vector-secret-for-tests",
+  "unit_id": "chat-42-main-0",
+  "key": "2280cd8932a9af4b4b69e7cfb2ba517a8e9bef5e406c1f3012d947ea7f9ee606",
+  "turn": "{\"type\": \"message\", \"prompt\": \"and the follow-up\", \"inbox\": {\"id\": \"c-2\", \"display\": \"and the follow-up\", \"at\": 1767225600}}",
+  "sig": "fc78b8cdade60b44a4cd387fdacab50ed0b983f375bdfc54624aa0bdb75a47f3"
+}

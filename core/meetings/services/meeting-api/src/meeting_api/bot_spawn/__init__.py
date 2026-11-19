@@ -20,11 +20,24 @@ Public surface:
     ``DuplicateMeeting``.
   * ``adapters.build_production_router(...)`` — wire with real SQLAlchemy + the httpx runtime client.
   * ``fakes`` — ``InMemoryMeetingRepo`` / ``FakeRuntimeClient`` (offline drivers).
+  * ``auth_session_config`` / ``AuthSessionConfig`` / ``AuthSessionNotConfigured`` — the
+    authenticated-bot session config (``BOT_AUTHENTICATED`` + ``BOT_USERDATA_S3_PATH`` +
+    ``BOT_S3_*``), read the same way by the spawn and by ``session_profile``'s write-back route,
+    including the refusal of a bot pair that reuses a storage root key or secret.
 """
 from __future__ import annotations
 
+from .auth_session import AuthSessionConfig, auth_session_config, storage_root_reuse
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
-from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
+from .ports import (
+    AuthSessionNotConfigured,
+    MaxBotsExceeded,
+    MeetingRepo,
+    QuotaExceeded,
+    RuntimeClient,
+    SpawnFailed,
+    TranscriptionNotConfigured,
+)
 from .router import build_router
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
@@ -42,4 +55,8 @@ __all__ = [
     "SpawnFailed",
     "TranscriptionNotConfigured",
     "DuplicateMeeting",
+    "AuthSessionConfig",
+    "AuthSessionNotConfigured",
+    "auth_session_config",
+    "storage_root_reuse",
 ]

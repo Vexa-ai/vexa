@@ -1,0 +1,55 @@
+{
+  "contract": "routes.v1",
+  "domain": "agent",
+  "owner": "core/agent",
+  "edge": "gateway",
+  "forward": {
+    "edge_prefix": "/agent/",
+    "upstream_prefix": "/api/"
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/agent/workspace/file",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/people/followups",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    }
+  ],
+  "verbs": [
+    {
+      "method": "DELETE",
+      "path": "/agent/workspace/{slug}",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/notifications",
+      "person": false,
+      "shared": "refuse"
+    }
+  ]
+}

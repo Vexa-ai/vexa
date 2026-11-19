@@ -1,0 +1,16 @@
+{
+  "name": "@vexa/no-image-backend",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Stands in for `sharp` in the bot's dependency tree (pnpm-workspace.yaml overrides). @huggingface/transformers imports sharp at module scope for its IMAGE pipeline; the mixed lane is audio-only, so the stub lets transformers load without sharp's LGPL libvips binary and turns any image call into a typed error.",
+  "type": "commonjs",
+  "main": "src/index.cjs",
+  "exports": {
+    ".": "./src/index.cjs"
+  },
+  "scripts": {
+    "test": "node --test src/index.test.cjs",
+    "check:isolation": "node scripts/check-isolation.js"
+  }
+}

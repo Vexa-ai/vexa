@@ -1,0 +1,783 @@
+{
+ "founder": {
+  "v": 1,
+  "workspace": "tinkerers",
+  "path": "README.md",
+  "nodes": [
+   {
+    "t": "md",
+    "text": "# AI Tinkerers Vienna\n"
+   },
+   {
+    "t": "block",
+    "name": "waiting-on-you",
+    "title": "Waiting on you",
+    "personal": true,
+    "rows": [
+     {
+      "key": "n1",
+      "title": "Sign the venue contract with Unicorn Factory",
+      "state": "card"
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## People"
+   },
+   {
+    "t": "block",
+    "name": "people",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "u1",
+      "title": "Dmitry Grankin (you)",
+      "detail": "owner · online · 1 waiting on you",
+      "ref": "person:u1"
+     },
+     {
+      "key": "u2",
+      "title": "Valeriia Petrenko",
+      "detail": "reader",
+      "ref": "person:u2"
+     },
+     {
+      "key": "u3",
+      "title": "Marvin Hinz",
+      "detail": "contributor · away",
+      "ref": "person:u3"
+     },
+     {
+      "key": "u4",
+      "title": "Eugenia Sokolova",
+      "detail": "contributor",
+      "ref": "person:u4"
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## Rooms"
+   },
+   {
+    "t": "block",
+    "name": "rooms",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "s-0",
+      "title": "general",
+      "detail": "4 members"
+     },
+     {
+      "key": "s-1",
+      "title": "speakers",
+      "detail": "3 members"
+     },
+     {
+      "key": "s-2",
+      "title": "venue",
+      "detail": "2 members"
+     },
+     {
+      "key": "s-3",
+      "title": "sponsors",
+      "detail": "3 members"
+     },
+     {
+      "key": "s-4",
+      "title": "ops",
+      "detail": "2 members"
+     }
+    ],
+    "more": 2,
+    "limit": 3
+   },
+   {
+    "t": "md",
+    "text": "\n## Agents and routines"
+   },
+   {
+    "t": "block",
+    "name": "routines",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "flow:digest",
+      "title": "Weekly digest",
+      "detail": "ran 2 h ago · next Mon 07:00",
+      "state": "ok"
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## Commitments"
+   },
+   {
+    "t": "block",
+    "name": "commitments",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "c-230",
+      "title": "Book Unicorn Factory for 8 Nov",
+      "detail": "waiting on Marvin · due 2026-10-24",
+      "ref": "card:c-230",
+      "state": "accepted",
+      "act": {
+       "kind": "open-card",
+       "card": "c-230"
+      }
+     },
+     {
+      "key": "c-231",
+      "title": "Confirm three speakers",
+      "detail": "waiting on Valeriia",
+      "ref": "card:c-231",
+      "state": "offered"
+     },
+     {
+      "key": "c-232",
+      "title": "Sponsor deck to OeNB",
+      "detail": "waiting on Dmitry",
+      "ref": "card:c-232",
+      "state": "in progress"
+     },
+     {
+      "key": "c-233",
+      "title": "Catering quote",
+      "state": "offered",
+      "ref": "card:c-233"
+     }
+    ],
+    "more": 1,
+    "limit": 3
+   },
+   {
+    "t": "md",
+    "text": "\n## The venue"
+   },
+   {
+    "t": "line",
+    "parts": [
+     {
+      "t": "text",
+      "text": "We meet at "
+     },
+     {
+      "t": "ref",
+      "key": "page:abcdefghij/venue.md#dates"
+     },
+     {
+      "t": "text",
+      "text": ". The decision was taken at "
+     },
+     {
+      "t": "ref",
+      "key": "meeting:153#t=00:12:30"
+     },
+     {
+      "t": "text",
+      "text": ", and it is proven by "
+     },
+     {
+      "t": "ref",
+      "key": "card:c-230",
+      "words": "Unicorn Factory, 8 Nov"
+     },
+     {
+      "t": "text",
+      "text": "."
+     }
+    ]
+   },
+   {
+    "t": "line",
+    "parts": [
+     {
+      "t": "text",
+      "text": "Board prep lives in "
+     },
+     {
+      "t": "ref",
+      "key": "chat:s-board"
+     },
+     {
+      "t": "text",
+      "text": "."
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## Partners"
+   },
+   {
+    "t": "block",
+    "name": "crm",
+    "view": "company",
+    "personal": true,
+    "rows": [
+     {
+      "key": "co1",
+      "title": "OeNB",
+      "type": "Company",
+      "fields": [
+       {
+        "name": "Domain",
+        "value": "oenb.at"
+       },
+       {
+        "name": "Name",
+        "value": "OeNB"
+       },
+       {
+        "name": "Stage",
+        "value": "Negotiation",
+        "only_you": true
+       },
+       {
+        "name": "LastContact",
+        "value": "2026-10-14",
+        "only_you": true
+       }
+      ],
+      "url": "/crm?record=co1"
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## How to use this workspace"
+   },
+   {
+    "t": "line",
+    "parts": [
+     {
+      "t": "text",
+      "text": "Start here: "
+     },
+     {
+      "t": "action",
+      "verb": "new-chat",
+      "label": "New chat",
+      "args": {
+       "prompt": "What should I know about AI Tinkerers?"
+      },
+      "confirm": false,
+      "enabled": true
+     },
+     {
+      "t": "text",
+      "text": " "
+     },
+     {
+      "t": "action",
+      "verb": "new-room",
+      "label": "New room",
+      "args": {
+       "name": "speakers"
+      },
+      "confirm": true,
+      "enabled": true
+     },
+     {
+      "t": "text",
+      "text": " "
+     },
+     {
+      "t": "action",
+      "verb": "invite",
+      "label": "Invite",
+      "args": {
+       "role": "contributor"
+      },
+      "confirm": false,
+      "enabled": true
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## Pinned"
+   },
+   {
+    "t": "block",
+    "name": "pinned",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "[[page:abcdefghij/venue.md]]",
+      "title": "Venue notes",
+      "ref": "[[page:abcdefghij/venue.md]]",
+      "by": "Dmitry",
+      "at": 1792249200
+     },
+     {
+      "key": "[[chat:s-board]]",
+      "title": "Board prep merger 41",
+      "ref": "[[chat:s-board]]",
+      "by": "Dmitry",
+      "at": 1792245600
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## What changed"
+   },
+   {
+    "t": "block",
+    "name": "changes-since",
+    "title": "",
+    "personal": true,
+    "rows": [
+     {
+      "key": "a1",
+      "title": "Marvin edited Venue",
+      "by": "Marvin",
+      "at": 1792251000
+     },
+     {
+      "key": "a2",
+      "title": "Dmitry pinned Venue notes",
+      "by": "Dmitry",
+      "at": 1792249200
+     },
+     {
+      "key": "a3",
+      "title": "Eugenia: added the catering shortlist",
+      "by": "Eugenia",
+      "at": 1792166400
+     }
+    ]
+   }
+  ],
+  "refs": {
+   "page:abcdefghij/venue.md#dates": {
+    "kind": "page",
+    "access": "readable",
+    "label": "Venue notes",
+    "open": {
+     "path": "venue.md",
+     "slug": "tinkerers"
+    },
+    "url": "/r/page/abcdefghij/venue.md#dates"
+   },
+   "meeting:153#t=00:12:30": {
+    "kind": "meeting",
+    "access": "readable",
+    "label": "Venue call · 14 Oct",
+    "open": {
+     "meeting": 153,
+     "anchor": "t=00:12:30"
+    },
+    "url": "/r/meeting/153#t=00:12:30"
+   },
+   "card:c-230": {
+    "kind": "card",
+    "access": "readable",
+    "label": "Venue contract",
+    "open": {
+     "card": "c-230"
+    },
+    "proof": "proven"
+   },
+   "chat:s-board": {
+    "kind": "chat",
+    "access": "readable",
+    "label": "Board prep merger 41",
+    "open": {
+     "chat": "s-board"
+    }
+   }
+  },
+  "title": "AI Tinkerers Vienna",
+  "role": "owner"
+ },
+ "valeriia": {
+  "v": 1,
+  "workspace": "tinkerers",
+  "path": "README.md",
+  "nodes": [
+   {
+    "t": "md",
+    "text": "# AI Tinkerers Vienna\n"
+   },
+   {
+    "t": "md",
+    "text": "\n## People"
+   },
+   {
+    "t": "block",
+    "name": "people",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "u1",
+      "title": "Dmitry Grankin",
+      "detail": "owner · online · 1 waiting on Dmitry",
+      "ref": "person:u1"
+     },
+     {
+      "key": "u2",
+      "title": "Valeriia Petrenko (you)",
+      "detail": "reader",
+      "ref": "person:u2"
+     },
+     {
+      "key": "u3",
+      "title": "Marvin Hinz",
+      "detail": "contributor · away",
+      "ref": "person:u3"
+     },
+     {
+      "key": "u4",
+      "title": "Eugenia Sokolova",
+      "detail": "contributor",
+      "ref": "person:u4"
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## Rooms"
+   },
+   {
+    "t": "block",
+    "name": "rooms",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "s-0",
+      "title": "general",
+      "detail": "4 members"
+     },
+     {
+      "key": "s-1",
+      "title": "speakers",
+      "detail": "3 members"
+     },
+     {
+      "key": "s-2",
+      "title": "venue",
+      "detail": "2 members"
+     },
+     {
+      "key": "s-3",
+      "title": "sponsors",
+      "detail": "3 members"
+     },
+     {
+      "key": "s-4",
+      "title": "ops",
+      "detail": "2 members"
+     }
+    ],
+    "more": 2,
+    "limit": 3
+   },
+   {
+    "t": "md",
+    "text": "\n## Agents and routines"
+   },
+   {
+    "t": "block",
+    "name": "routines",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "flow:digest",
+      "title": "Weekly digest",
+      "detail": "ran 2 h ago · next Mon 07:00",
+      "state": "ok"
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## Commitments"
+   },
+   {
+    "t": "block",
+    "name": "commitments",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "c-230",
+      "title": "Book Unicorn Factory for 8 Nov",
+      "detail": "waiting on Marvin · due 2026-10-24",
+      "ref": "card:c-230",
+      "state": "accepted",
+      "act": {
+       "kind": "open-card",
+       "card": "c-230"
+      }
+     },
+     {
+      "key": "c-231",
+      "title": "Confirm three speakers",
+      "detail": "waiting on Valeriia",
+      "ref": "card:c-231",
+      "state": "offered"
+     },
+     {
+      "key": "c-232",
+      "title": "Sponsor deck to OeNB",
+      "detail": "waiting on Dmitry",
+      "ref": "card:c-232",
+      "state": "in progress"
+     },
+     {
+      "key": "c-233",
+      "title": "Catering quote",
+      "state": "offered",
+      "ref": "card:c-233"
+     }
+    ],
+    "more": 1,
+    "limit": 3
+   },
+   {
+    "t": "md",
+    "text": "\n## The venue"
+   },
+   {
+    "t": "line",
+    "parts": [
+     {
+      "t": "text",
+      "text": "We meet at "
+     },
+     {
+      "t": "ref",
+      "key": "page:abcdefghij/venue.md#dates"
+     },
+     {
+      "t": "text",
+      "text": ". The decision was taken at "
+     },
+     {
+      "t": "ref",
+      "key": "meeting:153#t=00:12:30"
+     },
+     {
+      "t": "text",
+      "text": ", and it is proven by "
+     },
+     {
+      "t": "ref",
+      "key": "card:c-230",
+      "words": "Unicorn Factory, 8 Nov"
+     },
+     {
+      "t": "text",
+      "text": "."
+     }
+    ]
+   },
+   {
+    "t": "line",
+    "parts": [
+     {
+      "t": "text",
+      "text": "Board prep lives in "
+     },
+     {
+      "t": "ref",
+      "key": "chat:s-board"
+     },
+     {
+      "t": "text",
+      "text": "."
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## Partners"
+   },
+   {
+    "t": "block",
+    "name": "crm",
+    "view": "company",
+    "personal": false,
+    "rows": [
+     {
+      "key": "co1",
+      "title": "OeNB",
+      "type": "Company",
+      "fields": [
+       {
+        "name": "Domain",
+        "value": "oenb.at"
+       },
+       {
+        "name": "Name",
+        "value": "OeNB"
+       }
+      ],
+      "url": "/crm?record=co1"
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## How to use this workspace"
+   },
+   {
+    "t": "line",
+    "parts": [
+     {
+      "t": "text",
+      "text": "Start here: "
+     },
+     {
+      "t": "action",
+      "verb": "new-chat",
+      "label": "New chat",
+      "args": {
+       "prompt": "What should I know about AI Tinkerers?"
+      },
+      "confirm": false,
+      "enabled": true
+     },
+     {
+      "t": "text",
+      "text": " "
+     },
+     {
+      "t": "action",
+      "verb": "new-room",
+      "label": "New room",
+      "args": {
+       "name": "speakers"
+      },
+      "confirm": true,
+      "enabled": false,
+      "reason": "Read-only for you here"
+     },
+     {
+      "t": "text",
+      "text": " "
+     },
+     {
+      "t": "action",
+      "verb": "invite",
+      "label": "Invite",
+      "args": {
+       "role": "contributor"
+      },
+      "confirm": false,
+      "enabled": false,
+      "reason": "Read-only for you here"
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## Pinned"
+   },
+   {
+    "t": "block",
+    "name": "pinned",
+    "title": "",
+    "personal": false,
+    "rows": [
+     {
+      "key": "[[page:abcdefghij/venue.md]]",
+      "title": "Venue notes",
+      "ref": "[[page:abcdefghij/venue.md]]",
+      "by": "Dmitry",
+      "at": 1792249200
+     },
+     {
+      "key": "[[chat:s-board]]",
+      "restricted": true,
+      "by": "Dmitry",
+      "at": 1792245600
+     }
+    ]
+   },
+   {
+    "t": "md",
+    "text": "\n## What changed"
+   },
+   {
+    "t": "block",
+    "name": "changes-since",
+    "title": "",
+    "personal": true,
+    "rows": [
+     {
+      "key": "a1",
+      "title": "Marvin edited Venue",
+      "by": "Marvin",
+      "at": 1792251000
+     },
+     {
+      "key": "a2",
+      "title": "Dmitry pinned Venue notes",
+      "by": "Dmitry",
+      "at": 1792249200
+     },
+     {
+      "key": "a3",
+      "title": "Eugenia: added the catering shortlist",
+      "by": "Eugenia",
+      "at": 1792166400
+     }
+    ]
+   }
+  ],
+  "refs": {
+   "page:abcdefghij/venue.md#dates": {
+    "kind": "page",
+    "access": "readable",
+    "label": "Venue notes",
+    "open": {
+     "path": "venue.md",
+     "slug": "tinkerers"
+    },
+    "url": "/r/page/abcdefghij/venue.md#dates"
+   },
+   "meeting:153#t=00:12:30": {
+    "kind": "meeting",
+    "access": "readable",
+    "label": "Venue call · 14 Oct",
+    "open": {
+     "meeting": 153,
+     "anchor": "t=00:12:30"
+    },
+    "url": "/r/meeting/153#t=00:12:30"
+   },
+   "card:c-230": {
+    "kind": "card",
+    "access": "readable",
+    "label": "Venue contract",
+    "open": {
+     "card": "c-230"
+    },
+    "proof": "proven"
+   },
+   "chat:s-board": {
+    "kind": "chat",
+    "access": "not-yours",
+    "request_access": true
+   }
+  },
+  "title": "AI Tinkerers Vienna",
+  "role": "reader"
+ }
+}

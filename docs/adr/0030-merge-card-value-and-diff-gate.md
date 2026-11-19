@@ -125,3 +125,14 @@ level. Until now they were review practice (D-S, TAKE step 3), so a PR could mer
 - The card's script runs from `main` for PRs into every base branch, so release-line PRs render the
   rows. Whether a red card blocks the merge is the base branch's protection: today only `main`
   requires `merge-card`.
+
+## Amendment 2026-10-30 — the value-signed label is retired (#1935)
+
+**Ruling.** Founder, 30 Oct ~21:17 UTC: remove the value-signed label and the needless obstacles (#1935).
+
+**Decision.** The `state: value-signed` label is retired; `merge-card-gate.mjs` no longer reads it.
+The Value row is `value-fsm` green on the head sha alone: `success` passes; any other terminal
+verdict, or a run still pending or absent after the #655 wait budget, stays red. A non-runtime PR
+has no value-fsm leg and passes the row. A non-author live validation is optional, credited in the
+release notes, and never a step before merge. The label-actor authorization open item above is
+moot. The diff, acceptance and pass rows are unchanged; the diff review is the human gate.

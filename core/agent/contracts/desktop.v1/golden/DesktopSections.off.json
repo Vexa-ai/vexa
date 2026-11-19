@@ -1,0 +1,13 @@
+{
+  "presence_visibility": "off",
+  "workspaces": [
+    {
+      "slug": "personal", "id": "7", "name": "Personal", "kind": "private", "access": "owner", "write": true,
+      "members": [{"subject": "7", "name": "7", "initials": "7", "role": "owner", "presence": null}],
+      "last_activity": null, "last_call": null, "live_call": null
+    }
+  ],
+  "hidden_workspaces": 0,
+  "agents": [{"ref": "agent:flow:morning-brief", "id": "flow:morning-brief", "missing": false, "unavailable": true}],
+  "files": [{"ref": "file:client-x-4f2a91/plan.md", "missing": true}]
+}

@@ -80,5 +80,6 @@ def test_production_runtime_gets_the_env_grace(monkeypatch):
     monkeypatch.setenv("RUNTIME_STOP_GRACE_SEC", "42")
     monkeypatch.delenv("REDIS_URL", raising=False)          # no scheduler ticker
     monkeypatch.delenv("AGENT_IMAGE", raising=False)        # no worker-image ensure
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "a-runtime-caller-token-of-sufficient-length-0123")
     app = build_production_app()
     assert app.state.runtime.grace_sec == 47.0

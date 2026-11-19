@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/home-card.v1",
+  "title": "home-card.v1",
+  "description": "The new-chat home's envelope over blocks.v1: a greeting, up to seven ranked cards (blocks.v1 Card) and the grey line naming what was left out, as the background home_compose flow writes it per person; and the Feedback body. See blocks.v1 for the vocabulary and its rules.",
+  "x-limits": {
+    "cards": 7,
+    "phoneCards": 5,
+    "blocks": 12,
+    "rows": 6,
+    "items": 6,
+    "actions": 4,
+    "depth": 3,
+    "people": 40,
+    "short": 60,
+    "text": 240,
+    "prompt": 600,
+    "showRows": 3
+  },
+  "$defs": {
+    "HomeDoc": {
+      "type": "object",
+      "required": [
+        "spec",
+        "composed_at",
+        "greeting",
+        "cards",
+        "people"
+      ],
+      "properties": {
+        "spec": {
+          "const": "home-card.v1"
+        },
+        "composed_at": {
+          "type": "string",
+          "description": "ISO timestamp of the compose run"
+        },
+        "greeting": {
+          "type": "object",
+          "required": [
+            "title"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 240
+            }
+          }
+        },
+        "cards": {
+          "type": "array",
+          "maxItems": 7,
+          "items": {
+            "$ref": "https://vexa.ai/schemas/blocks.v1#/$defs/Card"
+          }
+        },
+        "left_out": {
+          "type": "string",
+          "maxLength": 240,
+          "description": "the grey line naming the kinds left out"
+        },
+        "people": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "https://vexa.ai/schemas/blocks.v1#/$defs/Key"
+          },
+          "additionalProperties": {
+            "$ref": "https://vexa.ai/schemas/blocks.v1#/$defs/Person"
+          }
+        }
+      }
+    },
+    "Feedback": {
+      "type": "object",
+      "required": [
+        "card",
+        "kind",
+        "signal"
+      ],
+      "properties": {
+        "card": {
+          "$ref": "https://vexa.ai/schemas/blocks.v1#/$defs/Key"
+        },
+        "kind": {
+          "$ref": "https://vexa.ai/schemas/blocks.v1#/$defs/Kind"
+        },
+        "signal": {
+          "enum": [
+            "click",
+            "dismiss",
+            "snooze",
+            "sent"
+          ],
+          "description": "sent = a card's prompt went into a chat (chat names it)"
+        },
+        "chat": {
+          "$ref": "https://vexa.ai/schemas/blocks.v1#/$defs/Key"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "reason": {
+          "enum": [
+            "wrong",
+            "done",
+            "not_now"
+          ],
+          "description": "dismiss only"
+        },
+        "people": {
+          "type": "array",
+          "items": {
+            "$ref": "https://vexa.ai/schemas/blocks.v1#/$defs/Key"
+          },
+          "maxItems": 6
+        }
+      }
+    }
+  }
+}

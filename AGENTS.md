@@ -4,7 +4,7 @@ Two constitutions govern everything here — read them on the docs site or in th
 
 - **[Architecture](https://docs.vexa.ai/governance/architecture)** — the P-book
   ([`docs/docs/governance/architecture.mdx`](docs/docs/governance/architecture.mdx)): what the
-  software must be (P1–P23, enforced by the CI gate suite). Your change must fit these.
+  software must be (P1–P24, enforced by the CI gate suite). Your change must fit these.
 - **[Delivery](https://docs.vexa.ai/governance/delivery)** — the D-book
   ([`docs/docs/governance/delivery.mdx`](docs/docs/governance/delivery.mdx)): how change ships —
   the whole loop (roadmap · PREPARE · TAKE · validation · merge bar · ship bar) in one file.
@@ -55,8 +55,8 @@ same key, the same gateway — and you get Vexa's meeting tools and prompts with
   "https://api.cloud.vexa.ai/mcp", "--header", "Authorization: Bearer ${VEXA_API_KEY}"]}}}
 ```
 
-The key lives in `VEXA_API_KEY`. **Scopes decide which tools work**: a `bot`-only key dispatches
-bots and reads recordings but gets `403 Insufficient scope` on transcripts and meetings. The
+The key lives in `VEXA_API_KEY`. Any key holding `bot` or `tx` reaches every tool, limited to
+the meetings its user owns or can see; only a `browser`-only key gets `403 Insufficient scope`. The
 key's prefix is a hint, not the truth — call `GET /auth/me` for the scopes you actually hold.
 Full page: https://docs.vexa.ai/vexa-mcp
 
@@ -74,7 +74,8 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
   pairs, negative controls, anchors) and the PR **merges — that's a promise** (D10). If your
   bundle satisfies the table and something is still wrong, that's *our* table bug, not yours.
 - **Deployments to validate · docs surface · preferred validator** — the change isn't done
-  until its docs move with it and someone is named to witness it.
+  until its docs move with it; the preferred validator is who is invited to witness it
+  (optional, credited).
 
 ## Claiming — and say hello on Discord
 
@@ -186,7 +187,8 @@ trailers (D13).
 
 The maintainer triages your PR by the
 [TAKE protocol](https://docs.vexa.ai/governance/delivery#take-protocol) — read it to know
-exactly how you'll be read. Then a **non-author validates the value**
-([the attestation shape](https://docs.vexa.ai/governance/delivery#validation)); validators are
-credited in release notes alongside you, and the reporter of the original bug is the preferred
-signer of your fix.
+exactly how you'll be read. Your PR merges on a green merge card: value-fsm green on the head,
+the diff reviewed, the passes on record. A **non-author may also validate the value live**
+([how](https://docs.vexa.ai/governance/delivery#validation)). That is optional and not awaited:
+validators are credited in release notes alongside you, and the reporter of the original bug is
+the preferred validator of your fix.

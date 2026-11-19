@@ -1,0 +1,8 @@
+{
+  "identity": { "subject": "u_jane", "launcher": "integration:signals" },
+  "runner": "claude-code",
+  "workspaces": [ { "id": "u_jane", "mode": "ro" } ],
+  "trigger": "signal",
+  "context": { "kind": "generic" },
+  "start": { "entrypoint": { "inline": "Signals since your last look (score 1.3 against your brief). Update the meeting page; if your focus should change, call meeting_listen." } }
+}

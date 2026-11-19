@@ -24,18 +24,71 @@ turned a gateway hiccup into "your API key is invalid" for every user at once. `
 records that lesson at the gateway; this is the same rule at flows' door, including the case the
 gateway does not have: identity answering 403 because OUR internal secret is wrong is a deployment
 fault, and telling the person their key is invalid sends them to rotate a key that works.
+
+A WORKER ACTING FOR A PERSON is a fourth answer folded into the first. Identity answers a worker's
+delegation token (`vxd_`) only to a resolver that declares it reads the delegation
+(`ACCEPTS_DELEGATION_HEADER`), and flows does: the person comes back with `delegation` — the
+dispatch's `regime`, `workspaces` and `target` — and `Caller` carries it. A worker whose regime is
+not `human` runs with nobody in the loop (`Caller.is_unwatched`, the rule gateway-identity.v1's
+`identity_token.is_unwatched` states for the services behind the gateway), and flows-api refuses it
+the verbs that act as the person with `REFUSAL`, the body every other service answers it with.
+
+A WORKER WHOSE TURN OTHER PEOPLE READ (`delegation.shared`, ADR-0048 decision 4) is `Caller.is_shared`.
+A shared conversation's answer may use only what every participant can read, and a person's flows,
+reactions, timeline and queue are theirs alone, so flows-api refuses it every route but filing a
+friction report, with `SHARED_REFUSAL` — except `GET /queue/waiting`, which answers it the room's
+subset: only items naming a workspace on its shared ceiling (`flows_queue.room_workspaces`).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Optional
 
 import flows_config
+import flows_obs
 
 #: identity's authz oracle — the route, not a route. Same path the gateway posts to.
 VALIDATE_PATH = "/internal/validate"
 #: how long we wait for it. The gateway waits 5s for the same hop; a door check that takes longer
 #: than the call it guards is its own outage.
 TIMEOUT_S = 5.0
+
+#: The header flows sets, to `ACCEPTS_DELEGATION_VALUE`, on that hop to declare that it reads a
+#: delegation answer (identity.v1 `AcceptsDelegationHeader`). Without it identity refuses a worker's
+#: token like one nobody holds.
+ACCEPTS_DELEGATION_HEADER = "x-vexa-internal-accepts-delegation"
+ACCEPTS_DELEGATION_VALUE = "1"
+#: The prefix every delegation token carries (delegation.v1 `PREFIX`). A `vxd_` bearer is a worker's
+#: even if identity's answer lost its `delegation`: that answer cannot turn it into the person's key.
+DELEGATION_TOKEN_PREFIX = "vxd_"
+
+#: What a verb that needs a person in the loop answers a worker running without one — the body
+#: gateway-identity.v1's `identity_token.REFUSAL` is, so a worker reads one refusal whichever service
+#: it hit. flows-api is not behind the gateway's signed identity, so it holds a copy, and
+#: gate:fact-parity holds the copy to the contract's.
+REFUSAL = {
+    "status": "refused",
+    "reason": "human_session_required",
+    "instruction": "This session runs without a person in the loop. Record what you wanted to do "
+                   "and stop; do not retry it another way.",
+    "remedy": "ask_in_chat",
+    "tell_your_person": "This ran without you present (a scheduled routine, a background flow or a "
+                        "meeting run), and mail, calendar and connection actions only work when you "
+                        "ask in chat. Nothing is wrong with your connection, and signing in again "
+                        "will not change it.",
+}
+
+
+#: The answer a worker whose turn other people read gets for anything only its person may see —
+#: gateway-identity.v1's ``SHARED_REFUSAL``, word for word (gate:fact-parity holds the copy).
+SHARED_REFUSAL = {
+    "status": "refused",
+    "reason": "shared_conversation",
+    "instruction": "Other people read this conversation, so its answer may use only what every one "
+                   "of them can read. Say you cannot use it here, and offer to answer in the "
+                   "person's private chat; do not retry it another way.",
+}
 
 
 class IdentityUnavailable(Exception):
@@ -69,6 +122,66 @@ class Caller:
     kind: str
     uid: str = ""
     email: str = ""
+    #: A worker's ceiling, as identity answered it (`regime`, `workspaces`, `target`) — present only
+    #: when the credential is a worker's delegation token, `{}` when that answer lost it. `None` is a
+    #: person's own key, the operator key and the timeline key.
+    delegation: Optional[Mapping] = field(default=None, hash=False)
+    #: identity's own answer that this caller is the deployment's admin account (`admin_account` on
+    #: `/internal/validate` for its own key, `person_admin_account` for its chat's delegation token) —
+    #: what lets it write an `instance` flow (ADR-0046 decision 5). A worker with nobody in the loop
+    #: still cannot author: `POST /flows` is `PERSON_ONLY`.
+    instance_admin: bool = False
+    #: THE CREDENTIAL CLASS identity answered (identity.v1 ``credential_class``, D13): ``session``
+    #: for the terminal's signed-in browser, ``key`` for every other API key, ``delegation`` for a
+    #: worker; ``""`` when identity stated none (an older identity) and for the operator and timeline
+    #: keys. Arming a person's routine needs ``session`` (``is_session``).
+    credential_class: str = ""
+
+    @property
+    def is_session(self) -> bool:
+        """A person at the terminal: their own (non-delegated) credential, and identity said it is a
+        SESSION. Positive evidence only — a key with the browser scope is not one."""
+        return self.kind == "subject" and not self.is_delegated and self.credential_class == "session"
+
+    @property
+    def is_delegated(self) -> bool:
+        """A worker acting for the person `uid` names, not the person."""
+        return self.delegation is not None
+
+    @property
+    def regime(self) -> str:
+        """The dispatch's regime, `""` when it has none. `human` means the person is in the loop."""
+        return str((self.delegation or {}).get("regime") or "").strip().lower()
+
+    @property
+    def is_unwatched(self) -> bool:
+        """A worker whose regime is not `human` — empty, unknown and `autonomous` alike: nobody is in
+        the loop this turn. `identity_token.is_unwatched`'s rule, read from identity's answer."""
+        return self.is_delegated and self.regime != "human"
+
+    @property
+    def is_shared(self) -> bool:
+        """A worker whose answer other people read (delegation.v1 ``scope.shared``, carried by
+        identity as ``delegation.shared``). Only ``true`` counts — or a WORKSPACE principal
+        (``delegation.principal_kind`` = ``workspace``, D2: a room's turn), which is shared by construction,
+        so flows refuses it every route but ``SHARED_OPEN`` whatever its ``shared`` flag says."""
+        dlg = self.delegation or {}
+        return self.is_delegated and (dlg.get("shared") is True
+                                      or dlg.get("principal_kind") == "workspace")
+
+    @property
+    def flow(self) -> str:
+        """The routine this worker runs for (delegation.v1 ``scope.flow``), ``""`` for anything else."""
+        return str((self.delegation or {}).get("flow") or "").strip()
+
+    @property
+    def grants(self) -> frozenset:
+        """The unattended verbs this routine's person granted it (delegation.v1 ``scope.grants``),
+        as identity answered them — only beside the routine's name, empty for everything else."""
+        raw = (self.delegation or {}).get("grants")
+        if not self.flow or not isinstance(raw, list):
+            return frozenset()
+        return frozenset(str(g) for g in raw)
 
     @property
     def is_admin(self) -> bool:
@@ -95,23 +208,86 @@ class Caller:
         return {s for s in (self.uid.strip().lower(), self.email.strip().lower()) if s}
 
 
-def _validate(base: str, token: str, secret: str):
+def _validate(base: str, token: str, key: str):
     """The one HTTP hop, alone in a function so a test can replace exactly it.
 
     `flows_steps.common.http` rather than httpx: flows has no httpx at runtime and reaches every
     service over urllib — declaring a wheel for one POST would make this module the reason the
     image grows.
+
+    THE DOOR'S TICKET. On a credential it validated, the service door answers a short `gateway`
+    subject ticket for that person (`X-Vexa-Subject-Ticket` on the response, subject-ticket.v1);
+    it joins this request's presented tickets (`flows.tickets`), so the door calls flows-api makes
+    for the person during this request carry it.
     """
+    from flows import tickets
     from flows_steps.common import http
-    return http("POST", f"{base}{VALIDATE_PATH}", {"X-Internal-Secret": secret}, {"token": token},
-                timeout=TIMEOUT_S)
+    from flows_steps.common import SERVICE_KEY_HEADER
+    from flows_steps.subject_ticket import HEADER, split
+    headers = {SERVICE_KEY_HEADER: key, ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE}
+    answered: dict = {}
+    code, body = http("POST", f"{base}{VALIDATE_PATH}", headers, {"token": token},
+                      timeout=TIMEOUT_S, response_headers=answered)
+    if int(code or 0) == 200:
+        tickets.add(split(answered.get(HEADER.lower())))
+    return code, body
+
+
+#: The header flows-api sends on the validate hop to ask the door for a ROUTINE GRANT
+#: (`user:<uid>/<name>`), and the response header the door answers it in — a `gateway` grant,
+#: issued only for a session credential (subject-ticket.v1).
+GRANT_REQUEST_HEADER = "X-Vexa-Ticket-Grant"
+GRANT_HEADER = "X-Vexa-Subject-Grant"
+
+
+def _request_grant(base: str, token: str, key: str, routine: str) -> str:
+    """The door's routine grant for `routine` (`user:<uid>/<name>`) on this credential, or "".
+    The same validate hop, asking for a grant; alone in a function so a test replaces exactly it."""
+    from flows_steps.common import http
+    from flows_steps.common import SERVICE_KEY_HEADER
+    headers = {SERVICE_KEY_HEADER: key, ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE,
+               GRANT_REQUEST_HEADER: routine}
+    answered: dict = {}
+    code, _body = http("POST", f"{base}{VALIDATE_PATH}", headers, {"token": token},
+                       timeout=TIMEOUT_S, response_headers=answered)
+    grant = str(answered.get(GRANT_HEADER.lower()) or "").strip()
+    return grant if int(code or 0) == 200 else ""
+
+
+def routine_grant(token: str, routine: str, *, secret: str = "") -> str:
+    """A `gateway` routine grant for the person whose session `token` is, for `routine`
+    (`user:<uid>/<name>`) — or "" when the door issues none (not a session, identity down, a door
+    that issues no grants). Never raises: arming does not fail for want of a grant; the routine's
+    bound calls are refused at the door instead, and say so."""
+    token = str(token or "").strip()
+    if not token or not routine:
+        return ""
+    try:
+        if not secret:
+            from flows_steps.common import require_service_key
+            secret = require_service_key()
+        base = flows_config.require("VEXA_FLOWS_ADMIN_API_URL").rstrip("/")
+        return _request_grant(base, token, secret, routine)
+    except Exception as e:  # noqa: BLE001 — named, never fatal
+        flows_obs.log_event("routine_grant_unavailable", level="warning",
+                            fields={"routine": routine, "error": type(e).__name__})
+        return ""
+
+
+def _delegation_of(token: str, body: Mapping) -> Optional[dict]:
+    """The worker's ceiling, `{}` for a worker's token whose answer lost it, `None` for a person."""
+    dlg = body.get("delegation")
+    if isinstance(dlg, Mapping):
+        return dict(dlg)
+    return {} if token.startswith(DELEGATION_TOKEN_PREFIX) else None
 
 
 def resolve(token: str, *, secret: str = "") -> Caller:
     """The person this credential belongs to. Raises :class:`SubjectUnknown` or
     :class:`IdentityUnavailable` — never returns a caller it is not sure about.
 
-    `secret` is the internal-tier credential the CALLER already read at boot — flows-api holds it
+    `secret` is the flows key the CALLER already read at boot (the gateway's service door forwards
+    this one call to identity over the internal tier) — flows-api holds it
     as a module constant precisely so an unconfigured deployment stops at import rather than at the
     first request. Passed in rather than re-read here so there is one read of it in the process,
     and so a missing one is a boot refusal and never a per-request 503.
@@ -120,8 +296,8 @@ def resolve(token: str, *, secret: str = "") -> Caller:
     if not token:
         raise SubjectUnknown("no credential")
     if not secret:
-        from flows_steps.common import require_internal_secret
-        secret = require_internal_secret()
+        from flows_steps.common import require_service_key
+        secret = require_service_key()
     base = flows_config.require("VEXA_FLOWS_ADMIN_API_URL").rstrip("/")
     try:
         code, body = _validate(base, token, secret)
@@ -132,9 +308,35 @@ def resolve(token: str, *, secret: str = "") -> Caller:
     if code == 401:
         raise SubjectUnknown("identity does not recognise this credential")
     if code != 200 or not isinstance(body, dict):
-        # 403 = our internal secret; 503 = identity unconfigured; anything else = not a verdict.
+        # 403 = the door refused our key; 503 = identity unconfigured; else not a verdict.
         raise IdentityUnavailable(f"identity answered {code} to the token check")
     uid = body.get("user_id")
     if uid in (None, ""):
         raise IdentityUnavailable("identity answered 200 with no user_id")
-    return Caller(kind="subject", uid=str(uid), email=str(body.get("email") or ""))
+    delegation = _delegation_of(token, body)
+    # INSTANCE-SCOPE FLOWS ARE THE DEPLOYMENT'S ADMIN ACCOUNT'S (identity.v1 `admin_account`, the one
+    # identity that writes the company layer — founder ruling 2026-10-11), never an everyday account's.
+    # The account's own key answers `admin_account`; its chat's delegation token answers
+    # `person_admin_account`, which identity computes from the person the VERIFIED token names — so
+    # a worker cannot claim it. A worker's answer that lost its delegation is never the account.
+    if delegation is None:
+        is_account = body.get("admin_account") is True
+    else:
+        is_account = bool(delegation) and body.get("person_admin_account") is True
+    # THE CREDENTIAL CLASS (D13): a worker is `delegation` whatever the answer says; a person's own
+    # credential is what identity stated, if it is one of the two words, else nothing.
+    stated = body.get("credential_class")
+    credential_class = ("delegation" if delegation is not None
+                        else stated if stated in ("session", "key") else "")
+    caller = Caller(kind="subject", uid=str(uid), email=str(body.get("email") or ""),
+                    delegation=delegation, instance_admin=is_account,
+                    credential_class=credential_class)
+    # THE SESSION, from the one source that can vouch for it: identity verified `unit` inside the
+    # delegation token's signature (logevent.v1 `session`). Never from a header the caller sent.
+    flows_obs.set_user_id(caller.uid)
+    unit = (caller.delegation or {}).get("unit")
+    if unit:
+        flows_obs.set_session(str(unit))
+    flows_obs.log_event("caller_resolved",
+                        fields={"delegated": caller.is_delegated, "regime": caller.regime or None})
+    return caller

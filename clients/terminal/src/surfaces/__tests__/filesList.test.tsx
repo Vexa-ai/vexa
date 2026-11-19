@@ -9,11 +9,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { FilesList } from "../workspace";
 import { ServicesProvider, createContainer, reg } from "../../platform";
-import { LayoutServiceId, createLayoutService, type LayoutService } from "../../workbench/layout";
-import * as api from "../workspaceApi";
+import { LayoutServiceId, createLayoutService, type LayoutService } from "../../platform/layout";
+import * as api from "../../data/workspaceApi";
 
-vi.mock("../workspaceApi", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../workspaceApi")>()),
+vi.mock("../../data/workspaceApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../data/workspaceApi")>()),
   readActiveSet: vi.fn(),
   listWorkspaceTree: vi.fn(),
   readAttachedWorkspaces: vi.fn(),

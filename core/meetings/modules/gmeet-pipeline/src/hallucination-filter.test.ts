@@ -44,5 +44,20 @@ check("real Russian speech that merely contains the words is kept",
 check("real Spanish speech still kept (no over-filter)",
   isHallucination("empecemos con el bounded context de facturacion") === false);
 
+// Credit lines with names in them (a real call, 2026-10-14: "Редактор субтитров А.Семкин Корректор
+// А.Егорова" mid-meeting). Never speech, whatever the audio did.
+check('ru credits with names → dropped', isHallucination("Редактор субтитров А.Семкин Корректор А.Егорова", { voiced: true }) === true);
+check('ru "Субтитры сделал <name>" → dropped', isHallucination("Субтитры сделал Иван Петров", { voiced: true }) === true);
+check('ru "Субтитры подготовила <name>" → dropped', isHallucination("Субтитры подготовила М. Сидорова") === true);
+check('en "Subtitles by <name>" → dropped', isHallucination("Subtitles by the Amara.org community", { voiced: true }) === true);
+// Outros: dropped on a window with no speech energy, kept when somebody actually said it.
+check('"Thanks for watching, see you!" on a silent window → dropped', isHallucination("Thanks for watching, see you!", { voiced: false }) === true);
+check('"Спасибо за внимание" on a silent window → dropped', isHallucination("Спасибо за внимание.", { voiced: false }) === true);
+check('"Спасибо за внимание" said aloud → kept', isHallucination("Спасибо за внимание.", { voiced: true }) === false);
+check("speech that talks about subtitles is kept",
+  isHallucination("Давай включим субтитры на этом видео для гостей", { voiced: true }) === false);
+check("speech about an editor is kept",
+  isHallucination("Редактор сказал, что статья выйдет в пятницу", { voiced: true }) === false);
+
 if (failed) { console.error(`\n❌ hallucination-filter: ${failed} checks FAILED.`); process.exit(1); }
 console.log(`\n✅ hallucination-filter: all checks pass — phrase-list + short/repetition junk dropped, real speech kept.`);

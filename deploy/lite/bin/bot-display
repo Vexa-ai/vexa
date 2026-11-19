@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""bot-display — the two steps bin/vexa-bot-launch takes around a meeting bot's own X display. Runs as
+the bot's uid; prints nothing but errors, never the cookie.
+
+  bot-display cookie <authority-file>
+      Write a fresh X authority file: one random MIT-MAGIC-COOKIE-1 for any address and any display
+      number (the bot's Xvfb picks its number when it starts, and reads every cookie in its -auth
+      file whatever the number). The file is created 0600 in a directory that must already exist and
+      be the caller's alone (0700) — the bot's HOME. Xvfb runs with access control on, so only a
+      process that can read this file opens the display: this bot, and root.
+
+  bot-display check <display-number> <xvfb-pid>
+      Before the bot connects: both of the display's sockets — the abstract one, which clients try
+      first and which no file permission protects, and /tmp/.X11-unix/X<n> — must be answered by the
+      bot's own Xvfb (its pid, its uid), and /tmp/.X11-unix must be root's and sticky. Otherwise some
+      other process took the display's name first, and the bot would hand it its cookie and its screen.
+"""
+import os
+import secrets
+import socket
+import stat
+import struct
+import sys
+
+FAMILY_WILD = 65535
+NAME = b"MIT-MAGIC-COOKIE-1"
+SOCKET_DIR = "/tmp/.X11-unix"
+
+
+def entry(family: int, address: bytes, number: bytes, data: bytes) -> bytes:
+    out = struct.pack(">H", family)
+    for field in (address, number, NAME, data):
+        out += struct.pack(">H", len(field)) + field
+    return out
+
+
+def cookie(path: str) -> int:
+    directory = os.path.dirname(os.path.abspath(path))
+    st = os.lstat(directory)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        print(f"bot-display: {directory} is not this uid's own 0700 directory", file=sys.stderr)
+        return 1
+    data = entry(FAMILY_WILD, b"", b"", secrets.token_bytes(16))   # any address, any display number
+    tmp = f"{path}.{secrets.token_hex(4)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+        os.fchmod(f.fileno(), 0o600)
+    os.replace(tmp, path)
+    return 0
+
+
+def peer(address: str):
+    """(pid, uid) of whoever answers on this Unix socket address, or None if no one does."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(5)
+        try:
+            s.connect(address)
+        except OSError:
+            return None
+        pid, uid, _gid = struct.unpack("3i", s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                          struct.calcsize("3i")))
+        return pid, uid
+
+
+def check(number: str, xvfb_pid: str, socket_dir: str = SOCKET_DIR, dir_owner: int = 0) -> int:
+    if not number.isdigit() or not xvfb_pid.isdigit():
+        print("bot-display: a display number and a pid are digits", file=sys.stderr)
+        return 2
+    me, want = os.getuid(), (int(xvfb_pid), os.getuid())
+    st = os.lstat(socket_dir)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != dir_owner or not st.st_mode & stat.S_ISVTX:
+        print(f"bot-display: {socket_dir} is not a root-owned sticky directory", file=sys.stderr)
+        return 1
+    path = f"{socket_dir}/X{number}"
+    sock = os.lstat(path)
+    if not stat.S_ISSOCK(sock.st_mode) or sock.st_uid != me:
+        print(f"bot-display: {path} is not this uid's socket", file=sys.stderr)
+        return 1
+    for address in ("\0" + path, path):
+        got = peer(address)
+        if got != want:
+            where = "the abstract socket" if address.startswith("\0") else path
+            print(f"bot-display: {where} of display :{number} is not answered by this bot's X server",
+                  file=sys.stderr)
+            return 1
+    return 0
+
+
+def main(argv) -> int:
+    if len(argv) == 3 and argv[1] == "cookie":
+        return cookie(argv[2])
+    if len(argv) == 4 and argv[1] == "check":
+        return check(argv[2], argv[3])
+    print("usage: bot-display cookie <authority-file> | bot-display check <display-number> <xvfb-pid>",
+          file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

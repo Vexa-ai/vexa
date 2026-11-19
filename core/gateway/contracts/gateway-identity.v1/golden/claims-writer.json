@@ -1,0 +1,18 @@
+{
+  "email": "ada@example.com",
+  "exp": 1760000060,
+  "iat": 1760000000,
+  "limits": 3,
+  "scopes": [
+    "tx"
+  ],
+  "sub": "42",
+  "typ": "vexa-identity",
+  "workspaces": [
+    "ws_7f3a",
+    "ws_read"
+  ],
+  "writable_workspaces": [
+    "ws_7f3a"
+  ]
+}

@@ -52,7 +52,7 @@ def test_wizard_stt_flow(stack):
         # transcribe_enabled deliberately OMITTED — the default (true) is the fresh-install path.
         "bot_name": "mock:normal" if MOCK_BOT else "wizard-flow-probe",
     }
-    headers = {"x-user-id": str(user_id), "x-user-limits": "5"}
+    headers = {"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": "5"}
 
     # Baseline: the platform setting must start empty, or the RED leg proves nothing.
     code, body = http(

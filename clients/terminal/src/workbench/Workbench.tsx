@@ -4,7 +4,7 @@
  *  CENTER: dockview TABS — a "tab" host resolves each panel by params.kind via the tab registry.
  *  RIGHT (resizable/collapsible): the persistent workspace chat, grounded by the active center tab.
  *  Reuses the Phase-C ⌘K palette + keybindings; the kernel's services do the rest. */
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps, type IDockviewPanelHeaderProps, themeAbyss } from "dockview-react";
@@ -13,23 +13,22 @@ import "dockview/dist/styles/dockview.css";
 const PANES_KEY = "vexa.terminal.panes.v2";
 const savedSizes = (): number[] | undefined => { try { const s = localStorage.getItem(PANES_KEY); const a = s ? JSON.parse(s) : null; return Array.isArray(a) && a.length === 3 ? a : undefined; } catch { return undefined; } };
 const persistSizes = (s: number[]) => { try { localStorage.setItem(PANES_KEY, JSON.stringify(s)); } catch { /* noop */ } };
-import { useService, useStore, KeybindingServiceId } from "../platform";
-import { LayoutServiceId } from "./layout";
+import { useService, useStore, KeybindingServiceId, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, ASK_CHAT_EVENT } from "../platform";
+import { LayoutServiceId } from "../platform/layout";
 import { CommandPalette } from "./CommandPalette";
 import { OpsNotice } from "./OpsNotice";
 import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
 import { updatesBadge, markUpdatesSeen, updatesSeenTs } from "../surfaces/updatesBadge";
-import { readActiveSet, readWorkspaceGit } from "../surfaces/workspaceApi";
+import { readActiveSet, readWorkspaceGit } from "../data/workspaceApi";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Chat } from "../surfaces/chat";
-import { resolveDocRef } from "../ui-kit/docLinks";
+import { metaOfOpen, resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
-import { isOwnedPath, meetingIdFromPath, meetingPath } from "../app/meetingRoute";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
-import { useTheme } from "../app/theme";
-import { meetingsOnly } from "../app/mode";
+import { isOwnedPath, meetingIdFromPath, meetingPath } from "../platform/meetingRoute";
+import { useTheme } from "../platform/theme";
+import { meetingsOnly, minutesOnly } from "../platform/mode";
 
 // ── theme toggle: dark ⇄ day mode, icon button in the profile row ──
 function ThemeToggle() {
@@ -37,7 +36,7 @@ function ThemeToggle() {
   const day = theme === "light";
   return (
     <button onClick={toggle} title={day ? "Switch to dark mode" : "Switch to day mode"}
-      style={{ flex: "none", display: "flex", alignItems: "center", padding: 4, borderRadius: 6, background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }}>
+      className="p-1 r-md bg-none bd-none c-3" style={{ flex: "none", display: "flex", alignItems: "center", cursor: "pointer" }}>
       <Icon name={day ? "moon" : "sun"} size={15} />
     </button>
   );
@@ -62,7 +61,7 @@ function TabHost(props: IDockviewPanelProps) {
     return () => d.dispose();
   }, [props.api]);
   useEffect(() => { if (active) layout.setActiveTab(kind ? { kind, params: params.p ?? {} } : null); }, [active, kind, layout, params.p]);
-  if (!Comp) return <div style={{ padding: 24, color: "var(--t3)", fontSize: 13 }}>Unknown tab kind: {kind}</div>;
+  if (!Comp) return <div className="p-6 c-3 t-sm">Unknown tab kind: {kind}</div>;
   return <Comp id={props.api.id} params={params.p ?? {}} active={active} />;
 }
 const dvComponents = { tab: TabHost };
@@ -91,11 +90,11 @@ function TabHeader(props: IDockviewPanelHeaderProps) {
     : { id: "pin-tab", label: "Pin tab", detail: "keep open until unpinned", onSelect: () => layout.pinTab(props.api.id) };
   const copyItems = params.kind === "doc" && path
     ? [
-      { id: "copy-reference", label: "Copy reference", detail: `@file:${path}`, onSelect: () => copyText(`@file:${path}`) },
-      { id: "copy-path", label: "Copy path", detail: path, onSelect: () => copyText(path) },
+      { id: "copy-reference", label: "Copy reference", detail: `@file:${path}`, mono: true, onSelect: () => copyText(`@file:${path}`) },
+      { id: "copy-path", label: "Copy path", detail: path, mono: true, onSelect: () => copyText(path) },
     ]
     : params.kind === "meeting" && meetingId
-      ? [{ id: "copy-reference", label: "Copy reference", detail: `@meeting:${meetingId}`, onSelect: () => copyText(`@meeting:${meetingId}`) }]
+      ? [{ id: "copy-reference", label: "Copy reference", detail: `@meeting:${meetingId}`, mono: true, onSelect: () => copyText(`@meeting:${meetingId}`) }]
       : [];
   return (
     <div
@@ -125,8 +124,7 @@ function TabHeader(props: IDockviewPanelHeaderProps) {
         onClick={(e) => { e.stopPropagation(); if (pinned) layout.unpinTab(props.api.id); else layout.pinTab(props.api.id); }}
         onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
         onMouseLeave={(e) => { e.currentTarget.style.opacity = pinned ? "1" : "0.45"; }}
-        style={{ display: "flex", alignItems: "center", marginRight: 5, cursor: "pointer",
-          color: pinned ? "var(--blue)" : "var(--t3)", opacity: pinned ? 1 : 0.45 }}>
+        className="mr-1" style={{ display: "flex", alignItems: "center", cursor: "pointer", color: pinned ? "var(--blue)" : "var(--t3)", opacity: pinned ? 1 : 0.45 }}>
         <Icon name="pin" size={11} />
       </span>
       <span className="dv-default-tab-content" style={{ fontStyle: preview ? "italic" : "normal" }}>{title}</span>
@@ -165,7 +163,7 @@ function LeftPane() {
       if (document.hidden) return;
       try {
         const mounts = (await readActiveSet()).active;
-        const gits = await Promise.all(mounts.map((m) => readWorkspaceGit(m.primary ? undefined : { slug: m.slug }).catch(() => null)));
+        const gits = await Promise.all(mounts.map((m) => readWorkspaceGit((m.desk ?? m.primary) ? undefined : { slug: m.slug }).catch(() => null)));
         const member = gits.flatMap((g) => (g ? g.commits : [])).filter((c) => c.kind === "member" && (c.ts ?? 0) > 0);
         newestRef.current = member.reduce((mx, c) => Math.max(mx, c.ts ?? 0), 0);
         updatesBadge.set(member.filter((c) => (c.ts ?? 0) > updatesSeenTs()).length);
@@ -180,22 +178,22 @@ function LeftPane() {
   useEffect(() => { if (activeList === "files") markUpdatesSeen(newestRef.current || Math.floor(Date.now() / 1000)); }, [activeList]);
   const seg = (on: boolean): CSSProperties => ({ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 7, fontSize: 12.5, cursor: "pointer", border: "none", color: on ? "var(--t1)" : "var(--t2)", background: on ? "var(--panel2)" : "transparent", flex: "none", whiteSpace: "nowrap" });
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--sidebar)", borderRight: "1px solid var(--line)", minHeight: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "12px 14px 8px", flex: "none" }}>
+    <div className="bg-1 bd-r" style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div className="pt-3 pr-3 pb-2 pl-3" style={{ display: "flex", alignItems: "center", gap: 9, flex: "none" }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/vexa-logo.svg" alt="Vexa" width={24} height={24} style={{ borderRadius: 7, display: "block", flex: "none" }} />
-        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t1)" }}>Vexa <span style={{ fontWeight: 400, color: "var(--t3)" }}>terminal</span></span>
+        <img src="/vexa-logo.svg" alt="Vexa" width={24} height={24} className="r-md" style={{ display: "block", flex: "none" }} />
+        <span className="t-sm fw-500 c-1">Vexa <span className="fw-400 c-3">terminal</span></span>
       </div>
       {/* stacked vertically — every list is visible at any sidebar width (no horizontal
           overflow/scroll), matching the file-tree rows below */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "2px 8px 8px", borderBottom: "1px solid var(--line)", flex: "none" }}>
+      <div className="pt-0_5 pr-2 pb-2 pl-2 bd-b" style={{ display: "flex", flexDirection: "column", gap: 2, flex: "none" }}>
         {lists.map((l) => (
           <button key={l.id} style={seg(l.id === active?.id)}
             onClick={() => { layout.setActiveList(l.id); if (l.centerTab) layout.openTab(l.centerTab); }} title={l.label}>
             <Icon name={l.icon} size={13} />{l.label}
             {l.id === "files" && badge > 0 && (
               <span title={`${badge} new update${badge > 1 ? "s" : ""} from other members`}
-                style={{ marginLeft: "auto", background: "var(--accent)", color: "var(--bg)", fontSize: 10, fontWeight: 700, borderRadius: 9, minWidth: 16, textAlign: "center", padding: "0 5px", lineHeight: "16px", flex: "none" }}>
+                className="ml-auto bg-accent t-xs fw-600 r-lg pt-0 pr-1 pb-0 pl-1" style={{ color: "var(--bg)", minWidth: 16, textAlign: "center", lineHeight: "16px", flex: "none" }}>
                 {badge}
               </span>
             )}
@@ -236,20 +234,20 @@ function UserProfile() {
   };
 
   return (
-    <div style={{ padding: "8px 12px", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 9, flex: "none" }}>
-      <div style={{ width: 26, height: 26, borderRadius: "50%", background: "var(--panel2)", color: "var(--t1)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 600, fontSize: 11, flex: "none" }}>{initials}</div>
-      <div style={{ minWidth: 0, flex: 1, lineHeight: 1.25 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
-        {email && <div style={{ fontSize: 11, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>}
+    <div className="pt-2 pr-3 pb-2 pl-3 bd-t" style={{ display: "flex", alignItems: "center", gap: 9, flex: "none" }}>
+      <div className="r-full bg-3 c-1 fw-600 t-xs" style={{ width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>{initials}</div>
+      <div className="lh-tight" style={{ minWidth: 0, flex: 1 }}>
+        <div className="t-xs fw-500 c-1" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+        {email && <div className="t-xs c-3" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>}
       </div>
       <button type="button" title="Settings"
         onClick={() => layout.openTab({ id: "settings", title: "Settings", kind: "settings", params: {} })}
-        style={{ flex: "none", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 4, borderRadius: 6 }}>
+        className="bg-none bd-none c-3 p-1 r-md" style={{ flex: "none", cursor: "pointer", display: "flex" }}>
         <Icon name="gear" size={15} />
       </button>
       <ThemeToggle />
       <button type="button" title="Sign out" onClick={signOut}
-        style={{ flex: "none", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 4, borderRadius: 6 }}>
+        className="bg-none bd-none c-3 p-1 r-md" style={{ flex: "none", cursor: "pointer", display: "flex" }}>
         <Icon name="logout" size={15} />
       </button>
     </div>
@@ -259,7 +257,7 @@ function UserProfile() {
 // ── RIGHT pane: persistent chat singleton ────────────────────────────────────────
 function RightPane() {
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--rail)", borderLeft: "1px solid var(--line)", minHeight: 0 }}>
+    <div className="bg-1 bd-l" style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <div style={{ flex: 1, minHeight: 0 }}>
         <Chat />
       </div>
@@ -288,7 +286,7 @@ export function Workbench() {
   // persisted "sessions" → the default), so `activeList` is never "sessions" and the chat-only branch
   // never renders. Kept (rather than ripping out its render sites) to avoid a risky pane refactor the
   // owner didn't ask for; the `=== "sessions"` guards below are dead but harmless.
-  const meetOnly = meetingsOnly();
+  const meetOnly = meetingsOnly() || process.env.NEXT_PUBLIC_NO_CHAT === "1";
   const chatOnly = !meetOnly && activeList === "sessions";
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
@@ -301,7 +299,7 @@ export function Workbench() {
     if (meetOnly || layout.store.getState().activeList !== "sessions") return;
     try {
       if (localStorage.getItem("vexa.openWorkspace")) layout.setActiveList("files");
-      else if (localStorage.getItem("vexa.openMeeting")) layout.setActiveList("meetings");
+      else if (localStorage.getItem("vexa.openMeeting") || localStorage.getItem("vexa.openMeetingRef")) layout.setActiveList("meetings");
     } catch { /* noop — a locked-down localStorage just means no early reveal */ }
     // once, on mount (a fresh page load after the redeem reload) — deps intentionally empty
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -312,8 +310,8 @@ export function Workbench() {
   // source doc's workspace first, then home, then the rest of the mounted set).
   useEffect(() => {
     const onOpenEntity = async (e: Event) => {
-      const detail = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string; beside?: boolean }>).detail || {};
-      const r = await resolveDocRef(detail, { path: detail.docPath, slug: detail.slug });
+      const detail = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string; beside?: boolean; exact?: boolean }>).detail || {};
+      const r = await resolveDocRef(detail, metaOfOpen(detail));   // no slug key = no workspace named (2026-10-18)
       if (!r) return;
       if (layout.store.getState().activeList === "sessions") layout.setActiveList("files");  // reveal the center
       const d = { id: r.slug ? `doc:${r.slug}:${r.path}` : `doc:${r.path}`, title: r.path.split("/").pop() ?? r.path, kind: "doc", params: { path: r.path, slug: r.slug } };
@@ -323,6 +321,103 @@ export function Workbench() {
     window.addEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
     return () => window.removeEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
   }, [layout]);
+
+  // A `?meeting=<platform>/<native>` deep-link (clicked in a meeting note, or the cold-load URL) →
+  // resolve the native id to its meeting row and open the canvas (transcript + recording).
+  const openMeetingByRef = useCallback((mid: string, beside = false) => {
+    // `?meeting=<id>` deep-link — the meeting ROW id. Open its canvas directly (the same tab a click
+    // in the meetings list opens); the canvas fetches its transcript/recording by that id.
+    const ref = mid.trim();
+    if (!ref) return;
+    // Two ref forms: a bare meeting ROW id, or `<platform>/<native>` (the email door links use the
+    // latter — the meeting's calendar-independent identity). Resolve either against the list.
+    const slash = ref.indexOf("/");
+    // The mapped row's `platform` is a display label ("Google Meet"), so a platform/native ref
+    // matches on the native id — unique enough for a door link; the row id remains the tab key.
+    // The list loads asynchronously and a door click resolves on a COLD dock, so an unresolved
+    // ref RETRIES for a few seconds before giving up — otherwise the race eats the landing.
+    const native = slash > 0 ? ref.slice(slash + 1) : null;
+    const find = () => {
+      const rows = liveMeetingsNow();
+      return native
+        ? rows.find((x) => (x as { native_id?: string }).native_id === native)
+        : rows.find((x) => String(x.id) === ref);
+    };
+    if (layout.store.getState().activeList === "sessions") layout.setActiveList("meetings");
+    const openRow = (m: ReturnType<typeof find>) => {
+      const id = m ? String(m.id) : (native ? "" : ref);
+      if (!id) { layout.setActiveList("meetings"); return; }  // truly unknown: the list, never a broken tab
+      const stashedTitle = (() => { try { const t = localStorage.getItem("vexa.openMeetingTitle"); localStorage.removeItem("vexa.openMeetingTitle"); return t; } catch { return null; } })();
+      // the emailed name wins — the row often only knows the platform·code fallback
+      const openIt = beside ? layout.openTabBeside.bind(layout) : layout.openTab.bind(layout);
+      openIt({ id: `meeting:${id}`, title: stashedTitle ?? (m ? m.title.split(" — ")[0] : "Meeting"), kind: "meeting", params: { meetingId: id } });
+    };
+    // MINUTES door landing: the reader was promised their MINUTES, not a transcript wall. If the
+    // workspace holds the meeting's artifact page, open IT as the center — the meeting canvas is
+    // one click away from the page's own transcript link. Fall through to the canvas otherwise.
+    const openArtifactFirst = async (m: ReturnType<typeof find>) => {
+      if (!minutesOnly() || !native) { openRow(m); return; }
+      const path = `kg/entities/meeting/${native}.md`;
+      try {
+        const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+        if (r.ok) {
+          layout.openTab({ id: `doc:${path}`, title: m ? m.title.split(" — ")[0] : "Your minutes", kind: "doc", params: { path } });
+          // The click WAS the consent to set up (founder ruling 2026-08-22): start the agent on
+          // everything it can know — the artifact + transcript in the workspace, the reader's own
+          // login email — and have it ask the ONE thing it cannot infer: their position. Once per
+          // meeting door, ever; a revisit must not re-run onboarding.
+          // Once per PERSON, not per browser: the flag lives in `.system/<uid>` server-side —
+          // a fresh profile must not re-onboard a known person (witness-plan S3).
+          const kicked = `door-kickoff:${native}`;
+          const guard = await fetch(`/api/minutes/person-state?key=${encodeURIComponent(kicked)}`, { cache: "no-store" })
+            .then((r) => (r.ok ? r.json() : { set: true }))   // seam absent → fail CLOSED (no repeat)
+            .catch(() => ({ set: true }));
+          if (!guard.set) {
+            void fetch("/api/minutes/person-state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: kicked }) });
+            window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { hidden: true, prompt:
+              `[minutes-door-kickoff] A reader just arrived through the door of meeting ${native}. ` +
+              `Read kg/entities/meeting/${native}.md and kg/entities/meeting/${native}.transcript.md. ` +
+              `Their login email identifies them — infer their name from it and find them in the transcript. ` +
+              `Set up this workspace: record their identity in _system/identity.md, create person entities for the other participants, ` +
+              `and link the meeting page. From what they said in the meeting, form a HYPOTHESIS of their role. ` +
+              `Then reply briefly: greet them by name, one line on what you have set up, state your role hypothesis ` +
+              `as a guess to confirm or correct — and ask nothing else.` } }));
+          }
+          return;
+        }
+      } catch { /* no artifact page — the meeting canvas is the honest fallback */ }
+      openRow(m);
+    };
+    // An assign-link landing must show the GROUPS rail — the banner (and the decision) live
+    // there; the meeting opens in the center regardless.
+    const assigning = (() => { try { return !!localStorage.getItem("vexa.assignMeeting"); } catch { return false; } })();
+    if (assigning) layout.setActiveList("files");
+    const first = find();
+    if (first || !native) { void openArtifactFirst(first); return; }
+    // The door must NEVER land on a void: if this user has no row for the meeting the link names,
+    // mint one (dev seam; in prod the mailroom creates rows for every resolved participant at
+    // invite time) — then the retry loop below finds it.
+    if (minutesOnly()) {
+      const platform = ref.slice(0, slash);
+      const title = (() => { try { return localStorage.getItem("vexa.openMeetingTitle") || undefined; } catch { return undefined; } })();
+      void fetch("/api/minutes/ensure-meeting", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ platform, native, title }) }).catch(() => undefined);
+    }
+    let tries = 0;
+    const timer = setInterval(() => {
+      const m = find();
+      if (m || ++tries >= 10) { clearInterval(timer); void openArtifactFirst(m); }
+    }, 500);
+  }, [layout]);
+
+  useEffect(() => {
+    const onOpenMeeting = (e: Event) => {
+      const ref = (e as CustomEvent<{ ref?: string }>).detail?.ref;
+      if (ref) openMeetingByRef(ref);
+    };
+    window.addEventListener(OPEN_MEETING_EVENT, onOpenMeeting);
+    return () => window.removeEventListener(OPEN_MEETING_EVENT, onOpenMeeting);
+  }, [openMeetingByRef]);
 
   // detach the dockview api on unmount (navigation/HMR dispose it) so the layout
   // service never operates on a disposed grid.
@@ -363,6 +458,50 @@ export function Workbench() {
   }, [activeTab]);
 
   const resolveFirstView = async (fresh: boolean) => {
+    // A `?meeting=<platform>/<native>` deep-link (App.tsx stashed the ref) — open that meeting's canvas
+    // directly. Explicit navigation wins over the plan below.
+    try {
+      // A `?view=` composed layout (App.tsx stashed it): open every listed pane, in order —
+      // the last one keeps focus. The composition is the sender's to decide.
+      const composed = localStorage.getItem("vexa.composedView");
+      if (composed) {
+        localStorage.removeItem("vexa.composedView");
+        // the saved-dock restore lands after this resolver — defer so the composition is
+        // applied ON TOP of (not under) whatever the dock brings back
+        await new Promise((r) => setTimeout(r, 450));
+        // the composition is authoritative: the sender decided what this view IS, so the
+        // restored dock yields to it entirely
+        try { apiRef.current?.clear(); } catch { /* noop */ }
+        // the optimal viewer frame (founder-arranged): list rail collapsed, the reading pane
+        // takes ~2/3, the beside pane the rest
+        if (!layout.store.getState().leftCollapsed) layout.toggleLeft();
+        let first = true;
+        for (const pane of composed.split(",")) {
+          const [kind, ...rest] = pane.split(":");
+          const ref = rest.join(":");
+          const openDoc = first ? layout.openTab.bind(layout) : layout.openTabBeside.bind(layout);
+          if (kind === "meeting" && ref) openMeetingByRef(ref, !first);
+          else if (kind === "file" && ref) {
+            const base = ref.split("/").pop() || ref;
+            try { openDoc({ id: `doc:${ref}`, title: base, kind: "doc", params: { path: ref } }); } catch { /* noop */ }
+          } else if (kind === "readme") {
+            openDoc({ id: "doc:README.md", title: "README.md", kind: "doc", params: { path: "README.md" } });
+          } else { continue; }
+          first = false;
+        }
+        try {
+          const api = apiRef.current;
+          if (api && api.groups.length >= 2) {
+            api.groups[api.groups.length - 1].api.setSize({ width: Math.round(api.width * 0.36) });
+          }
+        } catch { /* noop */ }
+        return;
+      }
+    } catch { /* noop */ }
+    try {
+      const mref = localStorage.getItem("vexa.openMeetingRef");
+      if (mref) { localStorage.removeItem("vexa.openMeetingRef"); openMeetingByRef(mref); return; }
+    } catch { /* noop */ }
     // an explicit shared meeting from a ?tshare= link (InviteRedeemer stashed it before the reload)
     let sharedMeetingId: string | null = null;
     try { sharedMeetingId = localStorage.getItem("vexa.openMeeting"); if (sharedMeetingId) localStorage.removeItem("vexa.openMeeting"); } catch { /* noop */ }
@@ -422,11 +561,11 @@ export function Workbench() {
   };
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--t1)" }}>
-      <div style={{ height: 38, display: "flex", alignItems: "center", gap: 12, padding: "0 12px", borderBottom: "1px solid var(--line)", background: "var(--sidebar)", flex: "none" }}>
-        <button aria-label="Toggle left" onClick={() => layout.toggleLeft()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="panel" size={16} /></button>
+    <div className="bg-0 c-1" style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+      <div className="pt-0 pr-3 pb-0 pl-3 bd-b bg-1" style={{ height: 38, display: "flex", alignItems: "center", gap: 12, flex: "none" }}>
+        <button aria-label="Toggle left" onClick={() => layout.toggleLeft()} className="bg-none bd-none c-3" style={{ cursor: "pointer", display: "flex" }}><Icon name="panel" size={16} /></button>
         <div style={{ flex: 1, display: "flex", justifyContent: "center", minWidth: 0 }}><OpsNotice /></div>
-        <button aria-label="Toggle right" onClick={() => layout.toggleRight()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", transform: "scaleX(-1)" }}><Icon name="panel" size={16} /></button>
+        <button aria-label="Toggle right" onClick={() => layout.toggleRight()} className="bg-none bd-none c-3" style={{ cursor: "pointer", display: "flex", transform: "scaleX(-1)" }}><Icon name="panel" size={16} /></button>
       </div>
 
       <div style={{ flex: 1, minHeight: 0 }}>
@@ -469,9 +608,9 @@ export function Workbench() {
         })()}
       </div>
 
-      <footer style={{ height: 24, flex: "none", background: "var(--sidebar)", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", fontSize: 11.5, color: "var(--t2)" }}>
+      <footer className="bg-1 bd-t t-xs c-2" style={{ height: 24, flex: "none", display: "flex", alignItems: "center" }}>
         <div style={{ flex: 1 }} />
-        <button onClick={() => layout.resetLayout()} style={{ padding: "0 10px", height: "100%", background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }} title="Reset layout">reset layout</button>
+        <button onClick={() => layout.resetLayout()} className="pt-0 pr-2 pb-0 pl-2 bg-none bd-none c-3" style={{ height: "100%", cursor: "pointer" }} title="Reset layout">reset layout</button>
       </footer>
 
       <CommandPalette />

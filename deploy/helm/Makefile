@@ -8,8 +8,8 @@ VALUES       ?= $(CHART)/values-test.yaml
 # k3s writes a root-only kubeconfig; smoke targets read it via sudo. Override for other clusters.
 KUBECONFIG   ?= /etc/rancher/k3s/k3s.yaml
 COMPOSE      ?= ../compose/docker-compose.yml
-IMAGES        = vexaai/v012-gateway vexaai/v012-admin-api vexaai/v012-meeting-api \
-                vexaai/v012-runtime vexaai/v012-agent-api vexaai/v012-terminal
+IMAGES        = vexaai/vexa-gateway vexaai/vexa-admin-api vexaai/vexa-meeting-api \
+                vexaai/vexa-runtime vexaai/vexa-agent-api vexaai/vexa-terminal
 
 ## lint — helm lint (default + values-test)
 lint:

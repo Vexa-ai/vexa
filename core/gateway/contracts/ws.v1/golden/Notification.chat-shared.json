@@ -1,0 +1,1 @@
+{"type": "notification", "notification": {"id": "n-0123456789abcdef", "kind": "chat_shared", "actor": {"id": "u_alice", "name": "Alice"}, "object": {"kind": "chat", "id": "s-3f2a", "name": "Board prep"}, "text": "Alice shared the chat “Board prep” with you", "created": 1760360000.0, "read": false}}

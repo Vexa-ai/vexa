@@ -19,7 +19,7 @@ def test_db_flow_hydrates_and_runs_with_params():
         name text, version integer, on_event text, steps text, params text,
         status text DEFAULT 'active', created_by text, created_at REAL,
         PRIMARY KEY (name, version))""")
-    db.execute("""INSERT INTO flow_version VALUES
+    db.execute("""INSERT INTO flow_version (name, version, on_event, steps, params, status, created_by, created_at) VALUES
         ('api_flow', 1, 'api.requested', '["commit_summary"]',
          '{"label": "from-the-api"}', 'active', 't', 0)""")
     assert reg.refresh_from_db(db) == 1
@@ -37,7 +37,7 @@ def test_unknown_step_rejected_at_hydration_and_row_stays_dormant():
         name text, version integer, on_event text, steps text, params text,
         status text DEFAULT 'active', created_by text, created_at REAL,
         PRIMARY KEY (name, version))""")
-    db.execute("""INSERT INTO flow_version VALUES
+    db.execute("""INSERT INTO flow_version (name, version, on_event, steps, params, status, created_by, created_at) VALUES
         ('bad_flow', 1, 'x.y', '["not_a_step"]', NULL, 'active', 't', 0)""")
     assert reg.refresh_from_db(db) == 0                 # dormant, never a runtime KeyError
     with pytest.raises(ValueError):
@@ -51,7 +51,7 @@ def test_db_version_supersedes_code_version_for_new_events():
         status text DEFAULT 'active', created_by text, created_at REAL,
         PRIMARY KEY (name, version))""")
     # post_meeting@1 exists in code (fixtures); submit @2 dropping the email step
-    db.execute("""INSERT INTO flow_version VALUES
+    db.execute("""INSERT INTO flow_version (name, version, on_event, steps, params, status, created_by, created_at) VALUES
         ('post_meeting', 2, 'meeting.completed',
          '["await_completion","process_transcript","commit_summary"]', NULL, 'active', 't', 0)""")
     assert reg.refresh_from_db(db) == 1
@@ -80,7 +80,7 @@ def test_a_db_version_that_shadows_the_code_with_fewer_steps_is_named(caplog):
         name text, version integer, on_event text, steps text, params text,
         status text DEFAULT 'active', created_by text, created_at REAL,
         PRIMARY KEY (name, version))""")
-    db.execute("""INSERT INTO flow_version VALUES
+    db.execute("""INSERT INTO flow_version (name, version, on_event, steps, params, status, created_by, created_at) VALUES
         ('post_meeting', 2, 'meeting.completed',
          '[\"await_completion\",\"process_transcript\"]', NULL, 'active',
          'uid 58 (admin, walkthrough)', 0)""")
@@ -109,7 +109,7 @@ def test_a_db_version_that_only_ADDS_steps_is_not_a_shadow():
         PRIMARY KEY (name, version))""")
     code_steps = list(reg.get("post_meeting", 1).steps)
     import json as _j
-    db.execute("INSERT INTO flow_version VALUES ('post_meeting', 2, 'meeting.completed', ?, "
+    db.execute("INSERT INTO flow_version (name, version, on_event, steps, params, status, created_by, created_at) VALUES ('post_meeting', 2, 'meeting.completed', ?, "
                "NULL, 'active', 't', 0)", (_j.dumps(code_steps),))
     reg.refresh_from_db(db)
     assert reg.shadowing_versions() == []

@@ -1,0 +1,17 @@
+{
+  "workspace": "sales",
+  "commit": "4f2a9c1",
+  "committed_at": "2026-10-13T10:00:00Z",
+  "references": [
+    {
+      "page": "accounts/globex.md",
+      "record": "430242d1-37fc-5198-9ab9-7b335cebfbea"
+    }
+  ],
+  "members": [
+    {
+      "subject": "2",
+      "role": "contributor"
+    }
+  ]
+}

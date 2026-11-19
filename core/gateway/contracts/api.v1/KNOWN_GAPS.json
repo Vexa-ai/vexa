@@ -20,12 +20,6 @@
   "known_gaps": [
     {
       "method": "POST",
-      "path": "/bots/{platform}/{native_meeting_id}/chat",
-      "reason": "No bot-command (send-to-meeting) backend in the 0.12 core — same class as /speak and /config, which also lack a downstream handler. Chat frames flow live over the WS va:*:chat channel; there is no REST send. Registering a 200 that does nothing would fake the capability, so the send half is left unimplemented and recorded here.",
-      "issue": "https://github.com/Vexa-ai/vexa/issues/579"
-    },
-    {
-      "method": "POST",
       "path": "/meetings/{meeting_id}/transcribe",
       "reason": "No on-demand re-transcribe orchestration exists in the 0.12 core (transcription is a live-pipeline concern). Left unimplemented + recorded rather than faked.",
       "issue": "https://github.com/Vexa-ai/vexa/issues/591"

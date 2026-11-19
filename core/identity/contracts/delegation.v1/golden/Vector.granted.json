@@ -1,0 +1,39 @@
+{
+  "secret": "delegation.v1-published-test-vector-key",
+  "now": 1767225600,
+  "subject": "42",
+  "regime": "autonomous",
+  "workspaces": [
+    "42"
+  ],
+  "grants": [
+    "flow.retire_self",
+    "bot.request"
+  ],
+  "flow": "user:42/bot-at-1213",
+  "ttl_sec": 3600,
+  "jti": "vec-granted-0001",
+  "header": {
+    "alg": "HS256",
+    "typ": "vxdlg"
+  },
+  "claims": {
+    "aud": "vexa-mcp",
+    "exp": 1767229200,
+    "iat": 1767225600,
+    "jti": "vec-granted-0001",
+    "scope": {
+      "flow": "user:42/bot-at-1213",
+      "grants": [
+        "bot.request",
+        "flow.retire_self"
+      ],
+      "regime": "autonomous",
+      "workspaces": [
+        "42"
+      ]
+    },
+    "sub": "42"
+  },
+  "token": "vxd_eyJhbGciOiJIUzI1NiIsInR5cCI6InZ4ZGxnIn0.eyJhdWQiOiJ2ZXhhLW1jcCIsImV4cCI6MTc2NzIyOTIwMCwiaWF0IjoxNzY3MjI1NjAwLCJqdGkiOiJ2ZWMtZ3JhbnRlZC0wMDAxIiwic2NvcGUiOnsiZmxvdyI6InVzZXI6NDIvYm90LWF0LTEyMTMiLCJncmFudHMiOlsiYm90LnJlcXVlc3QiLCJmbG93LnJldGlyZV9zZWxmIl0sInJlZ2ltZSI6ImF1dG9ub21vdXMiLCJ3b3Jrc3BhY2VzIjpbIjQyIl19LCJzdWIiOiI0MiJ9.veFfVvsBBj-Lz4MMQGXKkwo3A_i61CBzaCID2q_Vjzw"
+}

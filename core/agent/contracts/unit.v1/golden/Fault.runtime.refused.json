@@ -1,0 +1,8 @@
+{
+  "source": "runtime",
+  "kind": "refused",
+  "op": "spawn",
+  "status": 422,
+  "detail": "the runtime refused the request (422)",
+  "remedy": "An operator should check the runtime's log for the refusal."
+}

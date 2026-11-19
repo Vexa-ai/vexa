@@ -1,6 +1,8 @@
 """#116 — completed meeting transcript + recording-object erasure."""
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from meeting_api import create_app
@@ -68,9 +70,11 @@ def test_owner_deletes_completed_artifacts_but_terminal_meeting_row_survives():
     )
     assert response.status_code == 204
     assert storage.blobs == {}
+    # 410, not 404: the meeting is still in the owner's list, so "not found" sent agents looking
+    # for a meeting that is right there (friction 2026-10-13, a deleted voice note).
     assert client.get(
         "/transcripts/google_meet/private-room", headers={"x-user-id": str(OWNER)}
-    ).status_code == 404
+    ).status_code == 410
 
     meeting = store._meetings[MEETING_ID]
     assert meeting["status"] == "completed", "terminal lifecycle evidence is retained"
@@ -131,6 +135,152 @@ def test_completed_artifact_delete_is_idempotent_and_active_lifecycle_is_not_del
 
     active_store, active_storage, active_client = _fixture(status="active")
     response = active_client.delete(f"/meetings/{MEETING_ID}", headers=headers)
+    # A live meeting is not deleted now. By default (VEXA_MEETING_DELETE_LIVE=refuse, the 0.12
+    # contract) the answer is 409; under `stop` the deletion is scheduled for when it ends
+    # (test_delete_while_finishing.py).
     assert response.status_code == 409
     assert active_store._meetings[MEETING_ID]["status"] == "active"
     assert active_storage.blobs
+
+
+def test_deletes_every_fixture_session_and_promotion_without_touching_other_meetings():
+    store, storage, client = _fixture()
+    prefix = f"signal/{OWNER}/{MEETING_ID}/"
+    for name in ("session-a/captured-signal.jsonl", "session-a/PROMOTED", "session-b/botlog.txt"):
+        storage.blobs[prefix + name] = b"private fixture"
+    other = f"signal/{OWNER}/{MEETING_ID + 1}/session-a/captured-signal.jsonl"
+    storage.blobs[other] = b"other meeting"
+    assert client.delete(f"/meetings/{MEETING_ID}", headers={"x-user-id": str(OWNER)}).status_code == 204
+    assert storage.blobs == {other: b"other meeting"}
+
+
+def test_fixtures_without_recordings_are_deleted_and_storage_failure_can_retry():
+    class FailsFixtureOnce(InMemoryStorage):
+        fail = True
+        async def delete(self, key):
+            if key.startswith("signal/") and self.fail:
+                self.fail = False
+                raise RuntimeError("fixture storage unavailable")
+            await super().delete(key)
+    store, storage, client = _fixture(storage_cls=FailsFixtureOnce)
+    store._meetings[MEETING_ID]["data"]["recordings"] = []
+    storage.blobs.clear()
+    key = f"signal/{OWNER}/{MEETING_ID}/session-a/transcript.jsonl"
+    storage.blobs[key] = b"fixture"
+    headers = {"x-user-id": str(OWNER)}
+    assert client.delete(f"/meetings/{MEETING_ID}", headers=headers).status_code == 500
+    assert store._meetings[MEETING_ID]["data"]["artifact_deletion"]["state"] == "pending"
+    assert client.delete(f"/meetings/{MEETING_ID}", headers=headers).status_code == 204
+    assert storage.blobs == {}
+
+
+# ── the transcript held in Redis goes with the rest ──────────────────────────────────────────────
+
+def _cache_keys(meeting_id: int) -> list[str]:
+    return [f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}", f"tc:meeting:{meeting_id}"]
+
+
+def _seed_cache(r, meeting_id: int) -> None:
+    r.hset(f"meeting:{meeting_id}:segments", "s1", json.dumps({"text": "confidential"}))
+    r.xadd(f"proc:meeting:{meeting_id}", {"payload": json.dumps({"notes": "confidential"})})
+    r.xadd(f"tc:meeting:{meeting_id}", {"payload": json.dumps(
+        {"type": "transcription", "segments": [{"segment_id": "s1", "text": "confidential"}]})})
+
+
+def test_delete_erases_every_transcript_key_in_redis_and_no_other_meetings():
+    import fakeredis
+
+    server = fakeredis.FakeServer()
+    sync = fakeredis.FakeRedis(server=server, decode_responses=True)
+    store = InMemoryTranscriptStore(redis_client=fakeredis.aioredis.FakeRedis(server=server))
+    store.seed_meeting(meeting_id=MEETING_ID, user_id=OWNER, platform="google_meet",
+                       native_meeting_id="private-room", status="completed", data={},
+                       segments=[{"segment_id": "s1", "start": 0, "end": 1, "text": "confidential"}])
+    _seed_cache(sync, MEETING_ID)
+    _seed_cache(sync, MEETING_ID + 1)
+    client = TestClient(create_app(transcript_store=store, storage=InMemoryStorage()),
+                        raise_server_exceptions=False)
+
+    assert client.delete(f"/meetings/{MEETING_ID}", headers={"x-user-id": str(OWNER)}).status_code == 204
+    assert [k for k in _cache_keys(MEETING_ID) if sync.exists(k)] == []
+    assert all(sync.exists(k) for k in _cache_keys(MEETING_ID + 1)), "another meeting's keys were touched"
+
+
+def test_the_sql_store_erases_the_same_keys():
+    """The production store's finalize needs a database to run, which this suite does not start, so
+    this pins that it deletes the same tuple the fake does (the fake is exercised end to end above)."""
+    import inspect
+
+    from meeting_api.collector.adapters import SqlAlchemyTranscriptStore
+
+    src = inspect.getsource(SqlAlchemyTranscriptStore.finalize_completed_artifact_deletion)
+    assert "self._redis.delete(*erased_meeting_cache_keys(meeting_id))" in src
+
+
+def test_the_erased_keys_are_the_ones_the_transcript_writers_use():
+    from meeting_api.collector.db_writer import segments_hash_key
+    from meeting_api.collector.ingest import _transcript_stream
+    from meeting_api.collector.ports import erased_meeting_cache_keys
+
+    keys = set(erased_meeting_cache_keys(MEETING_ID))
+    assert segments_hash_key(MEETING_ID) in keys
+    assert _transcript_stream(MEETING_ID) in keys
+    assert f"proc:meeting:{MEETING_ID}" in keys
+
+
+# ── a deleted transcript answers 410 to whoever may see the meeting (friction 2026-10-13) ────────
+#
+# A voice note the owner deleted stays in `list_meetings` as history (its status, its times, its
+# `data.artifact_deletion` stamp). `get_meeting_transcript` on the pair that list returned answered
+# 404 "Meeting not found", and the agent concluded the id pair did not resolve. The meeting exists;
+# its words were deleted. Say that — and only to a caller who can see the meeting at all.
+
+
+def _voice_note_fixture():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(meeting_id=64, user_id=OWNER, platform="voice_note",
+                       native_meeting_id="vn-0a1b2c3d4e5f", status="completed", data={},
+                       segments=[{"segment_id": "s1", "start": 0, "end": 1,
+                                  "text": "a synthetic note", "language": "en"}])
+    store.seed_meeting(meeting_id=65, user_id=OWNER, platform="voice_note",
+                       native_meeting_id="vn-ffeeddccbbaa", status="completed", data={},
+                       segments=[{"segment_id": "s1", "start": 0, "end": 1,
+                                  "text": "another synthetic note", "language": "en"}])
+    return store, TestClient(create_app(transcript_store=store, storage=InMemoryStorage()),
+                             raise_server_exceptions=False)
+
+
+def test_an_old_voice_note_reads_by_the_pair_the_list_returns():
+    _store, client = _voice_note_fixture()
+    h = {"x-user-id": str(OWNER)}
+    rows = client.get("/meetings", headers=h).json()["meetings"]
+    for row in rows:
+        r = client.get(f"/transcripts/{row['platform']}/{row['native_meeting_id']}", headers=h)
+        assert r.status_code == 200, (row["id"], r.text)
+        assert r.json()["segments"], row["id"]
+
+
+def test_a_deleted_voice_note_listed_as_history_answers_410_by_pair_and_by_id():
+    _store, client = _voice_note_fixture()
+    h = {"x-user-id": str(OWNER)}
+    assert client.delete("/meetings/64", headers=h).status_code == 204
+    listed = {r["id"]: r for r in client.get("/meetings", headers=h).json()["meetings"]}
+    assert 64 in listed, "the deleted note stays in the list as history"
+
+    for url in ("/transcripts/voice_note/vn-0a1b2c3d4e5f", "/transcripts/by-id/64"):
+        r = client.get(url, headers=h)
+        assert r.status_code == 410, (url, r.status_code, r.text)
+        detail = r.json()["detail"]
+        assert detail["error"] == "transcript_deleted"
+        assert detail["meeting_id"] == 64
+        assert "deleted" in detail["message"]
+    # the other note is untouched
+    assert client.get("/transcripts/voice_note/vn-ffeeddccbbaa", headers=h).status_code == 200
+
+
+def test_a_deleted_transcript_is_still_a_plain_404_to_someone_who_cannot_see_the_meeting():
+    _store, client = _voice_note_fixture()
+    assert client.delete("/meetings/64", headers={"x-user-id": str(OWNER)}).status_code == 204
+    other = {"x-user-id": str(OTHER)}
+    assert client.get("/transcripts/voice_note/vn-0a1b2c3d4e5f", headers=other).status_code == 404
+    assert client.get("/transcripts/by-id/64", headers=other).status_code == 404

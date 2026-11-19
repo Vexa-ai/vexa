@@ -1,0 +1,12 @@
+{
+  "aud": "vexa-mcp",
+  "exp": 1767229200,
+  "iat": 1767225600,
+  "jti": "vec-target-0001",
+  "scope": {
+    "regime": "human",
+    "workspaces": "*"
+  },
+  "sub": "42",
+  "target": "acme-account"
+}

@@ -1,0 +1,7 @@
+{
+  "source": "agent-api",
+  "kind": "internal",
+  "status": 500,
+  "detail": "the agent service failed while taking this message",
+  "remedy": "Send it again in a moment; if it keeps happening, an operator should check agent-api's log."
+}

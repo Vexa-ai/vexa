@@ -1,0 +1,128 @@
+{{- if and .Values.networkPolicy.enabled .Values.flows.enabled (.Values.networkPolicy.flows | default dict).enabled }}
+{{- /*
+WHERE THE FLOWS PODS (flows-api, flows-worker, flows-mailbox) MAY CONNECT.
+
+  DNS                  wherever the cluster serves it (kube-dns, NodeLocal DNSCache, OpenShift DNS)
+  the gateway's door   gateway Pods on 8002: every call flows makes to agent-api, admin-api,
+                       meeting-api and the CRM goes through it
+  the database         pgbouncer when it is on, else the in-chart postgres; an external database on
+                       database.port at networkPolicy.flows.databaseEgress (any address when empty)
+  credential broker    only with flows.mail.smtp.passwordRef (the relay password by reference)
+  mail                 networkPolicy.flows.mailEgress, the operator's IMAP/SMTP (and Graph) hosts as
+                       CIDRs and ports. Empty: the mail ports (25, 143, 465, 587, 993, the configured
+                       IMAP/SMTP ports, and 443 when the inbox or notifications use Graph) to any
+                       address outside networkPolicy.workloads.privateCidrs — enough for Gmail and
+                       Microsoft 365, nothing for a mail server on a private address
+  + networkPolicy.flows.extraEgress, as NetworkPolicy egress rules
+
+Flows reads no Redis and calls no model provider. Inert without a CNI that enforces NetworkPolicy.
+*/}}
+{{- $sel := include "vexa.selectorLabels" . | fromYaml }}
+{{- $np := .Values.networkPolicy.flows }}
+{{- $wl := .Values.networkPolicy.workloads }}
+{{- $m := .Values.flows.mail | default dict }}
+{{- $graph := or (eq (toString ($m.inbox | default "")) "graph") (eq (toString ($m.notifyChannel | default "")) "graph") }}
+{{- $mailPorts := list 25 143 465 587 993 }}
+{{- range $p := list ($m.imap | default dict).port ($m.smtp | default dict).port ((.Values.terminal | default dict).mail | default dict).smtpPort }}
+{{- if $p }}{{ $mailPorts = append $mailPorts (int $p) }}{{ end }}
+{{- end }}
+{{- if $graph }}{{ $mailPorts = append $mailPorts 443 }}{{ end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "flows-egress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [flows-api, flows-worker, flows-mailbox]
+  policyTypes: [Egress]
+  egress:
+    {{- include "vexa.dnsEgress" $ | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $sel | nindent 14 }}
+              app.kubernetes.io/component: gateway
+      ports:
+        - port: 8002
+          protocol: TCP
+    {{- if or .Values.pgbouncer.enabled .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $sel | nindent 14 }}
+              app.kubernetes.io/component: {{ ternary "pgbouncer" "postgres" .Values.pgbouncer.enabled }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- else }}
+    - to:
+        {{- with $np.databaseEgress }}
+        {{- range . }}
+        - ipBlock:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- else }}
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        {{- if $wl.ipv6 }}
+        - ipBlock:
+            cidr: ::/0
+        {{- end }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.database.port | int }}
+          protocol: TCP
+    {{- end }}
+    {{- if ($m.smtp | default dict).passwordRef }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $sel | nindent 14 }}
+              app.kubernetes.io/component: credential-broker
+      ports:
+        - port: http
+          protocol: TCP
+    {{- end }}
+    {{- with $np.mailEgress }}
+    {{- range . }}
+    {{- if not (and .cidr .ports) }}
+    {{- fail "networkPolicy.flows.mailEgress: every entry needs a cidr and its ports, e.g. {cidr: 203.0.113.10/32, ports: [993, 587]}" }}
+    {{- end }}
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr | quote }}
+      ports:
+        {{- range .ports }}
+        - port: {{ . | int }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- else }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $wl.privateCidrs.ipv4 | nindent 14 }}
+        {{- if $wl.ipv6 }}
+        - ipBlock:
+            cidr: ::/0
+            except:
+              {{- toYaml $wl.privateCidrs.ipv6 | nindent 14 }}
+        {{- end }}
+      ports:
+        {{- range (uniq $mailPorts) }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

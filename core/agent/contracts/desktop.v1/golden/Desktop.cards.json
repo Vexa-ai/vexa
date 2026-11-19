@@ -1,0 +1,346 @@
+{
+  "version": 3,
+  "undo_version": 2,
+  "presence_visibility": "workspace_members",
+  "hidden_workspaces": 2,
+  "sections": [
+    {
+      "id": "workspaces",
+      "title": "Workspaces",
+      "hidden": false,
+      "collapsed": false,
+      "column": 1,
+      "span": 1,
+      "size": "normal",
+      "items": [
+        {
+          "slug": "client-x-4f2a91",
+          "id": "client-x-4f2a91",
+          "name": "Client X",
+          "kind": "shared",
+          "access": "contributor",
+          "write": true,
+          "members": [
+            {
+              "subject": "9",
+              "name": "Valeriia K",
+              "initials": "VK",
+              "role": "owner",
+              "presence": "now"
+            }
+          ],
+          "last_activity": {
+            "line": "Valeriia K changed Pricing notes",
+            "at": 1760003600
+          },
+          "last_call": null,
+          "live_call": null
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Agents",
+      "hidden": false,
+      "collapsed": false,
+      "column": 1,
+      "span": 1,
+      "size": "normal",
+      "items": [
+        {
+          "ref": "agent:flow:morning-brief",
+          "id": "flow:morning-brief",
+          "name": "Morning brief",
+          "what": "Brief me on today's meetings every morning",
+          "status": "paused",
+          "last": "Failed: the daily run limit was reached",
+          "last_at": 1760000400,
+          "next": null,
+          "next_at": null,
+          "where": "Personal",
+          "thread": "pchat-mb1",
+          "missing": false
+        }
+      ]
+    },
+    {
+      "id": "files",
+      "title": "Files",
+      "hidden": false,
+      "collapsed": true,
+      "column": 1,
+      "span": 1,
+      "size": "compact",
+      "items": [
+        {
+          "ref": "file:7/notes/gone.md",
+          "missing": true
+        }
+      ]
+    },
+    {
+      "id": "cards",
+      "title": "Cards",
+      "hidden": false,
+      "collapsed": false,
+      "column": 1,
+      "span": 1,
+      "size": "normal",
+      "items": [
+        {
+          "id": "r1",
+          "ref": "card:r1",
+          "type": "Card",
+          "revision": 3,
+          "title": "Pricing proposal",
+          "about": {
+            "kind": "page",
+            "ref": "page:client-x-4f2a91/pricing.md"
+          },
+          "state": "Doing",
+          "states": [
+            "To do",
+            "Doing",
+            "Done"
+          ],
+          "side_states": [
+            "Dropped"
+          ],
+          "next": "Send the revised numbers",
+          "waiting": "Legal review",
+          "summary": "Second round after the call on Tuesday.",
+          "due": "2026-10-22",
+          "progress": 0.5,
+          "workspaces": [
+            "client-x-4f2a91"
+          ],
+          "parent": null,
+          "children": {
+            "done": 1,
+            "total": 2,
+            "items": [
+              {
+                "id": "r2",
+                "title": "Draft numbers",
+                "state": "Done",
+                "done": true
+              },
+              {
+                "id": "r3",
+                "title": "Legal check",
+                "state": "Doing",
+                "done": false
+              }
+            ]
+          },
+          "members": [
+            {
+              "subject": "7",
+              "status": "member"
+            },
+            {
+              "subject": "8",
+              "status": "invited"
+            }
+          ],
+          "face": [
+            {
+              "type": "stepper"
+            },
+            {
+              "type": "next"
+            },
+            {
+              "type": "waiting"
+            },
+            {
+              "type": "metric",
+              "label": "Amount",
+              "value": "12,000"
+            },
+            {
+              "type": "locked",
+              "label": "Margin"
+            },
+            {
+              "type": "movement"
+            },
+            {
+              "type": "subcards"
+            },
+            {
+              "type": "people"
+            }
+          ],
+          "movement": {
+            "by": "7",
+            "kind": "person",
+            "what": "Moved to Doing",
+            "at": "2026-10-15T09:00:00Z"
+          },
+          "stalled": false,
+          "can": {
+            "edit": true,
+            "transition": true,
+            "review": true,
+            "members": true
+          },
+          "href": "/crm?record=r1",
+          "kind": "card"
+        }
+      ]
+    }
+  ],
+  "proposals": [
+    {
+      "id": "dp-1a2b",
+      "ops": [
+        {
+          "op": "section_top",
+          "section": "agents"
+        }
+      ],
+      "reason": "You open your agents first every morning",
+      "author": "agent:pchat-mb1",
+      "created_at": "2026-10-15T08:00:00Z",
+      "summary": "Move Agents above Workspaces"
+    }
+  ],
+  "filters": [
+    {
+      "section": "cards",
+      "where": "state == \"Doing\"",
+      "until": "2026-10-22T00:00:00Z"
+    }
+  ],
+  "saved": [
+    "Monday review"
+  ],
+  "cards_on": true,
+  "card_proposals": [
+    {
+      "id": "cp1",
+      "kind": "create",
+      "card": null,
+      "title": "Follow up on the pricing call",
+      "workspace": "client-x-4f2a91",
+      "fields": {
+        "Next": "Send the revised numbers"
+      },
+      "reason": "You said you would follow up by Friday",
+      "author_kind": "agent",
+      "at": "2026-10-15T10:00:00Z",
+      "preview": {
+        "title": "Follow up on the pricing call",
+        "state": "To do",
+        "states": [
+          "To do",
+          "Doing",
+          "Done"
+        ]
+      }
+    }
+  ],
+  "card_invites": [
+    {
+      "id": "r9",
+      "ref": "card:r9",
+      "type": "Card",
+      "revision": 3,
+      "title": "Event logistics",
+      "about": {
+        "kind": "page",
+        "ref": "page:client-x-4f2a91/pricing.md"
+      },
+      "state": "Doing",
+      "states": [
+        "To do",
+        "Doing",
+        "Done"
+      ],
+      "side_states": [
+        "Dropped"
+      ],
+      "next": "Send the revised numbers",
+      "waiting": "Legal review",
+      "summary": "Second round after the call on Tuesday.",
+      "due": "2026-10-22",
+      "progress": 0.5,
+      "workspaces": [
+        "client-x-4f2a91"
+      ],
+      "parent": null,
+      "children": {
+        "done": 1,
+        "total": 2,
+        "items": [
+          {
+            "id": "r2",
+            "title": "Draft numbers",
+            "state": "Done",
+            "done": true
+          },
+          {
+            "id": "r3",
+            "title": "Legal check",
+            "state": "Doing",
+            "done": false
+          }
+        ]
+      },
+      "members": [
+        {
+          "subject": "9",
+          "status": "member"
+        },
+        {
+          "subject": "7",
+          "status": "invited"
+        }
+      ],
+      "face": [
+        {
+          "type": "stepper"
+        },
+        {
+          "type": "next"
+        },
+        {
+          "type": "waiting"
+        },
+        {
+          "type": "metric",
+          "label": "Amount",
+          "value": "12,000"
+        },
+        {
+          "type": "locked",
+          "label": "Margin"
+        },
+        {
+          "type": "movement"
+        },
+        {
+          "type": "subcards"
+        },
+        {
+          "type": "people"
+        }
+      ],
+      "movement": {
+        "by": "7",
+        "kind": "person",
+        "what": "Moved to Doing",
+        "at": "2026-10-15T09:00:00Z"
+      },
+      "stalled": false,
+      "can": {
+        "edit": false,
+        "transition": false,
+        "review": false,
+        "members": false
+      },
+      "href": "/crm?record=r9"
+    }
+  ]
+}

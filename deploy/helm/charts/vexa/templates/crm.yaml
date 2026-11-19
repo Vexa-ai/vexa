@@ -1,0 +1,304 @@
+{{- /* The crm-schema Job's spec, hashed into its name (below). */ -}}
+{{- define "vexa.crmSchemaJobSpec" -}}
+{{- $root := .root -}}
+spec:
+  backoffLimit: {{ $root.Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      enableServiceLinks: false
+      restartPolicy: Never
+      {{- include "vexa.nonRootPodSecurityContext" $root | nindent 6 }}
+      {{- with $root.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with include "vexa.extraCA.initContainer" $root }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
+      {{- with include "vexa.extraCA.volumes" $root }}
+      volumes:{{ . | trim | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: crm-schema
+          {{- include "vexa.containerSecurityContext" $root | nindent 10 }}
+          image: {{ .image | quote }}
+          imagePullPolicy: {{ $root.Values.global.imagePullPolicy }}
+          command: ["python", "-m", "crm.migrate", "init"]
+          {{- with include "vexa.extraCA.mounts" $root }}
+          volumeMounts:{{ . | trim | nindent 12 }}
+          {{- end }}
+          env:
+            {{- with include "vexa.extraCA.env" $root }}{{ . | trim | nindent 12 }}{{ end }}
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" $root | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" $root | quote }}
+            - name: DB_NAME
+              valueFrom: {secretKeyRef: {name: {{ include "vexa.postgresCredentialsSecretName" $root | quote }}, key: POSTGRES_DB}}
+            - name: DB_USER
+              valueFrom: {secretKeyRef: {name: {{ include "vexa.postgresCredentialsSecretName" $root | quote }}, key: POSTGRES_USER}}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "vexa.postgresCredentialsSecretName" $root | quote }}, key: POSTGRES_PASSWORD}}
+            - name: CRM_DB_USER
+              value: {{ $root.Values.crm.dbUser | quote }}
+            - name: CRM_DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .secret | quote }}, key: password}}
+            - name: CRM_ORG_ID
+              value: {{ $root.Values.crm.orgId | quote }}
+            - name: CRM_ORG_NAME
+              value: {{ $root.Values.crm.orgName | default $root.Values.crm.orgId | quote }}
+            - name: CRM_AUDIT_RETENTION_DAYS
+              value: {{ $root.Values.crm.auditRetentionDays | quote }}
+          resources:
+            {{- toYaml $root.Values.migrations.resources | nindent 12 }}
+{{- end -}}
+{{- /* The CRM's own login (its role, never the admin credential): crm-api and the outbox. */ -}}
+{{- define "vexa.crmDbEnv" -}}
+{{- $secret := .Values.crm.existingSecret | default (include "vexa.componentName" (list . "crm-db")) -}}
+- name: CRM_DB_PASSWORD
+  valueFrom: {secretKeyRef: {name: {{ $secret | quote }}, key: password}}
+- name: DB_NAME
+  valueFrom: {secretKeyRef: {name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}, key: POSTGRES_DB}}
+- name: CRM_DATABASE_URL
+  value: "postgresql+pg8000://{{ .Values.crm.dbUser }}:$(CRM_DB_PASSWORD)@{{ include "vexa.dbHostEffective" . }}:{{ include "vexa.dbPortEffective" . }}/$(DB_NAME)"
+{{- end -}}
+{{- define "vexa.crmEnv" -}}
+{{ include "vexa.crmDbEnv" . }}
+- name: CRM_ORG_ID
+  value: {{ .Values.crm.orgId | quote }}
+- name: ADMIN_API_URL
+  value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+- name: INTERNAL_API_SECRET
+  valueFrom: {secretKeyRef: {name: {{ include "vexa.adminTokenSecretName" . | quote }}, key: INTERNAL_API_SECRET}}
+{{- end -}}
+{{- if .Values.crm.enabled }}
+{{- if not .Values.crm.orgId }}
+{{- fail "crm.enabled needs crm.orgId: one organisation per install (ADR-0047)" }}
+{{- end }}
+{{- $name := include "vexa.componentName" (list . "crm-api") }}
+{{- $secret := .Values.crm.existingSecret | default (include "vexa.componentName" (list . "crm-db")) }}
+{{- $image := printf "%s:%s" .Values.crm.image.repository (.Values.global.imageTag | default .Values.crm.image.tag | default (include "vexa.releaseTag" .)) }}
+{{- if not .Values.crm.existingSecret }}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace $secret).data | default dict }}
+# The optional CRM (ADR-0047). Its own Postgres role's password: generated once, then reused (lookup
+# returns the live Secret on every render); a `helm template` pipeline cannot look anything up — set
+# crm.existingSecret there. A hook ahead of the schema Job, which sets it on the role.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secret }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: crm-api
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+type: Opaque
+data:
+  {{- if hasKey $existing "password" }}
+  password: {{ index $existing "password" }}
+  {{- else }}
+  password: {{ randAlphaNum 48 | sha256sum | b64enc }}
+  {{- end }}
+---
+{{- end }}
+# The CRM's migrations path: with the database's admin credential, creates (or re-asserts) the CRM's
+# own login role — no superuser, grants on the crm_* tables only — the tables, and the organisation
+# with its entity types, then exits. crm-api waits for it (initContainer) and never holds the admin
+# credential. Compose runs the same command as `crm-init`.
+#
+# A release resource, not a Helm hook, named after a hash of its own spec — the agent-sessions-schema
+# Job's pattern (job-agent-sessions.yaml). Helm creates a hook only on the events it names, so a
+# `pre-upgrade` hook never ran on `helm install` and crm-api waited in its initContainer forever; a
+# `pre-install` hook would run before the chart's Postgres exists, and a `post-install` one would
+# deadlock `helm install --wait`. As a release resource it runs beside the Pods that wait for it; a
+# changed image or environment renders a new name, so an upgrade creates a new Job (the old one is
+# pruned) instead of patching an immutable one. The Job retries until Postgres answers.
+{{- $spec := include "vexa.crmSchemaJobSpec" (dict "root" . "image" $image "secret" $secret) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vexa.componentName" (list . "crm-schema") }}-{{ $spec | sha256sum | trunc 8 }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: crm-schema
+{{ $spec }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.crm.replicaCount }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: crm-api
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: crm-api
+      annotations:
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      enableServiceLinks: false
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+        # waits, as the CRM's own role, until the schema Job has made the role and the tables
+        - name: crm-schema-ready
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "crm.migrate", "check"]
+          env:
+            {{- include "vexa.crmEnv" . | nindent 12 }}
+      {{- with include "vexa.extraCA.volumes" . }}
+      volumes:{{ . | trim | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: crm-api
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8300
+          {{- with include "vexa.extraCA.mounts" . }}
+          volumeMounts:{{ . | trim | nindent 12 }}
+          {{- end }}
+          env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- include "vexa.crmEnv" . | nindent 12 }}
+            - name: VEXA_FEATURES
+              value: {{ .Values.features | default "" | quote }}
+            {{- if .Values.agentApi.enabled }}
+            # where the desk's limits are read (_global/POLICIES.md); unset = the defaults
+            - name: CRM_AGENT_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- end }}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.crm.resources | nindent 12 }}
+---
+{{- if .Values.flows.enabled }}
+# The CRM's outbox: hands each revision's fact (crm.record.changed, its envelope sealed per event.v2)
+# to flows-api's POST /events and marks it delivered only on a 202, so an unreachable flows leaves
+# the rows pending. It logs in as the CRM's role, holds the CRM's publish key on flows (never flows'
+# operator key) and the CRM's own Ed25519 fact seal key (fact-seal-keys.yaml), and nothing else —
+# crm-api holds neither. It refuses to start without the key; flows-api verifies under its public
+# half and cannot sign. One replica: rows are claimed FOR UPDATE SKIP LOCKED, so a second
+# would be safe, and would only add load.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "crm-outbox") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: crm-outbox
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: crm-outbox
+      annotations:
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      enableServiceLinks: false
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+        - name: crm-schema-ready
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "crm.migrate", "check"]
+          env:
+            {{- include "vexa.crmDbEnv" . | nindent 12 }}
+      containers:
+        - name: crm-outbox
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "crm.outbox", "--watch"]
+          env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- include "vexa.crmDbEnv" . | nindent 12 }}
+            - name: FLOWS_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
+            - name: FLOWS_PUBLISH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . | quote }}
+                  key: VEXA_FLOWS_CRM_PUBLISH_KEY
+            # event.v2: the CRM's own Ed25519 PRIVATE seal key, mounted here and in no other workload.
+            - name: VEXA_FACT_SEAL_KEY_FILE
+              value: /run/vexa-fact-seal/key.pem
+          volumeMounts:
+            - name: fact-seal-crm-key
+              mountPath: /run/vexa-fact-seal
+              readOnly: true
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
+          resources:
+            {{- toYaml .Values.crm.resources | nindent 12 }}
+      volumes:
+        - name: fact-seal-crm-key
+          secret:
+            secretName: {{ .Values.factSeal.crm.existingSecret | default (include "vexa.componentName" (list . "fact-seal-crm-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8300
+      targetPort: http
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: crm-api
+{{- end }}

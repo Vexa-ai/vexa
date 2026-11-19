@@ -1,0 +1,76 @@
+---
+title: "Paste a meeting link to send Vexa"
+description: "Paste a Google Meet, Teams, Zoom or Jitsi link into a chat and send nothing else: Vexa joins that meeting, and the chat says whether it is on its way, already there, or refused."
+---
+
+To send Vexa to a meeting from a chat, paste the meeting link into the chat box and send it, with
+nothing else in the message.
+
+```text
+https://meet.google.com/abc-defg-hij
+```
+
+Vexa asks to join that meeting straight away. Someone in the meeting has to admit it. The chat
+answers with one of three things:
+
+- **Requested.** The bot is on its way and joins once someone admits it. The meeting's live
+  transcript opens beside the chat, and the chat becomes that meeting's chat.
+- **Already there.** You already have a bot in that meeting, so no second one is sent. Pasting the
+  same link again is safe.
+- **Refused.** The request was turned down, and the chat gives the reason as the service stated it
+  (for example, you have reached your limit of bots running at once).
+
+The links that work are the ones Vexa can join: Google Meet, Microsoft Teams (including
+`teams.live.com/meet/…` links), Zoom and Jitsi.
+
+A message with other words in it, such as `can you join https://meet.google.com/abc-defg-hij at 3?`,
+is an ordinary message: the agent reads it and decides what to do. A link that is not a meeting
+link, such as a document URL, is also an ordinary message.
+
+## How it works
+
+1. You send the message. The terminal posts it to agent-api like any other chat message, and the
+   chat's worker takes it.
+2. The worker checks the message itself. It qualifies only when your part of the message is one
+   `http`/`https` URL and nothing else, and it is a message you typed. A pressed button, a background
+   job, a flow step, a post-meeting run and a set-up opening never qualify.
+3. The worker asks the Vexa MCP's `parse_meeting_link` whether the URL is a meeting link it
+   supports. This is the same parser `request_meeting_bot` uses. If the answer is no, the message
+   goes to the agent as an ordinary message and nothing else happens.
+4. If it is a meeting link, the worker calls `request_meeting_bot` with it. The call goes over the
+   chat's own MCP attachment, with the short-lived delegation token agent-api minted for you for this
+   chat. That is the same attachment and token the agent's own tool calls use.
+5. meeting-api allows one active bot per person per meeting. A second request for a meeting you
+   already have a bot in returns `already_exists` with that meeting, and no second bot is started.
+6. The worker writes the result to the chat as the agent's step (`request_meeting_bot`), a
+   `meeting-link` event (`requested`, `already_there` or `refused`, plus the meeting), and, when a bot
+   is in the meeting, the meeting artifact. agent-api reads that artifact to bind the chat to the
+   meeting and create the meeting's page, exactly as it does when the agent sends a bot.
+7. The agent's turn then runs with the outcome at the top of its prompt. It confirms the outcome in
+   one sentence and is told not to send the bot again. The exchange is saved in the chat's history
+   like any other turn.
+
+If the link cannot be checked (for example, the MCP returns an error), the chat gets a `meeting-link`
+event with outcome `unchecked` and the error, and the message goes to the agent as an ordinary one.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this meets it | Enforced by |
+|---|---|---|
+| P23 (one writer per data carrier) | The chat's output stream and its history have one writer, the worker. The send is decided and reported there, so agent-api writes nothing extra to the chat. agent-api keeps doing what it already does with the events it relays: binding the chat to the meeting. | `gate:dataflow` |
+| P6 (one front door per module) | Bots are sent through the MCP's `request_meeting_bot`, the same front door the agent uses. Links are recognised by the MCP's `parse_meeting_link`, with the same parser. The worker has no URL parser and no direct route to meeting-api. | review |
+| P18 (fail loud and attributable) | A refused send is reported with the deciding service's own `code`/`reason` and HTTP status (`source: request_meeting_bot`), as a failed step, in the `meeting-link` event and in the agent's answer. A link that could not be checked is reported as `unchecked` with its error. Nothing is dropped silently. | `gate:python` (`test_bare_meeting_link.py`) |
+| P20 (authorize every access) | The send carries only your own delegated identity and scopes, so the gateway and meeting-api apply the same checks they apply to the agent's own call. | `gate:python` (`test_bare_meeting_link.py`, credential tests) |
+
+### Security
+
+- **Your access, nobody else's.** The only credential used is the delegation token on the chat's own
+  MCP attachment, which agent-api mints for you and refreshes for this chat. Environment keys, other
+  people's tokens and API keys are never read.
+- **No new parsing of untrusted URLs.** Whether a URL is a meeting link is decided by the existing
+  `parse_meeting_link`, which compares hosts exactly rather than by substring. A look-alike host such
+  as `zoom.us.evil.example` is not a meeting link.
+- **Bot verbs stay withheld where they are withheld.** A post-meeting room run never sends a bot,
+  whatever its prompt says.

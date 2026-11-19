@@ -1,0 +1,473 @@
+[
+ {
+  "name": "no face is the default face",
+  "face": null,
+  "fields": {
+   "Title": "Renewal",
+   "Next": "call Bo",
+   "Summary": "margin is 12%",
+   "Progress": 0.5,
+   "Amount": 1200,
+   "Due": "2026-11-02T00:00:00Z",
+   "Checklist": [
+    {
+     "text": "deck",
+     "done": true
+    },
+    {
+     "text": "pricing"
+    },
+    {
+     "text": ""
+    }
+   ],
+   "Notes": [
+    "a",
+    "b\nc",
+    "d",
+    "e",
+    "f"
+   ]
+  },
+  "readable": [
+   "*"
+  ],
+  "expect": [
+   {
+    "type": "stepper"
+   },
+   {
+    "type": "next"
+   },
+   {
+    "type": "waiting"
+   },
+   {
+    "type": "movement"
+   },
+   {
+    "type": "subcards"
+   },
+   {
+    "type": "people"
+   }
+  ]
+ },
+ {
+  "name": "unknown blocks, unknown keys and literal text are dropped",
+  "face": [
+   {
+    "type": "script",
+    "src": "x"
+   },
+   {
+    "type": "stepper",
+    "extra": 1
+   },
+   {
+    "type": "text",
+    "text": "painted literal"
+   },
+   {
+    "type": "text",
+    "field": "Summary",
+    "text": "override"
+   }
+  ],
+  "fields": {
+   "Title": "Renewal",
+   "Next": "call Bo",
+   "Summary": "margin is 12%",
+   "Progress": 0.5,
+   "Amount": 1200,
+   "Due": "2026-11-02T00:00:00Z",
+   "Checklist": [
+    {
+     "text": "deck",
+     "done": true
+    },
+    {
+     "text": "pricing"
+    },
+    {
+     "text": ""
+    }
+   ],
+   "Notes": [
+    "a",
+    "b\nc",
+    "d",
+    "e",
+    "f"
+   ]
+  },
+  "readable": [
+   "*"
+  ],
+  "expect": [
+   {
+    "type": "stepper"
+   },
+   {
+    "type": "text",
+    "text": "margin is 12%"
+   }
+  ]
+ },
+ {
+  "name": "a field the viewer cannot read is locked",
+  "face": [
+   {
+    "type": "text",
+    "field": "Summary",
+    "label": "Summary"
+   },
+   {
+    "type": "metric",
+    "field": "Amount"
+   }
+  ],
+  "fields": {
+   "Title": "Renewal",
+   "Next": "call Bo",
+   "Summary": "margin is 12%",
+   "Progress": 0.5,
+   "Amount": 1200,
+   "Due": "2026-11-02T00:00:00Z",
+   "Checklist": [
+    {
+     "text": "deck",
+     "done": true
+    },
+    {
+     "text": "pricing"
+    },
+    {
+     "text": ""
+    }
+   ],
+   "Notes": [
+    "a",
+    "b\nc",
+    "d",
+    "e",
+    "f"
+   ]
+  },
+  "readable": [
+   "Title",
+   "Amount"
+  ],
+  "expect": [
+   {
+    "type": "locked",
+    "label": "Summary"
+   },
+   {
+    "type": "metric",
+    "value": "1200"
+   }
+  ]
+ },
+ {
+  "name": "values are formatted and capped",
+  "face": [
+   {
+    "type": "metric",
+    "field": "Progress",
+    "label": "Done"
+   },
+   {
+    "type": "metric",
+    "field": "Amount",
+    "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+   },
+   {
+    "type": "progress",
+    "field": "Progress"
+   },
+   {
+    "type": "due",
+    "field": "Due"
+   },
+   {
+    "type": "checklist",
+    "field": "Checklist"
+   },
+   {
+    "type": "list",
+    "field": "Notes"
+   }
+  ],
+  "fields": {
+   "Title": "Renewal",
+   "Next": "call Bo",
+   "Summary": "margin is 12%",
+   "Progress": 0.5,
+   "Amount": 1200,
+   "Due": "2026-11-02T00:00:00Z",
+   "Checklist": [
+    {
+     "text": "deck",
+     "done": true
+    },
+    {
+     "text": "pricing"
+    },
+    {
+     "text": ""
+    }
+   ],
+   "Notes": [
+    "a",
+    "b\nc",
+    "d",
+    "e",
+    "f"
+   ]
+  },
+  "readable": [
+   "*"
+  ],
+  "expect": [
+   {
+    "type": "metric",
+    "label": "Done",
+    "value": "50%"
+   },
+   {
+    "type": "metric",
+    "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+    "value": "1200"
+   },
+   {
+    "type": "progress",
+    "value": 0.5
+   },
+   {
+    "type": "due",
+    "at": "2026-11-02"
+   },
+   {
+    "type": "checklist",
+    "items": [
+     {
+      "text": "deck",
+      "done": true
+     },
+     {
+      "text": "pricing",
+      "done": false
+     }
+    ]
+   },
+   {
+    "type": "list",
+    "rows": [
+     "a",
+     "b c",
+     "d",
+     "e"
+    ]
+   }
+  ],
+  "formats": {
+   "Progress": "percent01"
+  }
+ },
+ {
+  "name": "an empty field draws nothing",
+  "face": [
+   {
+    "type": "text",
+    "field": "Waiting"
+   },
+   {
+    "type": "people"
+   }
+  ],
+  "fields": {
+   "Title": "Renewal",
+   "Next": "call Bo",
+   "Summary": "margin is 12%",
+   "Progress": 0.5,
+   "Amount": 1200,
+   "Due": "2026-11-02T00:00:00Z",
+   "Checklist": [
+    {
+     "text": "deck",
+     "done": true
+    },
+    {
+     "text": "pricing"
+    },
+    {
+     "text": ""
+    }
+   ],
+   "Notes": [
+    "a",
+    "b\nc",
+    "d",
+    "e",
+    "f"
+   ]
+  },
+  "readable": [
+   "*"
+  ],
+  "expect": [
+   {
+    "type": "people"
+   }
+  ]
+ },
+ {
+  "name": "at most eight blocks",
+  "face": [
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   }
+  ],
+  "fields": {
+   "Title": "Renewal",
+   "Next": "call Bo",
+   "Summary": "margin is 12%",
+   "Progress": 0.5,
+   "Amount": 1200,
+   "Due": "2026-11-02T00:00:00Z",
+   "Checklist": [
+    {
+     "text": "deck",
+     "done": true
+    },
+    {
+     "text": "pricing"
+    },
+    {
+     "text": ""
+    }
+   ],
+   "Notes": [
+    "a",
+    "b\nc",
+    "d",
+    "e",
+    "f"
+   ]
+  },
+  "readable": [
+   "*"
+  ],
+  "expect": [
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   },
+   {
+    "type": "people"
+   }
+  ]
+ },
+ {
+  "name": "a bad field name is dropped",
+  "face": [
+   {
+    "type": "metric",
+    "field": "../x"
+   },
+   {
+    "type": "metric",
+    "field": ""
+   },
+   {
+    "type": "next"
+   }
+  ],
+  "fields": {
+   "Title": "Renewal",
+   "Next": "call Bo",
+   "Summary": "margin is 12%",
+   "Progress": 0.5,
+   "Amount": 1200,
+   "Due": "2026-11-02T00:00:00Z",
+   "Checklist": [
+    {
+     "text": "deck",
+     "done": true
+    },
+    {
+     "text": "pricing"
+    },
+    {
+     "text": ""
+    }
+   ],
+   "Notes": [
+    "a",
+    "b\nc",
+    "d",
+    "e",
+    "f"
+   ]
+  },
+  "readable": [
+   "*"
+  ],
+  "expect": [
+   {
+    "type": "next"
+   }
+  ]
+ }
+]

@@ -48,8 +48,14 @@ const {
   checkForWaitingRoomIndicators,
   checkForGoogleAdmissionIndicators,
   hasConsentPrompt,
+  acknowledgeJoinNotice,
   waitForGoogleMeetingAdmission,
+  checkForGoogleKnockExpired,
 } = admission;
+import {
+  GoogleJoinRefusedError, GOOGLE_JOIN_REFUSED, watchGoogleJoinRefusal, checkForGoogleJoinRefused,
+} from './refusal';
+import { setHooks } from '../_host';
 const GRACE_MS: number = (admission as any).CAPTCHA_SOLVE_GRACE_MS ?? 120_000;
 
 /**
@@ -70,7 +76,7 @@ const GRACE_MS: number = (admission as any).CAPTCHA_SOLVE_GRACE_MS ?? 120_000;
 type CaptchaMode = false | 'invisible' | 'live';
 const RECAPTCHA_IFRAME = 'iframe[src*="recaptcha"]';
 
-function mockPage(visible: string[], captcha: CaptchaMode = false, participantLabels: string[] = []): any {
+function mockPage(visible: string[], captcha: CaptchaMode = false, participantLabels: string[] = [], url = 'https://meet.google.com/abc-defg-hij', clicks: string[] = []): any {
   const captchaIframes: { visible: boolean; box: { x: number; y: number; width: number; height: number } | null }[] =
     captcha === 'live' ? [{ visible: true, box: { x: 300, y: 120, width: 400, height: 580 } }]
       : captcha === 'invisible' ? [{ visible: false, box: null }]
@@ -92,12 +98,18 @@ function mockPage(visible: string[], captcha: CaptchaMode = false, participantLa
         first: () => ({
           isVisible: async () => visible.includes(sel),
           getAttribute: async () => null,
+          // A click is recorded and dismisses every dialog on the page (a join notice closes on
+          // "Join now"), so the next probe sees what is behind it.
+          click: async () => {
+            clicks.push(sel);
+            for (let i = visible.length - 1; i >= 0; i--) if (/dialog|take notes/.test(visible[i])) visible.splice(i, 1);
+          },
         }),
         count: async () => (visible.includes(sel) ? 1 : 0),
         evaluateAll: async () => participantLabels,
       },
     mouse: { move: async () => {} },
-    url: () => 'https://meet.google.com/abc-defg-hij',
+    url: () => url,
     screenshot: async () => {},
     waitForTimeout: async (_ms: number) => {},
     frames: () => (captcha
@@ -323,6 +335,170 @@ async function outcomeOf(run: Promise<unknown>, watchdogMs = 10_000): Promise<st
     await checkForGoogleAdmissionIndicators(mockPage([], false, ['John Doe'])),
     true,
   );
+
+  console.log('\n=== Meet join notices: "Join now" (#1251, #1727; founder waiver of #429, 28 Oct 2026) ===');
+
+  const GEMINI_JOIN = '[role="dialog"]:has-text("taking notes") :is(button, [role="button"]):has-text("Join now")';
+  const SHARED_JOIN = '[role="dialog"]:has-text("will be shared with") :is(button, [role="button"]):has-text("Join now")';
+
+  // 12a. "Gemini is taking notes" (Leave / Join now) over the call → the bot clicks "Join now",
+  //      the dialog closes, and the participant tiles behind it now read as admitted.
+  {
+    const clicks: string[] = [];
+    const page = mockPage(['[role="dialog"]:has-text("taking notes")', GEMINI_JOIN], false, ['John Doe'], undefined, clicks);
+    await check('Gemini notice + tiles → admitted after "Join now"', await checkForGoogleAdmissionIndicators(page), true);
+    await check('… the click was "Join now" inside the notice', clicks.length === 1 && clicks[0] === GEMINI_JOIN, true, JSON.stringify(clicks));
+  }
+  // 12b. Another notetaker's notice (#1727): "Your call audio and video will be shared with Read AI".
+  {
+    const clicks: string[] = [];
+    const page = mockPage(['[role="dialog"]:has-text("will be shared with")', SHARED_JOIN], false, ['John Doe'], undefined, clicks);
+    await check('"will be shared with" notice → detected', await hasConsentPrompt(mockPage(['[role="dialog"]:has-text("will be shared with")'])), true);
+    await check('"will be shared with" notice + tiles → admitted after "Join now"', await checkForGoogleAdmissionIndicators(page), true);
+    await check('… the click was "Join now" inside that notice', clicks.length === 1 && clicks[0] === SHARED_JOIN, true, JSON.stringify(clicks));
+  }
+  // 12c. CONTROL — a prompt with no "Join now" ("take notes for me" asks to START notes) is not
+  //      clicked and still suppresses admission for a human (#429 holds there).
+  {
+    const clicks: string[] = [];
+    const page = mockPage(['text=take notes for me'], false, ['John Doe'], undefined, clicks);
+    await check('"take notes for me" (no Join now) → nothing clicked', await acknowledgeJoinNotice(page), false);
+    await check('… and admission stays suppressed', await checkForGoogleAdmissionIndicators(page), false);
+    await check('… no click at all', clicks.length === 0, true, JSON.stringify(clicks));
+  }
+  // 12d. CONTROL — the pre-join screen's own "Join now" (not inside a notice) is never matched.
+  await check(
+    'pre-join "Join now" outside any notice → not a join notice',
+    await acknowledgeJoinNotice(mockPage(['button:has-text("Join now")'])),
+    false,
+  );
+  // 12e. The waiting loop answers the notice too, then admits.
+  {
+    resetEscalation();
+    const clicks: string[] = [];
+    const page = mockPage(['[role="dialog"]:has-text("taking notes")', GEMINI_JOIN], false, ['John Doe'], undefined, clicks);
+    const got = await outcomeOf(waitForGoogleMeetingAdmission(page, 20_000, {} as any));
+    check('waitForGoogleMeetingAdmission with a Gemini notice → resolved (admitted)', got === 'resolved', true, got);
+  }
+
+  console.log('\n=== Meet ended the knock unanswered ("No one responded", lobby test 27 Oct 2026) ===');
+
+  // 12. About 10 min into an unanswered knock Meet replaces the lobby with "No one responded to
+  //     your request to join the call" (plus a "Return to home screen" button), then redirects
+  //     to workspace.google.com. Pre-fix neither matched anything: the wait ran to its 900 s
+  //     budget and threw join_failure "no meeting indicators found", which join-evidence
+  //     attributes to us (system_fault). It is the host not answering: lobby_timeout.
+  {
+    resetEscalation();
+    const page = mockPage(['text=No one responded to your request to join', 'button:has-text("Return to home screen")']);
+    const got = await outcomeOf(waitForGoogleMeetingAdmission(page, 20_000, {} as any));
+    check('"No one responded" screen → AdmissionError(\'lobby_timeout\')', got === 'AdmissionError:lobby_timeout', true, got);
+  }
+  {
+    resetEscalation();
+    const page = mockPage([], false, [], 'https://workspace.google.com/products/meet/');
+    const got = await outcomeOf(waitForGoogleMeetingAdmission(page, 20_000, {} as any));
+    check('redirected to workspace.google.com → AdmissionError(\'lobby_timeout\')', got === 'AdmissionError:lobby_timeout', true, got);
+  }
+  // Controls: a sign-in redirect and a normal lobby are NOT an expired knock.
+  await check(
+    'accounts.google.com page → not an expired knock (control)',
+    (await checkForGoogleKnockExpired(mockPage([], false, [], 'https://accounts.google.com/signin'))) === null,
+    true,
+  );
+  await check(
+    'normal lobby ("Asking to be let in" + "Return to home screen") → not an expired knock (control)',
+    (await checkForGoogleKnockExpired(mockPage(['text=Asking to be let in', 'button:has-text("Return to home screen")']))) === null,
+    true,
+  );
+
+  console.log('\n=== Meet refused the knock ("You can\'t join this video call", prod meeting 34824) ===');
+
+  // 13. Right after "Ask to join" Meet answers CreateMeetingDevice with 403 and shows "You can't join
+  //     this video call" plus "Return to home screen". Pre-fix that button read as the waiting room:
+  //     awaiting_admission, then 900 s of polling a page with nothing behind it (34824: join_failure
+  //     "no meeting indicators found", attributed system_fault). It is Meet refusing the join.
+  const REFUSED_COPY = "text=You can't join this video call";
+  {
+    resetEscalation();
+    const page = mockPage([REFUSED_COPY, 'button:has-text("Return to home screen")']);
+    const got = await outcomeOf(waitForGoogleMeetingAdmission(page, 20_000, {} as any));
+    check('"You can\'t join this video call" + "Return to home screen" → AdmissionError(\'denial\')', got === 'AdmissionError:denial', true, got);
+    const err = await waitForGoogleMeetingAdmission(mockPage([REFUSED_COPY, 'button:has-text("Return to home screen")']), 20_000, {} as any).catch((e) => e);
+    check('… typed GoogleJoinRefusedError naming google_meet_join_refused', err instanceof GoogleJoinRefusedError && err.message.startsWith(GOOGLE_JOIN_REFUSED), true, String(err?.message));
+  }
+  // The same page must never report awaiting_admission first (the host has nothing to admit).
+  {
+    resetEscalation();
+    const states: string[] = [];
+    setHooks({ onState: (s) => { states.push(s); } });
+    const page = mockPage([REFUSED_COPY, 'button:has-text("Return to home screen")']);
+    await waitForGoogleMeetingAdmission(page, 20_000, {} as any).catch(() => {});
+    setHooks({});
+    check('refused knock → no awaiting_admission state reported', states.includes('awaiting_admission'), false, JSON.stringify(states));
+  }
+  // The refusal screen can render between a poll's refusal check and its waiting-room check (live,
+  // b-v2a-4, 29 Oct 17:04:52Z): the waiting-room predicate itself must not read it as the lobby.
+  await check(
+    'refusal screen ("You can\'t join" + "Return to home screen") → not the waiting room',
+    await checkForWaitingRoomIndicators(mockPage([REFUSED_COPY, 'button:has-text("Return to home screen")'])),
+    false,
+  );
+  await check(
+    'normal lobby ("Asking to be let in" + "Return to home screen") → waiting room (control)',
+    await checkForWaitingRoomIndicators(mockPage(['text=Asking to be let in', 'button:has-text("Return to home screen")'])),
+    true,
+  );
+  // The typographic apostrophe Meet also uses.
+  {
+    resetEscalation();
+    const page = mockPage(['text=You can’t join this video call']);
+    const got = await outcomeOf(waitForGoogleMeetingAdmission(page, 20_000, {} as any));
+    check('"You can’t join" (typographic apostrophe) → AdmissionError(\'denial\')', got === 'AdmissionError:denial', true, got);
+  }
+  // The network signal alone (screen already gone): CreateMeetingDevice 403, then the 60 s redirect
+  // to workspace.google.com, where no waiting-room or admission indicator matches and the wait would
+  // run its whole budget. The refusal must end it: no request ever reached the host.
+  {
+    resetEscalation();
+    const listeners: ((r: any) => void)[] = [];
+    const page = mockPage([], false, [], 'https://workspace.google.com/products/meet/');
+    page.on = (ev: string, fn: (r: any) => void) => { if (ev === 'response') listeners.push(fn); };
+    watchGoogleJoinRefusal(page);
+    for (const fn of listeners) fn({ status: () => 403, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingDeviceService/CreateMeetingDevice' });
+    const err = await waitForGoogleMeetingAdmission(page, 20_000, {} as any).catch((e) => e);
+    check('CreateMeetingDevice 403 + workspace redirect → refused, not lobby_timeout', err instanceof GoogleJoinRefusedError, true, `${err?.name}: ${err?.message}`);
+    check('… evidence names the 403', /CreateMeetingDevice answered HTTP 403/.test(err?.message || ''), true, String(err?.message));
+  }
+  // The same refusal one step earlier: ResolveMeetingSpace answers 403 during the lobby load, before
+  // any click (harness 29 Oct; self-hosted meeting 121's log). A 404 there is a code that does not exist.
+  {
+    const listeners: ((r: any) => void)[] = [];
+    const page = mockPage([]);
+    page.on = (ev: string, fn: (r: any) => void) => { if (ev === 'response') listeners.push(fn); };
+    watchGoogleJoinRefusal(page);
+    for (const fn of listeners) fn({ status: () => 403, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingSpaceService/ResolveMeetingSpace' });
+    const why = await checkForGoogleJoinRefused(page);
+    await check('ResolveMeetingSpace 403 on lobby load → refused, evidence names the call', why === 'ResolveMeetingSpace answered HTTP 403', true, String(why));
+  }
+  {
+    const listeners: ((r: any) => void)[] = [];
+    const page = mockPage([]);
+    page.on = (ev: string, fn: (r: any) => void) => { if (ev === 'response') listeners.push(fn); };
+    watchGoogleJoinRefusal(page);
+    for (const fn of listeners) fn({ status: () => 404, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingSpaceService/ResolveMeetingSpace' });
+    await check('ResolveMeetingSpace 404 (no such meeting) → not a refusal (control)', (await checkForGoogleJoinRefused(page)) === null, true);
+  }
+  // Controls: other responses and the normal lobby are not a refusal.
+  {
+    const listeners: ((r: any) => void)[] = [];
+    const page = mockPage(['text=Asking to be let in', 'button:has-text("Return to home screen")']);
+    page.on = (ev: string, fn: (r: any) => void) => { if (ev === 'response') listeners.push(fn); };
+    watchGoogleJoinRefusal(page);
+    for (const fn of listeners) fn({ status: () => 200, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingDeviceService/CreateMeetingDevice' });
+    for (const fn of listeners) fn({ status: () => 403, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.SomethingElse/Get' });
+    await check('normal lobby + CreateMeetingDevice 200 + an unrelated 403 → not refused (control)', (await checkForGoogleJoinRefused(page)) === null, true);
+  }
 
   console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);
   process.exit(failed > 0 ? 1 : 0);

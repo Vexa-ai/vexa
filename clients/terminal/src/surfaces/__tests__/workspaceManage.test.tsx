@@ -6,11 +6,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { ServicesProvider, createContainer, reg } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
-import * as api from "../workspaceApi";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
+import * as api from "../../data/workspaceApi";
 
-vi.mock("../workspaceApi", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../workspaceApi")>()),
+vi.mock("../../data/workspaceApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../data/workspaceApi")>()),
   readAttachedWorkspaces: vi.fn(),
   readActiveSet: vi.fn(),
   listSharedMemberships: vi.fn(),
@@ -64,15 +64,16 @@ describe("WorkspaceManagePanel — own workspace with a GitHub home", () => {
     expect(screen.getByText("↑2")).toBeTruthy();                                  // sync state in the meta row
     expect(screen.getByText("Share")).toBeTruthy();                               // primary header action
     expect(screen.queryByText("Purpose")).toBeNull();                             // sections folded by default
-    expect(screen.queryByText("GitHub")).toBeNull();
+    expect(screen.queryByText("Repository")).toBeNull();
   });
 
-  it("Manage workspace unfolds Purpose, GitHub (push/pull), participants CTA", async () => {
+  it("Manage workspace unfolds Purpose, Repository (push/pull), participants CTA", async () => {
     renderPanel({ slug: "acme-1234", shared: false, name: "ACME deal" });
     await expandManage();
     expect(await screen.findByText("The ACME deal room.")).toBeTruthy();  // purpose loaded
     expect(screen.getByText("Purpose")).toBeTruthy();
-    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.getByText("Repository")).toBeTruthy();
+    expect(await screen.findByText("Open on GitHub")).toBeTruthy();       // the home's provider, by label
     await waitFor(() => expect(screen.getByText(/Push/)).toBeTruthy());   // has_home → push/pull
     expect(screen.getByText(/Pull/)).toBeTruthy();
     expect(screen.getByText("Share this workspace")).toBeTruthy();        // not shared yet → CTA
@@ -83,7 +84,7 @@ describe("WorkspaceManagePanel — own workspace with a GitHub home", () => {
     await screen.findByText("ACME deal");
     fireEvent.click(screen.getByTitle("Rename · Manage · Archive · Delete"));
     expect(screen.getByText("Rename")).toBeTruthy();
-    expect(screen.getByText("Archive")).toBeTruthy();
+    expect(screen.getByText("Hide")).toBeTruthy();
     expect(screen.getByText("Delete")).toBeTruthy();
   });
 
@@ -109,7 +110,37 @@ describe("WorkspaceManagePanel — own workspace with a GitHub home", () => {
     fireEvent.change(tok, { target: { value: "ghp_x" } });
     fireEvent.click(screen.getByText("Publish"));
     // slug rides along so the backend publishes THIS workspace, not the seed
-    await waitFor(() => expect(api.publishWorkspace).toHaveBeenCalledWith("acme-deal", true, "ghp_x", undefined, "acme-1234"));
+    await waitFor(() => expect(api.publishWorkspace).toHaveBeenCalledWith("acme-deal", true, "ghp_x", undefined, "acme-1234", { provider: "github", org: undefined }));
+  });
+
+  it("publishes to a chosen provider and a nested group, using that provider's saved token", async () => {
+    const lists = {
+      default: "github",
+      providers: [
+        { name: "github", kind: "github", label: "GitHub", base_url: "https://github.com", host: "github.com", nested_groups: false, can_create: true, token_saved: false, masked: null },
+        { name: "corp", kind: "gitlab", label: "Corp GitLab", base_url: "https://git.example.com", host: "git.example.com", nested_groups: true, can_create: true, token_saved: true, masked: "••••abcd" },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      new Response(JSON.stringify(String(url).includes("git-providers") ? lists : { set: false, masked: null }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: false, remote: null, url: null, branch: "master", tracked: false, ahead: 0, behind: 0 } as never);
+    vi.mocked(api.publishWorkspace).mockResolvedValue({ repo_url: "https://git.example.com/it/ai/acme-deal", pushed_ref: "master", head_sha: "abc", created: true, provider: "corp" } as never);
+    try {
+      renderPanel({ slug: "acme-1234", shared: false, name: "ACME deal" });
+      await expandManage();
+      fireEvent.click(await screen.findByText("Publish to GitHub…"));
+      const select = await screen.findByLabelText("Provider");
+      expect(screen.getByPlaceholderText("GitHub token (used once, never stored)")).toBeTruthy();
+      fireEvent.change(select, { target: { value: "corp" } });
+      const org = screen.getByLabelText("Owner / group") as HTMLInputElement;
+      expect(org.placeholder).toBe("group/subgroup");
+      fireEvent.change(org, { target: { value: "it/ai" } });
+      expect(screen.getByPlaceholderText("Corp GitLab token (optional — using your saved token)")).toBeTruthy();
+      fireEvent.click(screen.getByText("Publish"));
+      await waitFor(() => expect(api.publishWorkspace).toHaveBeenCalledWith("acme-deal", true, undefined, undefined, "acme-1234", { provider: "corp", org: "it/ai" }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("header Share enables sharing and opens the invite MODAL (portaled — never lost below a long README)", async () => {

@@ -1,6 +1,16 @@
 {
  "contract": "config.v1",
  "service": "admin-api",
+ "capabilities": {
+  "personal_crm_erase": {
+   "description": "deleting an account also erases that person's own CRM (an individual account's org of one, p-<id>) through crm-api's internal erase door, before identity removes the account.",
+   "when_unconfigured": "no CRM is deployed, so there is no personal CRM to erase; account delete removes identity's rows only, as before."
+  },
+  "agent_delegation": {
+   "description": "identity resolves a worker's delegation token (vxd_, minted per dispatch by agent-api) through /internal/validate, like an API key: signature, audience, expiry and the account still existing — so the gateway and flows authenticate a worker's tool calls without holding the delegation key themselves.",
+   "when_unconfigured": "/internal/validate answers 401 to every vxd_ bearer, so a worker's toolbelt is refused at the edge; API keys are unaffected. This is the no-agents profile, which mints no delegation tokens."
+  }
+ },
  "keys": [
   {
    "key": "INTERNAL_API_SECRET",
@@ -18,11 +28,11 @@
    ]
   },
   {
-   "key": "ADMIN_API_TOKEN",
+   "key": "VEXA_TERMINAL_SESSION_SECRET",
    "class": "defaulted",
-   "default": "(unset — the admin surface then answers 500 'Admin authentication is not configured')",
+   "default": "(unset — POST /internal/sessions answers 503 and no session credential is minted)",
    "secret": true,
-   "description": "admin bearer for the privileged admin surface (main.py:_admin_token → os.getenv, NO code default; every /admin route and the key-minting surface behind it). It read 'changeme' here, which described the deploy surfaces rather than the code — and that is exactly what a published default is: this token MINTS AN API KEY FOR ANY USER, so a stack left on the literal hands the whole account plane to anyone who read the repository. Same refusal INTERNAL_API_SECRET got in F95, for a strictly larger blast radius (A19).",
+   "description": "the terminal's own second secret for POST /internal/sessions (app/sessions.py, PRD 0.13.4 D13), the one door that mints the `session` credential class (api_tokens.kind = 'session'). Compared in constant time with the X-Terminal-Session-Secret header, beside the internal tier. INTERNAL_API_SECRET alone is shared by every service in the deployment; this one only the terminal holds, so a compromised peer cannot mint a person's session. Unset, the terminal's sign-in falls back to an ordinary key and every decision that needs a session is refused (fail closed). Set the same value on the terminal.",
    "forbidden_values": [
      "vexa-internal-secret",
      "lite-internal-secret",
@@ -31,6 +41,47 @@
      "CHANGE-ME",
      "default",
      "secret"
+   ]
+  },
+  {
+   "key": "ADMIN_API_TOKEN",
+   "class": "defaulted",
+   "default": "(unset — the admin surface then answers 500 'Admin authentication is not configured')",
+   "secret": true,
+   "description": "admin bearer for the privileged admin surface (main.py:_admin_token → os.getenv, NO code default; every /admin route and the key-minting surface behind it). It read 'changeme' here, which described the deploy surfaces rather than the code — and that is exactly what a published default is: this token MINTS AN API KEY FOR ANY USER, so a stack left on the literal hands the whole account plane to anyone who read the repository. Same refusal INTERNAL_API_SECRET got in F95, for a strictly larger blast radius (A19). The list adds every default and example this repository has shipped for the admin key (compose's dev-admin-token, the chart's CHANGE_ME, the CI and test values, the old docs' placeholders); meeting-api's ADMIN_TOKEN refuses the same list (flows does not hold the key) (fact admin-token-placeholders).",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret",
+     "dev-admin-token",
+     "CHANGE_ME",
+     "ci-admin-token",
+     "gate-admin-token",
+     "test-admin-token",
+     "test-admin-token-t3",
+     "vexa-admin-token",
+     "vexa-admin-token-2024",
+     "token",
+     "strong-random-token",
+     "your-secret",
+     "your-secret-token",
+     "your-secret-admin-token",
+     "your-secure-admin-token",
+     "your-admin-token",
+     "your-admin-api-token",
+     "your_admin_api_token",
+     "your_admin_api_key",
+     "your_admin_api_key_here",
+     "YOUR_ADMIN_KEY",
+     "YOUR_ADMIN_API_KEY",
+     "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+     "admin-secret",
+     "admin-key",
+     "test-admin-key"
    ]
   },
   {
@@ -59,17 +110,27 @@
   },
   {
    "key": "DB_PASSWORD",
-   "class": "defaulted",
-   "default": "postgres",
+   "class": "required-explicit",
    "secret": true,
-   "description": "PostgreSQL password (dev default; change for any non-local deploy)"
+   "description": "PostgreSQL password for the users/tokens store. No default: it read 'postgres' here and in the code, a value published in this repository, so every stack nobody configured shared one database password anyone could read. Unset or a published literal refuses the boot, the same refusal compose's postgres service makes (deploy/compose/docker-compose.yml). Required even when DATABASE_URL overrides the URL.",
+   "forbidden_values": [
+     "postgres",
+     "password",
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "DATABASE_URL",
    "class": "defaulted",
    "default": "(derived from DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD)",
    "secret": true,
-   "description": "explicit SQLAlchemy URL override; when unset the URL is built from the DB_* parts. Provided as a lite entrypoint export, not a per-surface env.",
+   "description": "explicit SQLAlchemy URL override; when unset the URL is built from the DB_* parts. Not set by any deploy surface (Lite parses a supplied URL into the DB_* parts instead); DB_PASSWORD is still required at boot when it is set.",
    "targets": []
   },
   {
@@ -121,11 +182,60 @@
    "description": "log verbosity"
   },
   {
+   "key": "VEXA_SIGNIN_ALLOW",
+   "class": "defaulted",
+   "default": "(empty — only existing users and admins may sign in, plus the holder of the admin claim code while nothing is configured and no admin has been claimed)",
+   "description": "The deployment's seed for the terminal sign-in allow-list (Vexa-ai/vexa#1783): comma-separated exact addresses and @domain entries, e.g. \"@example.com,alice@example.org\". A sign-in through any terminal door (emailed link, Google, Microsoft) is admitted only for an existing user, an admin, or an address on the effective list = these entries + the admin-edited `signin.allow` platform setting. A non-empty list also closes the unclaimed-instance door: only an address on it may sign in or claim the admin role. A malformed entry refuses the boot, naming the entry (app/signin_allow.py boot_problems). Read on every POST /internal/signin-admission and /internal/bootstrap-admin (app/signin_allow.py), so a change applies on restart with no migration. Removing an entry does not remove an account that already exists: existing users stay admitted.",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
+   "key": "VEXA_SIGNIN_INVITES_ADMIT",
+   "class": "defaulted",
+   "default": "1",
+   "description": "Whether a workspace invite this deployment MAILED admits its one address to sign in (PRD 0.13.4 S2). On (default): the invitee's one click on the join page signs in a new account — the terminal asks POST /internal/signin-admission with via_invite only after agent-api spent the invite's sign-in half. 0/false/off: only existing users, admins and the allow-list sign in, and an invitee outside them is refused like any stranger.",
+   "targets": ["compose"]
+  },
+  {
+   "key": "VEXA_ADMIN_EMAILS",
+   "class": "defaulted",
+   "default": "(empty — the first admin claims the role on the terminal's claim screen with the one-time code admin-api logs at boot)",
+   "description": "The instance's administrators, comma-separated exact addresses (no @domain entries: an admin is one person). Each is admitted to sign in, is an admin on /internal/validate and /internal/users/{id}/is-admin, and makes the instance count as having an admin, so the claim screen never shows, no admin claim code is issued, and nobody can claim the role. A malformed entry (not a full address, or an @domain) refuses the boot. Read here and nowhere else (app/signin_allow.py): the terminal holds no list of its own and only asks.",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
+   "key": "VEXA_CALENDAR_FEED_ALLOW",
+   "class": "defaulted",
+   "default": "(empty — no internal feed may be saved)",
+   "targets": ["compose", "helm"],
+   "description": "operator allowance for calendar feeds served inside a private network (same value and grammar as meeting-api's, which fetches): exact host names and CIDRs. PUT /user/calendar and /user/calendars accept a feed URL whose literal address is inside a listed network or whose host is a listed name; every other internal URL is still a 422. An unsafe or malformed entry refuses the boot."
+  },
+  {
+   "key": "VEXA_ADMIN_ACCOUNT",
+   "class": "defaulted",
+   "default": "(empty — there is no admin account, and nobody writes the company layer _global; everybody reads it)",
+   "description": "The deployment's dedicated ADMIN ACCOUNT (founder ruling 2026-10-11), normally one exact address (at most 5; no @domain, no *). It is the only identity that writes the company layer _global — its files, flows, POLICIES.md and its reset — and it does nothing else: no desk, no shared workspaces, no meetings (its bot cap is always 0). An account is the admin account only when BOTH hold: its row was CREATED while this key named the address (users.data.account = admin, stamped by POST /admin/users in the creating transaction, never on an existing row), and this key still names it. So naming an address that already belongs to somebody's everyday account promotes nothing (the boot warns), and removing the address revokes the account at the next restart. A named address is admitted to sign in (why: admin-account). Answered on /internal/validate (admin_account, person_admin_account) and /internal/users/{id}/is-admin (admin_account); agent-api, the gateway and the terminal hold no list of their own (app/admin_account.py). A malformed entry refuses the boot. Not the same as VEXA_ADMIN_EMAILS: those are people, who administer Settings and read _global like everybody else.",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
+   "key": "CRM_ORG_ID",
+   "class": "defaulted",
+   "default": "(empty — the default org is not bound to a CRM organisation yet; orgs.crm_org_id stays NULL)",
+   "description": "The CRM organisation the install's default org is tied to (MIGRATION-0008, architecture A1): the same value crm-api runs as (its CRM_ORG_ID, the org_id key of every crm_* row). admin-api's schema convergence stamps it on the default org's orgs.crm_org_id while that is still unset, and never overwrites a set value. Nothing reads it yet; GET /internal/orgs/{id} and GET /internal/users/{id}/org answer it.",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "CRM_API_URL",
+   "class": "capability",
+   "capability": "personal_crm_erase",
+   "description": "crm-api's base URL. When set, DELETE /admin/users/{id} first asks crm-api to erase that person's own CRM (POST /internal/orgs/p-<id>/erase, internal secret) whenever the account has an org of one, and deletes nothing if the CRM cannot confirm the erasure (502), so a retry is safe. Unset: there is no CRM, and nothing to erase. An install running personal_crm must set it.",
+   "targets": ["compose", "helm"]
+  },
+  {
    "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
    "publishes_events": ["onboarding.completed"],
    "description": "flows' intake, told that a person finished onboarding. IDENTITY TELLS FLOWS; IT DOES NOT ASK IT — the publish is best-effort, bounded at 2s and swallowed, so a deployment with no flows domain onboards people exactly as one with a flows domain does, and so does one where flows is simply down. Unset is therefore not a degraded state, it is a profile. The fact itself is stamped on the person in the same transaction as the account, so the record survives a publish that never lands (app/events.py, app/main.py POST /admin/users). Spelled bare FLOWS_API_URL until F208 — the only one of the three flows publishers not carrying the VEXA_ prefix this repo uses for its own keys; app/events.py still reads that name for one release, with a boot warning, so an unmigrated deployment keeps publishing.",
-   "targets": ["compose"]
+   "targets": ["compose", "helm"]
   },
   {
    "key": "VEXA_FLOWS_API_KEY",
@@ -133,7 +243,7 @@
    "publishes_events": ["onboarding.completed"],
    "secret": true,
    "description": "operator key for the same edge, sent as X-Flows-Operator-Key (flows' POST /events is authenticated). The header was spelled X-Flows-Admin-Key until #1486 and flows still accepts that name for one release; admin-api sends only the new one. Declared as part of the edge rather than beside it: a publish target without its credential is a publish that always 401s, and the pair is what makes the edge real. Unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused, which is why both are visible on one declaration.",
-   "targets": ["compose"]
+   "targets": ["compose", "helm"]
   },
   {
    "key": "HOST",
@@ -148,6 +258,118 @@
    "default": "8001",
    "description": "uvicorn bind port",
    "targets": ["lite"]
-  }
+  },
+  {
+   "key": "VEXA_MCP_DELEGATION_SECRET",
+   "class": "capability",
+   "capability": "agent_delegation",
+   "secret": true,
+   "description": "the HS256 key agent-api signs a worker's per-dispatch delegation token with; /internal/validate verifies vxd_ bearers with it. Same value as agent-api's VEXA_MCP_DELEGATION_SECRET; generated at install on every deploy surface. The placeholders and the key delegation.v1's published vectors are made with are refused at boot.",
+   "targets": ["compose", "helm", "lite"],
+   "forbidden_values": ["vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default", "secret", "delegation.v1-published-test-vector-key"]
+  },
+  {
+   "key": "REDIS_URL",
+   "class": "defaulted",
+   "default": "redis://redis:6379/0",
+   "secret": true,
+   "description": "the service Redis, where agent-api revokes a worker's delegation token when its unit ends (vexa:delegation:revoked:<jti>, app/delegation_revocation.py), and where admin-api records each redeemed emailed sign-in link until it expires (vexa:signin-link:redeemed:<jti>, app/signin_links.py). /internal/validate reads it for every vxd_ bearer and refuses the token with 503 when it cannot, so an unreachable or wrong URL costs workers their toolbelt and never admits a revoked token; API keys never read it. /internal/signin-links/redeem answers 503 when it cannot write, and the terminal refuses that sign-in. On Lite the entrypoint's export reaches admin-api the way every supervisord program inherits it.",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "VEXA_CAPTURE_SIGNAL_DEFAULT",
+   "class": "defaulted",
+   "default": "true (the Helm chart sets false)",
+   "targets": ["helm"],
+   "description": "the deployment's default for whether a bot tapes its raw captured signal (audio, captions, speaker events) to the bucket under signal/ — the last tier of user diagnostics.capture_signal > platform setting diagnostics.capture_signal > this, answered on /internal/users/{id}/bot-context. Unset or empty = true, the compose and Lite behaviour; the Helm chart sets it from diagnostics.captureSignal, default false. Anything but a recognized boolean (true/1/yes/on, false/0/no/off) refuses the boot."
+  },
+  {
+   "key": "VEXA_PERSON_GRAVATAR",
+   "class": "defaulted",
+   "default": "true",
+   "targets": ["compose"],
+   "description": "whether a person's sign-in checks Gravatar for their own address (SHA-256 of it, d=404) when they have neither an uploaded photo nor a sign-in provider photo (app/person_photo_doors.py). A miss is remembered for 7 days. Set false and no Gravatar request is ever made; a person without a photo then shows a monogram."
+  },
+  {
+   "key": "S3_ENDPOINT",
+   "class": "defaulted",
+   "default": "(unset \u2014 falls back to MINIO_ENDPOINT/MINIO_SECURE)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/photo_storage.py): the S3 endpoint the photo bytes are written to, under person-photos/<user id>/ — the same store meeting-api writes recordings to (helm: storage.s3.endpoint). No endpoint or photos key = no photos; initials are drawn."
+  },
+  {
+   "key": "VEXA_PHOTOS_S3_ACCESS_KEY",
+   "class": "defaulted",
+   "default": "(unset \u2014 no photos)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/photo_storage.py): admin-api's OWN access key for the photo store, scoped to person-photos/ in the recordings bucket (list, read, write and delete there; nothing else). Compose: mint-dev-env.sh mints it, storage-init makes the account on the bundled storage and proves the limit. Helm: adminApi.photos.existingSecret. Never the storage root pair or the recordings key; unset = no photos (initials)."
+  },
+  {
+   "key": "VEXA_PHOTOS_S3_SECRET_KEY",
+   "class": "defaulted",
+   "default": "(unset \u2014 no photos)",
+   "secret": true,
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/photo_storage.py): the secret of admin-api's own photos key (VEXA_PHOTOS_S3_ACCESS_KEY). Helm: adminApi.photos.existingSecret."
+  },
+  {
+   "key": "MINIO_ENDPOINT",
+   "class": "defaulted",
+   "default": "(unset)",
+   "targets": ["compose", "lite"],
+   "description": "people's photos (app/photo_storage.py): the bundled store's host:port (or a full URL) when S3_ENDPOINT is unset; https with MINIO_SECURE=true"
+  },
+  {
+   "key": "MINIO_SECURE",
+   "class": "defaulted",
+   "default": "false",
+   "targets": ["compose", "lite"],
+   "description": "people's photos (app/photo_storage.py): https toward a bare host:port MINIO_ENDPOINT when true"
+  },
+  {
+   "key": "MINIO_BUCKET",
+   "class": "defaulted",
+   "default": "vexa",
+   "targets": ["compose", "helm", "lite"],
+   "description": "people's photos (app/photo_storage.py): the bucket (the recordings bucket; photos keep to their own person-photos/ prefix)"
+  },
+  {
+   "key": "AWS_CONFIG_FILE",
+   "class": "defaulted",
+   "default": "(unset \u2014 boto3 reads ~/.aws/config if present)",
+   "targets": ["helm"],
+   "description": "boto3's shared-config file (read by boto3, not by admin-api code): helm points it at storage.s3's signing region, addressing style and CA bundle for the photo store"
+  },
+  {
+   "key": "GOOGLE_CLIENT_ID",
+   "class": "defaulted",
+   "default": "(unset \u2014 no Google provider photo)",
+   "targets": ["compose"],
+   "description": "people's photos (app/idp_tokens.py): the Google client id the terminal signs people in with; a sign-in's ID token must name it as its audience before its `picture` is used. The same value as the terminal's."
+  },
+  {
+   "key": "VEXA_OIDC_ISSUER",
+   "class": "defaulted",
+   "default": "(unset \u2014 no OIDC provider photo)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/idp_tokens.py): the OIDC issuer the terminal signs people in with (https); identity reads its discovery document for the signing keys and requires the ID token's iss. The same value as the terminal's."
+  },
+  {
+   "key": "VEXA_OIDC_CLIENT_ID",
+   "class": "defaulted",
+   "default": "(unset)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/idp_tokens.py): the OIDC client id; the ID token's audience must be this value. The same value as the terminal's."
+  },
+  {
+   "key": "VEXA_OIDC_CA_FILE",
+   "class": "defaulted",
+   "default": "(unset \u2014 the public roots)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/idp_tokens.py): a PEM bundle with the CA chain of the OIDC provider's TLS (an internal PKI), for reading its discovery document and keys. The same file as the terminal's."
+  },
+  {"key": "VEXA_FEATURES", "class": "defaulted", "default": "(empty — the release default: every switchable feature off)", "targets": ["compose", "helm", "lite"], "description": "the install's switched-on features (core/agent/control_plane/features.py rules). admin-api answers `public_profiles` only, and only when it is NAMED (`all` does not switch an explicit feature on): off, /user/profile*, /user/directory/*, /user/company-verification* and /internal/profiles/* refuse 403 `feature_disabled` (app/public_profile.py)"},
+  {"key": "VEXA_DIRECTORY_READS_PER_MINUTE", "class": "defaulted", "default": "30", "targets": [], "description": "directory reads (search or one profile) one person may make a minute, per admin-api process; past it the door answers 429 (app/profile_doors.py)"},
+  {"key": "VEXA_DNS_RESOLVER", "class": "defaulted", "default": "(empty — the first nameserver in /etc/resolv.conf)", "targets": [], "description": "the DNS server the company-domain verification asks for the domain's TXT records (app/profile_doors.py)"}
  ]
 }

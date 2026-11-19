@@ -1,0 +1,72 @@
+# CodeQL (advanced setup) for Python, JavaScript/TypeScript and GitHub Actions, on pull requests into
+# main and the 0.13 line and on pushes to both. The repository's default setup analyses main only.
+#
+# UPLOAD: while default setup is enabled, GitHub rejects results from an advanced configuration, so
+# this workflow writes SARIF, attaches it as an artifact and summarises it in the job summary. Once
+# default setup is switched to advanced (Settings → Code security → CodeQL analysis), set
+# CODEQL_UPLOAD to "always" and the results land in the Security tab for every branch it runs on.
+name: CodeQL
+
+on:
+  pull_request:                       # every base: main and the 0.13 line
+  push:
+    branches: [main, "codex/v0.13*"]
+  schedule:
+    - cron: "30 5 * * 1"              # Monday 05:30 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CODEQL_UPLOAD: never
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          category: /language:${{ matrix.language }}
+          upload: ${{ env.CODEQL_UPLOAD }}
+          output: sarif-results
+      - name: Summarise results
+        if: always()
+        env:
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          shopt -s nullglob
+          files=(sarif-results/*.sarif)
+          if [ ${#files[@]} -eq 0 ]; then echo "no SARIF written" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          {
+            echo "### CodeQL ($LANGUAGE)"
+            jq -r '[.runs[].results[]?.level // "warning"] | group_by(.) | map("- \(.[0]): \(length)") | .[]' "${files[@]}"
+            echo
+            jq -r '.runs[] as $r | $r.results[]? | "- \(.level // "warning") \(.ruleId) \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' "${files[@]}" | sed -n "1,200p"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: codeql-${{ matrix.language }}
+          path: sarif-results
+          if-no-files-found: ignore
