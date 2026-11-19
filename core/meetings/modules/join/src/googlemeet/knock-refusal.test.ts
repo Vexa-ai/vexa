@@ -193,7 +193,29 @@ async function main() {
     check('genuine waiting room sent awaiting_admission once', states.filter((s) => s === 'awaiting_admission').length, 1);
   }
 
-  // 4. Negative control: DisconnectedError after admission must not be
+  // 4. Ordering guard: once waiting-room TEXT has been seen, a later page fault
+  //    is a dropped lobby connection, not proof the original knock was refused.
+  {
+    states.length = 0;
+    let waits = 0;
+    const page = mockPage([WAITING_TEXT, RETURN_BUTTON], {
+      onWait: () => {
+        waits += 1;
+        if (waits === 1) {
+          page.state.visible.delete(WAITING_TEXT);
+          page.state.visible.add(SELF_NAME);
+        }
+      },
+    });
+    markGoogleKnock(page);
+    emitDisconnectedError(page);
+
+    const admitted = await waitForGoogleMeetingAdmission(page, 30_000, {});
+    check('post-waiting-text DisconnectedError still admits', admitted, true);
+    check('post-waiting-text DisconnectedError is not a refusal', states.includes('awaiting_admission'), true);
+  }
+
+  // 5. Negative control: DisconnectedError after admission must not be
   //    reclassified as a refused knock.
   {
     states.length = 0;
