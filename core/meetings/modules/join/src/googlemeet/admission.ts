@@ -6,9 +6,17 @@ import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "..
 import {
   googleInitialAdmissionIndicators,
   googleWaitingRoomIndicators,
+  googleWaitingRoomTextIndicators,
+  googleJoinRefusalTextIndicators,
   googleRejectionIndicators,
   googleConsentPromptIndicators
 } from "./selectors";
+import {
+  googleKnockSawDisconnectedError,
+  googleKnockSawWaitingRoomText,
+  logGoogleKnockRefusal,
+  noteGoogleWaitingRoomTextSeen,
+} from "./knock";
 
 // AdmissionError + AdmissionOutcome moved to ../shared/admission so every platform (jitsi/zoom/
 // teams) throws the SAME typed error the JoinDriver maps, without one platform depending on another.
@@ -135,9 +143,10 @@ export async function dumpAdmissionState(page: Page, tag: string): Promise<void>
 
 export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boolean> {
   await dumpAdmissionState(page, "check");
-  // 1. NEGATIVE GUARD: If any waiting room indicator is visible,
-  // the bot is NOT admitted — lobby toolbar buttons are false positives.
-  const inWaitingRoom = await checkForWaitingRoomIndicators(page);
+  // 1. NEGATIVE GUARD: waiting-room TEXT is the admission-suppressing evidence.
+  // "Return to home screen" also renders on the post-refusal page, so the broad
+  // legacy indicator set must not suppress admission or waiting state by itself.
+  const inWaitingRoom = await checkForGoogleWaitingRoomTextIndicators(page);
   if (inWaitingRoom) {
     log(`⚠️ Waiting room indicator visible — suppressing admission (lobby buttons are false positives)`);
     return false;
@@ -235,6 +244,41 @@ export async function checkForWaitingRoomIndicators(page: Page): Promise<boolean
   return false;
 }
 
+// L-1699: admission/waiting state keys on waiting-room TEXT only. The Return
+// button remains in the legacy aggregate above for callers that need it, but a
+// refused knock renders that button without any waiting-room copy.
+export async function checkForGoogleWaitingRoomTextIndicators(page: Page): Promise<boolean> {
+  for (const waitingIndicator of googleWaitingRoomTextIndicators) {
+    try {
+      const element = await page.locator(waitingIndicator).first();
+      if (await element.isVisible()) {
+        noteGoogleWaitingRoomTextSeen(page);
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+// L-1699: can't-join/denied page copy is refusal evidence. Retry buttons and
+// dialog wrappers stay in checkForGoogleRejection; this detector is text-only
+// so post-refusal chrome cannot masquerade as a waiting room.
+export async function checkForGoogleJoinRefusalText(page: Page): Promise<string | null> {
+  for (const selector of googleJoinRefusalTextIndicators) {
+    try {
+      const element = await page.locator(selector).first();
+      if (await element.isVisible()) {
+        return selector;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 // Detect Google's Gemini "take notes for me" in-call consent prompt — a consent
 // gate where the bot isn't truly participating until a human accepts/declines
 // (Vexa-ai/vexa#429). Mirrors checkForWaitingRoomIndicators: a pre-admission
@@ -260,6 +304,21 @@ async function throwIfGoogleAdmissionRejected(page: Page, context: string): Prom
     log(`🚨 Bot was rejected from the Google Meet meeting by admin (${context})`);
     throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
   }
+}
+
+// L-1699: a refused knock is terminal BEFORE waiting-room evidence. Once a
+// waiting-room text indicator has been seen, a later DisconnectedError is a
+// dropped waiting-room connection, not proof Google refused the original ask.
+async function throwIfGoogleKnockRefused(page: Page, context: string): Promise<void> {
+  if (googleKnockSawWaitingRoomText(page)) return;
+
+  const disconnected = googleKnockSawDisconnectedError(page);
+  const refusalSelector = disconnected ? null : await checkForGoogleJoinRefusalText(page);
+  if (!disconnected && !refusalSelector) return;
+
+  const reason = disconnected ? "disconnected_error" : "denied_text";
+  await logGoogleKnockRefusal(page, reason);
+  throw new AdmissionError("denial", `Google Meet refused the join knock before admission (${context})`);
 }
 
 // New function to wait for Google Meet meeting admission (canonical Teams-style)
@@ -315,7 +374,7 @@ export async function waitForGoogleMeetingAdmission(
     // Check for waiting room indicators using visibility checks
     let stillInWaitingRoom = false;
     
-    const waitingRoomVisible = await checkForWaitingRoomIndicators(page);
+    const waitingRoomVisible = await checkForGoogleWaitingRoomTextIndicators(page);
     
     if (waitingRoomVisible) {
       log(`Found Google Meet waiting room indicator - Bot is still in waiting room`);
@@ -349,7 +408,7 @@ export async function waitForGoogleMeetingAdmission(
         await throwIfGoogleAdmissionRejected(page, "waiting-room polling");
 
         // Check if we're still in waiting room using visibility
-        const stillWaiting = await checkForWaitingRoomIndicators(page);
+        const stillWaiting = await checkForGoogleWaitingRoomTextIndicators(page);
 
         if (!stillWaiting) {
           log("Google Meet waiting room indicator disappeared - checking if bot was admitted or rejected...");
@@ -381,7 +440,7 @@ export async function waitForGoogleMeetingAdmission(
       }
       
       // After waiting, check if we're still in waiting room using visibility
-      const finalWaitingCheck = await checkForWaitingRoomIndicators(page);
+      const finalWaitingCheck = await checkForGoogleWaitingRoomTextIndicators(page);
       
       if (finalWaitingCheck) {
         throw new AdmissionError("lobby_timeout", "Bot is still in the Google Meet waiting room after timeout - not admitted to the meeting");
@@ -402,23 +461,28 @@ export async function waitForGoogleMeetingAdmission(
         // The real block detector (VISIBLE challenge / blank block page) needs a run that
         // actually reproduces a block (datacenter egress arm) to build without false positives.
 
-        // Rejection check first
-        const isRejected = await checkForGoogleRejection(page);
-        if (isRejected) {
-          log("🚨 Bot was rejected from the Google Meet meeting by admin (polling mode)");
-          throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
-        }
-
-        // Admission indicators — if meeting controls are visible, bot is admitted
-        // regardless of any residual lobby-like elements in the DOM
+        // Admission indicators win first: a DisconnectedError or can't-join copy
+        // seen after the bot is already in the call is a post-admission failure,
+        // not a refused knock (L-1699 pin).
         const admissionFound = await checkForGoogleAdmissionIndicators(page);
         if (admissionFound) {
           log("✅ Bot admitted during polling window (meeting controls visible)");
           return true;
         }
 
-        // If lobby appears later, switch to waiting-room handling by breaking
-        const lobbyVisible = await checkForWaitingRoomIndicators(page);
+        // Refused-knock terminal state before generic rejection chrome: emits the
+        // single diagnostic line and maps to awaiting_admission_rejected.
+        await throwIfGoogleKnockRefused(page, "polling mode");
+
+        // Rejection check for denial affordances that are not knock-refusal text.
+        const isRejected = await checkForGoogleRejection(page);
+        if (isRejected) {
+          log("🚨 Bot was rejected from the Google Meet meeting by admin (polling mode)");
+          throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
+        }
+
+        // If waiting-room TEXT appears later, switch to waiting-room handling by breaking
+        const lobbyVisible = await checkForGoogleWaitingRoomTextIndicators(page);
         if (lobbyVisible) {
           log("ℹ️ Waiting room appeared during polling. Switching to waiting-room monitoring...");
 
@@ -454,7 +518,7 @@ export async function waitForGoogleMeetingAdmission(
         while (Date.now() - startTime2 < timeout) {
           await throwIfGoogleAdmissionRejected(page, "late waiting-room polling");
 
-          const stillWaiting = await checkForWaitingRoomIndicators(page);
+          const stillWaiting = await checkForGoogleWaitingRoomTextIndicators(page);
           if (!stillWaiting) {
             const admissionFound2 = await checkForGoogleAdmissionIndicators(page);
             if (admissionFound2) return true;
@@ -467,13 +531,17 @@ export async function waitForGoogleMeetingAdmission(
     // Final check after waiting/polling
     log("Performing final admission check after waiting/polling window...");
     const finalAdmissionFound = await checkForGoogleAdmissionIndicators(page);
-    const finalLobbyVisible = await checkForWaitingRoomIndicators(page);
+    const finalLobbyVisible = await checkForGoogleWaitingRoomTextIndicators(page);
     if (finalAdmissionFound && !finalLobbyVisible) {
       await checkpoint(page, "2-admitted");
       log("📸 Screenshot taken: Bot confirmed admitted to meeting");
       log("Successfully admitted to the Google Meet meeting");
       return true;
     }
+
+    // A refusal that lands on the final boundary still gets the diagnostic line
+    // before the generic rejection/timeout classifiers run.
+    await throwIfGoogleKnockRefused(page, "final admission check");
 
     // Before concluding failure, check for rejection one last time
     log("No admission indicators after timeout - checking rejection one last time...");
@@ -483,7 +551,7 @@ export async function waitForGoogleMeetingAdmission(
     }
 
     // Distinguish lobby-timeout from join-failure by checking waiting-room state
-    const lobbyStillVisible = await checkForWaitingRoomIndicators(page);
+    const lobbyStillVisible = await checkForGoogleWaitingRoomTextIndicators(page);
     await checkpoint(page, "3-no-indicators");
     log("📸 Screenshot taken: No meeting indicators found after timeout");
     if (lobbyStillVisible) {

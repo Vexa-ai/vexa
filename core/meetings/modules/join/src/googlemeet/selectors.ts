@@ -28,7 +28,7 @@ export const googleInitialAdmissionIndicators: string[] = [
   'button[aria-label*="Present now"]',
 ];
 
-export const googleWaitingRoomIndicators: string[] = [
+export const googleWaitingRoomTextIndicators: string[] = [
   // Modern waiting room text patterns (2024 Google Meet UI)
   'text="Asking to be let in..."',
   'text=Asking to be let in',
@@ -44,6 +44,10 @@ export const googleWaitingRoomIndicators: string[] = [
   '[aria-label*="waiting room"]',
   '[aria-label*="Asking to be let in"]',
   '[aria-label*="waiting for admission"]',
+];
+
+export const googleWaitingRoomIndicators: string[] = [
+  ...googleWaitingRoomTextIndicators,
 
   // FIX (Vexa-ai/vexa#471, @priitvimberg): the "Asking to be let in" waiting
   // screen shows a "Return to home screen" button. It was listed in
@@ -51,6 +55,10 @@ export const googleWaitingRoomIndicators: string[] = [
   // (awaiting_admission_rejected) instead of waiting for the host to admit it.
   // Reclassified as a WAITING indicator; genuine denials are still caught by
   // the "denied your request" text patterns in googleRejectionIndicators.
+  // L-1699: the button alone is not waiting-room evidence — the post-refusal
+  // page carries it too — so admission state keys on
+  // googleWaitingRoomTextIndicators; this legacy aggregate stays exported for
+  // callers that need the broadest indicator set.
   'button:has-text("Return to home screen")',
 ];
 
@@ -128,6 +136,13 @@ export const googleRejectionIndicators: string[] = [
   'button[aria-label*="retry"]',
   'button[aria-label*="try again"]'
 ];
+
+// L-1699: knock-refusal evidence is the page's own can't-join/denied text —
+// the text half of googleRejectionIndicators, without retry buttons, dialog
+// wrappers, or other controls that can survive on a post-refusal page.
+export const googleJoinRefusalTextIndicators: string[] = googleRejectionIndicators.filter(
+  (selector) => selector.startsWith('text=')
+);
 
 export const googleAdmissionIndicators: string[] = [
   // Meeting toolbar and controls (most reliable admission indicators)

@@ -10,6 +10,7 @@ import {
   googleSignedOutLobbyProbeSelectors
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
+import { markGoogleKnock } from "./knock";
 import { AdmissionError } from "../shared/admission";
 import { checkpoint } from "../shared/checkpoint";
 
@@ -214,6 +215,7 @@ export async function joinGoogleMeeting(
       );
     }
 
+    markGoogleKnock(page);
     await clickHandle(ctaHandle, "authenticated_join");
     log(`Bot clicked the authenticated join CTA (via ${ctaSelector}).`);
 
@@ -256,6 +258,7 @@ export async function joinGoogleMeeting(
       60000,
       "join button"
     );
+    markGoogleKnock(page);
     await clickHandle(joinHandle!, "ask_to_join");
     log(`${botName} joined the Google Meet Meeting.`);
 
