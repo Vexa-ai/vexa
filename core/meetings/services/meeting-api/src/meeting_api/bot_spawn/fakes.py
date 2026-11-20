@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..lifecycle.machine import dominant_completion_reason
+from .planned_claim import claimed_plan_data
 from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
@@ -135,7 +136,8 @@ class InMemoryMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        exclude_meeting_id=None, claimed_at=None,
+        preserve_planned_schedule_until=None,
     ) -> dict:
         """ATOMIC dedup + cap + insert (ROB1/ROB2). The check and the insert run with NO ``await``
         between them, so even ``SlowRepo`` (which adds ``await asyncio.sleep(0)`` inside the SEPARATE
@@ -190,7 +192,15 @@ class InMemoryMeetingRepo:
             # is a new one. (Post-fix, a stop terminalizes the planned row, so it is not claimable
             # at all — this only ever meets rows written by an older build.)
             planned.pop("stop_requested", None)
-            row["data"] = {**planned, **dict(data or {})}
+            if claimed_at is not None and preserve_planned_schedule_until is not None:
+                row["data"] = claimed_plan_data(
+                    planned,
+                    dict(data or {}),
+                    claimed_at=claimed_at,
+                    preserve_schedule_until=preserve_planned_schedule_until,
+                )
+            else:
+                row["data"] = {**planned, **dict(data or {})}
             return dict(row)
         # 3. insert — NO await before this point since the dedup read, so the check+insert is atomic.
         mid = self._next_id

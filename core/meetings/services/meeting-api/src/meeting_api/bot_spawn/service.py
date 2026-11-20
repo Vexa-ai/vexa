@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -889,12 +890,25 @@ async def request_bot(
             if webhook_events:
                 meeting_data["webhook_events"] = webhook_events
         try:
+            claimed_at = datetime.now(timezone.utc)
+            leave_policy = automatic_leave or {"waitingRoomTimeout": lobby_budget_ms()}
+            waiting_room_ms = leave_policy.get("waitingRoomTimeout")
+            if (
+                isinstance(waiting_room_ms, bool)
+                or not isinstance(waiting_room_ms, int)
+                or waiting_room_ms <= 0
+            ):
+                waiting_room_ms = lobby_budget_ms()
             row = await repo.create_meeting_guarded(
                 user_id=user_id,
                 platform=platform,
                 native_meeting_id=native_meeting_id,
                 data=meeting_data,
                 max_concurrent=max_concurrent,
+                claimed_at=claimed_at.isoformat(),
+                preserve_planned_schedule_until=(
+                    claimed_at + timedelta(milliseconds=waiting_room_ms)
+                ).isoformat(),
             )
         except MaxBotsExceeded:
             log_event(
