@@ -11,6 +11,8 @@ Drives the SHIPPED ``request_bot`` over the in-memory fakes, OFFLINE.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from meeting_api.bot_spawn import request_bot
@@ -60,6 +62,33 @@ async def test_claim_preserves_planned_keys_and_merges_spawn_keys():
     assert data["calendar_uid"] == "uid-1"
     # spawn keys merged over
     assert data["constructed_meeting_url"] == f"https://meet.google.com/{NID}"
+
+
+async def test_manual_spawn_does_not_mark_far_future_calendar_occurrence_served():
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    mid = _seed_planned(repo)
+    repo._meetings[mid]["data"]["scheduled_at"] = "2099-07-10T15:00:00+00:00"
+
+    before = datetime.now(timezone.utc)
+    await request_bot(repo, runtime, **_KW)
+    claimed_at = datetime.fromisoformat(repo._meetings[mid]["data"]["scheduled_at"])
+    after = datetime.now(timezone.utc)
+
+    assert before <= claimed_at <= after
+    assert repo._meetings[mid]["data"]["calendar_uid"] == "uid-1"
+    assert repo._meetings[mid]["data"]["workspace_id"] == "ws-1"
+
+
+async def test_claim_preserves_calendar_occurrence_within_admission_wait_budget():
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    mid = _seed_planned(repo)
+    scheduled_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=1)
+    scheduled_iso = scheduled_at.isoformat()
+    repo._meetings[mid]["data"]["scheduled_at"] = scheduled_iso
+
+    await request_bot(repo, runtime, **_KW)
+
+    assert repo._meetings[mid]["data"]["scheduled_at"] == scheduled_iso
 
 
 async def test_claim_works_from_idle_too():

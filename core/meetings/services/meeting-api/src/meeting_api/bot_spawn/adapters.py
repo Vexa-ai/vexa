@@ -16,6 +16,7 @@ from typing import Optional
 
 from ..lifecycle.machine import dominant_completion_reason
 from ..sessions import new_session
+from .planned_claim import claimed_plan_data
 from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
@@ -533,7 +534,8 @@ class SqlAlchemyMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        exclude_meeting_id=None, claimed_at=None,
+        preserve_planned_schedule_until=None,
     ) -> dict:
         """ATOMIC dedup + cap + insert in ONE transaction (ROB1/ROB2).
 
@@ -624,7 +626,15 @@ class SqlAlchemyMeetingRepo:
                 claimable.status = "requested"
                 claimable.end_time = None
                 claimable.bot_container_id = None
-                claimable.data = {**planned, **dict(data or {})}
+                if claimed_at is not None and preserve_planned_schedule_until is not None:
+                    claimable.data = claimed_plan_data(
+                        planned,
+                        dict(data or {}),
+                        claimed_at=claimed_at,
+                        preserve_schedule_until=preserve_planned_schedule_until,
+                    )
+                else:
+                    claimable.data = {**planned, **dict(data or {})}
                 flag_modified(claimable, "data")
                 await db.commit()
                 await db.refresh(claimable)
