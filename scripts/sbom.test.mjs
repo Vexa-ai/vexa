@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,7 @@ guardTree();
 const ROOT = sandboxTree();
 const LITE = join(ROOT, "deploy", "lite", "Dockerfile.lite");
 
-function emitSbom(liteDockerfile) {
+function emitSbom({ liteDockerfile, pnpm } = {}) {
   const scratch = mkdtempSync(join(tmpdir(), "vexa-sbom-test-"));
   const output = join(scratch, "sbom.spdx.json");
   const env = { ...process.env, SBOM_CREATED: "2026-07-24T00:00:00.000Z" };
@@ -24,16 +24,25 @@ function emitSbom(liteDockerfile) {
     env.SBOM_LITE_DOCKERFILE = fixture;
   }
   try {
-    execFileSync(
+    if (pnpm) {
+      writeFileSync(join(scratch, "pnpm"), "#!/bin/sh\nprintf '%s\\n' \"$SBOM_TEST_PNPM_OUTPUT\"\nexit \"$SBOM_TEST_PNPM_STATUS\"\n", { mode: 0o755 });
+      env.PATH = `${scratch}:${env.PATH}`;
+      env.SBOM_TEST_PNPM_OUTPUT = JSON.stringify(pnpm.output);
+      env.SBOM_TEST_PNPM_STATUS = String(pnpm.status);
+    }
+    const result = spawnSync(
       "node",
       ["scripts/sbom.mjs", "--version", "test", "--output", output],
       {
         cwd: ROOT,
         env,
         stdio: "pipe",
+        encoding: "utf8",
       },
     );
-    return JSON.parse(readFileSync(output, "utf8"));
+    if (result.error) throw result.error;
+    assert.equal(result.status, 0, result.stderr);
+    return { doc: JSON.parse(readFileSync(output, "utf8")), stderr: result.stderr };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -44,7 +53,7 @@ function packageNamed(doc, name) {
 }
 
 test("Lite final-stage apt packages are represented in the emitted SPDX", () => {
-  const doc = emitSbom();
+  const { doc } = emitSbom();
   for (const name of ["ffmpeg", "xvfb", "pulseaudio", "postgresql-client"]) {
     const pkg = packageNamed(doc, name);
     assert(pkg, `${name} is installed in the Lite final image but absent from the SPDX`);
@@ -60,20 +69,26 @@ test("a newly declared Lite final-stage apt package is automatically inventoried
   const original = readFileSync(LITE, "utf8");
   const edited = original.replace(marker, `${marker} review-apt-probe`);
   assert.notEqual(edited, original, "fixture setup did not alter Dockerfile.lite");
-  const doc = emitSbom(edited);
+  const { doc } = emitSbom({ liteDockerfile: edited });
   assert(packageNamed(doc, "review-apt-probe"));
 });
 
 // S73: the terminal's images install from clients/terminal/package-lock.json with `npm ci`, which the
 // pnpm index does not describe. A package only that lock carries must still reach the SBOM.
-test("a package only the terminal's npm lock carries is inventoried", () => {
+test("a failed pnpm licence query warns and preserves the other SBOM sources", () => {
   const lockPath = join(ROOT, "clients", "terminal", "package-lock.json");
   const original = readFileSync(lockPath, "utf8");
   const lock = JSON.parse(original);
   lock.packages["node_modules/vexa-sbom-npm-lock-probe"] = { version: "9.9.9", license: "MIT" };
   writeFileSync(lockPath, JSON.stringify(lock, null, 2));
   try {
-    const pkg = packageNamed(emitSbom(), "vexa-sbom-npm-lock-probe");
+    const { doc, stderr } = emitSbom({ pnpm: {
+      status: 1,
+      output: { error: { code: "ENOENT", message: "synthetic missing store entry" } },
+    } });
+    assert.match(stderr, /WARN:.*pnpm licenses list --json.*failed/);
+    assert(packageNamed(doc, "ffmpeg"));
+    const pkg = packageNamed(doc, "vexa-sbom-npm-lock-probe");
     assert(pkg, "a package in the terminal's npm lock is absent from the SPDX");
     assert.equal(pkg.versionInfo, "9.9.9");
     assert.equal(pkg.licenseDeclared, "MIT");
@@ -82,8 +97,28 @@ test("a package only the terminal's npm lock carries is inventoried", () => {
   }
 });
 
+test("a successful pnpm licence query retains every declared package version", () => {
+  const { doc, stderr } = emitSbom({ pnpm: {
+    status: 0,
+    output: { MIT: [{ name: "synthetic-dependency", versions: ["1.0.0", "2.0.0"] }] },
+  } });
+  assert.doesNotMatch(stderr, /WARN:.*pnpm licenses list --json/);
+  const packages = doc.packages.filter((pkg) => pkg.name === "synthetic-dependency");
+  assert.deepEqual(packages.map((pkg) => pkg.versionInfo), ["1.0.0", "2.0.0"]);
+  assert(packages.every((pkg) => pkg.licenseDeclared === "MIT"));
+});
+
+test("a failed pnpm licence query retains usable rows from partial output", () => {
+  const { doc, stderr } = emitSbom({ pnpm: {
+    status: 1,
+    output: { MIT: [null, { name: "synthetic-partial", version: "1.2.3" }], error: { code: "ENOENT" } },
+  } });
+  assert.match(stderr, /WARN:.*pnpm licenses list --json.*failed/);
+  assert.equal(packageNamed(doc, "synthetic-partial")?.versionInfo, "1.2.3");
+});
+
 test("the vendored, modified moby seccomp profile is in the SPDX with its licence", () => {
-  const doc = emitSbom();
+  const { doc } = emitSbom();
   const pkg = doc.packages.find((entry) => entry.name === "moby/profiles seccomp/default.json");
   assert(pkg, "the vendored seccomp profile is absent from the SPDX");
   assert.equal(pkg.licenseDeclared, "Apache-2.0");

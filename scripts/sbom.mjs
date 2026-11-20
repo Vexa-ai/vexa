@@ -89,14 +89,26 @@ function npmPackages() {
   let raw = "";
   try {
     raw = execSync("pnpm licenses list --json", { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString();
-  } catch (e) { raw = (e.stdout || "").toString(); }
-  if (!raw.trim()) { warn("`pnpm licenses list --json` produced no output — run `pnpm install` first; emitting SBOM without the npm tree"); return []; }
+  } catch (e) {
+    warn("`pnpm licenses list --json` failed — emitting the SBOM with any available pnpm inventory");
+    raw = (e.stdout || "").toString();
+  }
+  if (!raw.trim()) { warn("`pnpm licenses list --json` produced no output — run `pnpm install` first; skipping the pnpm tree"); return []; }
   let data;
-  try { data = JSON.parse(raw); } catch { warn("`pnpm licenses list --json` returned non-JSON — skipping npm tree"); return []; }
+  try { data = JSON.parse(raw); } catch { warn("`pnpm licenses list --json` returned non-JSON — skipping the pnpm tree"); return []; }
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    warn("`pnpm licenses list --json` returned no licence index — skipping the pnpm tree");
+    return [];
+  }
   const out = [];
   for (const [lic, pkgs] of Object.entries(data)) {
+    if (!Array.isArray(pkgs)) continue;
     for (const p of pkgs) {
-      const versions = Array.isArray(p.versions) && p.versions.length ? p.versions : (p.version ? [p.version] : ["NOASSERTION"]);
+      if (typeof p?.name !== "string" || !p.name.trim()) continue;
+      const versions = Array.isArray(p.versions)
+        ? p.versions.filter((version) => typeof version === "string" && version.trim())
+        : [];
+      if (!versions.length) versions.push(typeof p.version === "string" && p.version.trim() ? p.version : "NOASSERTION");
       for (const v of versions) {
         out.push({
           eco: "npm", name: p.name, version: v,
