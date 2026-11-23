@@ -5,24 +5,28 @@ to `/hooks/<hook_id>`, the broker checks the sender's signature with the secret 
 keeps the verified event, and the person's sensor reads it later (role `sensors`, the same seam as
 calendar changes). The broker holds no credential of the reader's and makes no outbound call here.
 
-* `POST /api/hooks` (human, agent, sensors) creates one: an unguessable id (`hk_` + 32 hex) and its
-  signing secret, stored at `hooks/<id>` sealed with the person as owner — never in metadata.sqlite.
-  A `vexa` hook without a secret gets a generated one, answered once and never again. At most
-  `MAX_HOOKS` live hooks per person.
-* `POST /hooks/{hook_id}` is PUBLIC: no assertion (`app.HOOK_PATH`). The signature is the only
-  credential; a bad or stale one is a fixed 401, never an echo. A verified event is committed before
-  the 200, deduplicated on (hook, event id), and pruned to `KEEP_DAYS` days and `KEEP_EVENTS` rows.
-* `POST /api/hooks/{hook_id}/revoke` (the hook's person) ends it: the secret and every kept event go.
-* `POST /api/internal/sensor/hook-events` (sensors, signed for the owner) pages the verified events.
+* `POST /api/hooks` (human, and agent in a watched, private turn) creates one: an unguessable id
+  (`hk_` + 32 hex) and its signing secret, stored at `hooks/<id>` sealed with the person as owner —
+  never in metadata.sqlite. A `vexa` hook without a secret gets a generated one, answered once and
+  never again. At most `MAX_HOOKS` live hooks per person. The sensors role cannot create one.
+* `POST /hooks/{hook_id}` is PUBLIC: no assertion (`app.HOOK_PATH`, matched on the raw scope path
+  here too). The signature is the only credential; a bad or stale one is a fixed 401, never an echo.
+  A verified event is committed before the 200, deduplicated on (hook, event id), and pruned to
+  `KEEP_DAYS` days, `KEEP_EVENTS` rows per hook and `ACTOR_BYTES` per person (oldest first).
+* `POST /api/hooks/{hook_id}/revoke` (the hook's person; human or agent) ends it: the secret and every
+  kept event go.
+* `POST /api/internal/sensor/hook-events` (sensors, signed for the owner) pages the verified events of
+  the owner's own hooks, bounded by count and by bytes.
 
-Nothing logged or audited carries a secret, a signature or a body: refusals are typed log lines, and
-accepted events are audited as an outcome only.
+Nothing logged or audited carries a secret, a signature or a body: refusals are typed log lines,
+accepted events are audited as an outcome only, and a redelivery writes nothing.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 import uuid
@@ -32,7 +36,7 @@ from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from .broker import Broker
-from .models import HookCreateBody, HookEventsBody
+from .models import HOOK_ID, HookCreateBody, HookEventsBody
 from .obs import log_event
 
 #: The largest body a sender may post (the edge allows the same).
@@ -41,10 +45,20 @@ MAX_BODY = 256 * 1024
 TOLERANCE = 300
 KEEP_DAYS = 14
 KEEP_EVENTS = 10000
+#: Stored event bytes across all of one person's hooks; the oldest go first above it.
+ACTOR_BYTES = 64 * 1024 * 1024
 MAX_HOOKS = 20
 PAGE = 100
+#: A page stops growing once its events, serialized, reach this (always at least one event), so an
+#: answer stays under 1 MiB: at most this plus one event of at most `MAX_BODY`.
+PAGE_BYTES = 512 * 1024
+#: Deepest JSON nesting accepted in an event body.
+MAX_DEPTH = 64
 REFUSED = "Signature refused"
 NO_HOOK = "No such hook"
+_HOOK_ID = re.compile(HOOK_ID)
+_PUBLIC_PATH = re.compile(r"^/hooks/hk_[0-9a-f]{32}$")
+_TS = re.compile(r"[0-9]{1,12}")
 
 
 def record_path(hook_id: str) -> str:
@@ -77,7 +91,7 @@ def verify_stripe(secret: str, raw: bytes, header: str) -> None:
             t = value
         elif key == "v1":
             sigs.append(value)
-    if not t.isdigit() or not sigs:
+    if not _TS.fullmatch(t) or not sigs:
         _refuse("stripe", "malformed")
     expected = hmac.new(secret.encode(), f"{t}.".encode() + raw, hashlib.sha256).hexdigest()
     # every candidate compared, so the time taken does not say which one matched
@@ -91,12 +105,28 @@ def verify_vexa(secret: str, raw: bytes, signature: str, ts: str) -> None:
     "<X-Webhook-Timestamp>." + body. The legacy `Authorization: Bearer <secret>` is never read."""
     if not signature or not ts:
         _refuse("vexa", "missing")
-    if not signature.startswith("sha256=") or not ts.isdigit():
+    if not signature.startswith("sha256=") or not _TS.fullmatch(ts):
         _refuse("vexa", "malformed")
     expected = "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + raw, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected.encode(), signature.encode()):
         _refuse("vexa", "mismatch")
     _fresh(ts, "vexa")
+
+
+def depth(value) -> int:
+    """How deeply ``value`` nests (a scalar is 0, ``{}`` is 1), without recursion."""
+    deepest, stack = 0, [(value, 1)]
+    while stack:
+        node, level = stack.pop()
+        if isinstance(node, dict):
+            children = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        deepest = max(deepest, level)
+        stack.extend((c, level + 1) for c in children if isinstance(c, (dict, list)))
+    return deepest
 
 
 EVENT_ID_KEY = {"stripe": "id", "vexa": "event_id"}
@@ -107,7 +137,7 @@ def build(b: Broker) -> APIRouter:
 
     @router.post("/api/hooks")
     def create(request: Request, body: HookCreateBody):
-        who = b.identity(request, {"human", "agent", "sensors"})
+        who = b.identity(request, {"human", "agent"})
         actor = str(who["actor"])
         hook_id = "hk_" + secrets.token_hex(16)
         generated = body.secret is None
@@ -129,7 +159,7 @@ def build(b: Broker) -> APIRouter:
     @router.post("/api/hooks/{hook_id}/revoke")
     def revoke(request: Request, hook_id: str):
         """Revoking only narrows, so a worker with nobody in the loop may do it (as sensor grants)."""
-        who = b.identity(request, {"human", "agent", "sensors"}, unwatched_ok=True)
+        who = b.identity(request, {"human", "agent"}, unwatched_ok=True)
         with b.lock:
             row = b.sql("SELECT * FROM hooks WHERE id=? AND actor=?", (hook_id, str(who["actor"])), one=True)
             if not row:
@@ -142,12 +172,43 @@ def build(b: Broker) -> APIRouter:
             b.audit(who, hook_id, "hooks.revoke", "removed")
         return {"hook_id": hook_id, "path": hook_path(hook_id), "scheme": row["scheme"]}
 
+    def keep(row: dict, event_id: str, text: str, size: int) -> bool:
+        """Insert one verified event and prune, in one transaction under the lock a revoke takes.
+        False when the hook was revoked meanwhile (nothing written)."""
+        hook_id, now = row["id"], time.time()
+        with b.lock, closing(b.db()) as c, c:
+            if not c.execute("SELECT 1 FROM hooks WHERE id=? AND revoked=0", (hook_id,)).fetchone():
+                return False
+            stored = c.execute(
+                "INSERT OR IGNORE INTO hook_events(hook, event_id, received, body, size)"
+                " SELECT ?,?,?,?,? WHERE EXISTS (SELECT 1 FROM hooks WHERE id=? AND revoked=0)",
+                (hook_id, event_id, now, text, size, hook_id)).rowcount
+            if not stored:
+                return True          # a redelivery: nothing new, nothing audited
+            c.execute("DELETE FROM hook_events WHERE received < ?", (now - KEEP_DAYS * 86400,))
+            c.execute("DELETE FROM audit WHERE action='hooks.receive' AND at < ?", (now - KEEP_DAYS * 86400,))
+            c.execute("DELETE FROM hook_events WHERE hook=? AND seq <= (SELECT seq FROM hook_events WHERE hook=?"
+                      " ORDER BY seq DESC LIMIT 1 OFFSET ?)", (hook_id, hook_id, KEEP_EVENTS))
+            mine = "hook IN (SELECT id FROM hooks WHERE actor=?)"
+            total = c.execute(f"SELECT COALESCE(SUM(size), 0) FROM hook_events WHERE {mine}", (row["actor"],)).fetchone()[0]
+            if total > ACTOR_BYTES:
+                excess, cutoff = total - ACTOR_BYTES, 0
+                for seq, n in c.execute(f"SELECT seq, size FROM hook_events WHERE {mine} ORDER BY seq", (row["actor"],)):
+                    excess, cutoff = excess - n, seq
+                    if excess <= 0:
+                        break
+                c.execute(f"DELETE FROM hook_events WHERE {mine} AND seq <= ?", (row["actor"], cutoff))
+        # committed above, before the answer; the audit row carries the outcome, never the body
+        b.audit({"actor": row["actor"], "session": "", "role": "public"}, hook_id, "hooks.receive", "stored")
+        return True
+
     def accept(hook_id: str, raw: bytes, headers) -> dict:
         row = b.sql("SELECT * FROM hooks WHERE id=? AND revoked=0", (hook_id,), one=True)
         if not row:
             raise HTTPException(404, NO_HOOK)
         record = b.get(record_path(hook_id), owner=row["actor"])
-        secret = (record.data.get("value") if record else "") or ""
+        # meeting-api signs with the stripped secret; one stored before stripping existed matches too
+        secret = ((record.data.get("value") if record else "") or "").strip()
         if not secret:
             b.fault("store", "hook_secret_missing", route="/hooks/{hook}")
             raise HTTPException(404, NO_HOOK)
@@ -159,26 +220,24 @@ def build(b: Broker) -> APIRouter:
         try:
             text = raw.decode("utf-8")
             event = json.loads(text)
-        except ValueError:
+            if depth(event) > MAX_DEPTH:
+                event = None
+        except (ValueError, RecursionError):
             event = None
         event_id = event.get(EVENT_ID_KEY[scheme]) if isinstance(event, dict) else None
         if not isinstance(event_id, str) or not event_id or len(event_id) > 255:
             log_event("hook_refused", level="warning", fields={"scheme": scheme, "kind": "body", "route": "/hooks/{hook}"})
             raise HTTPException(400, "Body is not a JSON event with an id")
-        now = time.time()
-        with b.lock, closing(b.db()) as c, c:
-            stored = c.execute("INSERT OR IGNORE INTO hook_events(hook, event_id, received, body) VALUES (?,?,?,?)",
-                               (hook_id, event_id, now, text)).rowcount
-            c.execute("DELETE FROM hook_events WHERE received < ?", (now - KEEP_DAYS * 86400,))
-            c.execute("DELETE FROM hook_events WHERE hook=? AND seq <= (SELECT seq FROM hook_events WHERE hook=?"
-                      " ORDER BY seq DESC LIMIT 1 OFFSET ?)", (hook_id, hook_id, KEEP_EVENTS))
-        # committed above, before the answer; the audit row carries the outcome, never the body
-        b.audit({"actor": row["actor"], "session": "", "role": "public"}, hook_id, "hooks.receive",
-                "stored" if stored else "duplicate")
+        if not keep(row, event_id, text, len(raw)):
+            raise HTTPException(404, NO_HOOK)
         return {"received": True}
 
     @router.post("/hooks/{hook_id}")
     async def receive(request: Request, hook_id: str):
+        # The exemption matched the raw scope path; hold the route to the same (and the id to its form),
+        # so no differently-parsed path or asserted caller reaches `accept` with another id.
+        if not _PUBLIC_PATH.fullmatch(request.scope.get("path", "")) or not _HOOK_ID.fullmatch(hook_id):
+            raise HTTPException(404, NO_HOOK)
         declared = request.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > MAX_BODY:
             raise HTTPException(413, "Body too large")
@@ -200,11 +259,18 @@ def build(b: Broker) -> APIRouter:
             raise HTTPException(404, NO_HOOK)
         cursor = body.cursor or 0
         rows = b.sql("SELECT seq, event_id, received, body FROM hook_events WHERE hook=? AND seq>? ORDER BY seq LIMIT ?",
-                     (body.hook_id, cursor, PAGE), rows=True)
-        items = [{"seq": r["seq"], "event_id": r["event_id"], "received": r["received"], "event": json.loads(r["body"])}
-                 for r in rows]
+                     (body.hook_id, cursor, PAGE + 1), rows=True)
+        items, size = [], 0
+        for r in rows[:PAGE]:
+            event = json.loads(r["body"])
+            items.append({"seq": r["seq"], "event_id": r["event_id"], "received": r["received"], "event": event})
+            size += len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode())
+            if size >= PAGE_BYTES:
+                break
+        oldest = b.sql("SELECT MIN(seq) AS s FROM hook_events WHERE hook=?", (body.hook_id,), one=True)["s"]
         b.audit(who, body.hook_id, "hooks.events", "success", operation=uuid.uuid4().hex, receipt=str(len(items)))
         return {"hook_id": body.hook_id, "scheme": row["scheme"], "items": items,
-                "cursor": items[-1]["seq"] if items else cursor}
+                "cursor": items[-1]["seq"] if items else cursor, "has_more": len(rows) > len(items),
+                "pruned_before": oldest}
 
     return router

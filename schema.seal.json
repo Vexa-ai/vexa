@@ -226,7 +226,8 @@
       "event_id": "TEXT",
       "hook": "TEXT",
       "received": "REAL",
-      "seq": "INTEGER PRIMARY KEY"
+      "seq": "INTEGER PRIMARY KEY",
+      "size": "INTEGER NOT NULL DEFAULT 0"
     },
     "hooks": {
       "actor": "TEXT",

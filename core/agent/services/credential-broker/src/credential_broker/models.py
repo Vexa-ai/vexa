@@ -261,6 +261,18 @@ class HookCreateBody(Strict):
     scheme: Literal["stripe", "vexa"]
     secret: Optional[str] = Field(default=None, min_length=1, max_length=2000)
 
+    @field_validator("secret")
+    @classmethod
+    def _stripped(cls, value):
+        # senders sign with the stripped secret (meeting-api `secret.strip()`); one with only
+        # whitespace is no secret
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("secret is empty")
+        return value
+
     @model_validator(mode="after")
     def _stripe_needs_secret(self):
         if self.scheme == "stripe" and self.secret is None:

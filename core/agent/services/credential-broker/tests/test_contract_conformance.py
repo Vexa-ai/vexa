@@ -146,8 +146,7 @@ def test_responses_conform(signed, connection, ready, store, client, broker):
     conforms("BotAccountResponse", gone.json())
     hook = signed("human", "POST", "/api/hooks", golden("HookCreateRequest.vexa-generated.json"))
     conforms("HookCreateResponse", hook.json())
-    conforms("HookCreateResponse", signed("sensors", "POST", "/api/hooks", golden("HookCreateRequest.stripe.json"),
-                                          actor=OWNER).json())
+    conforms("HookCreateResponse", signed("agent", "POST", "/api/hooks", golden("HookCreateRequest.stripe.json")).json())
     hook_id, secret = hook.json()["hook_id"], hook.json()["secret"]
     event = json.dumps({"event_id": "evt_1", "event_type": "meeting.completed"}).encode()
     ts = str(int(time.time()))

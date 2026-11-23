@@ -19,5 +19,7 @@
       }
     }
   ],
-  "cursor": 8
+  "cursor": 8,
+  "has_more": true,
+  "pruned_before": 3
 }

@@ -78,7 +78,8 @@ def create_app(broker: Broker) -> FastAPI:
     async def boundaries(request: Request, call_next):
         if request.method == "GET" and request.url.path in PROBES:
             return await call_next(request)
-        if request.method == "POST" and HOOK_PATH.fullmatch(request.url.path):
+        # the raw scope path, the one the router matches (`request.url.path` is rebuilt and loses \t\r\n)
+        if request.method == "POST" and HOOK_PATH.fullmatch(request.scope.get("path", "")):
             response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
