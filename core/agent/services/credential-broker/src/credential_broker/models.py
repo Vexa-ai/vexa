@@ -249,3 +249,27 @@ class MailCredentialBody(Strict):
 class SignalsModelKeyBody(Strict):
     """credential-broker.v1 `SignalsModelKeyRequest`: which signal-model key the policy names."""
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9_.-]{0,62}$")
+
+
+HOOK_ID = r"^hk_[0-9a-f]{32}$"
+
+
+class HookCreateBody(Strict):
+    """credential-broker.v1 `HookCreateRequest`: a person's incoming webhook. `stripe` needs the
+    endpoint's signing secret (whsec_…); `vexa` takes one, or the broker generates it."""
+    label: str = Field(min_length=1, max_length=80)
+    scheme: Literal["stripe", "vexa"]
+    secret: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def _stripe_needs_secret(self):
+        if self.scheme == "stripe" and self.secret is None:
+            raise ValueError("a stripe hook needs its signing secret")
+        return self
+
+
+class HookEventsBody(Strict):
+    """credential-broker.v1 `HookEventsRequest`: whose hook, which one, after which seq."""
+    owner: str = Field(min_length=1, max_length=64)
+    hook_id: str = Field(pattern=HOOK_ID)
+    cursor: Optional[int] = Field(default=None, ge=0)

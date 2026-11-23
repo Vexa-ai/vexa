@@ -1,0 +1,23 @@
+{
+  "hook_id": "hk_0123456789abcdef0123456789abcdef",
+  "scheme": "vexa",
+  "items": [
+    {
+      "seq": 8,
+      "event_id": "evt_fixture_meeting_completed",
+      "received": 1795000000.5,
+      "event": {
+        "event_id": "evt_fixture_meeting_completed",
+        "event_type": "meeting.completed",
+        "api_version": "2026-03-01",
+        "created_at": "2026-11-23T10:00:00Z",
+        "data": {
+          "meeting": {
+            "id": 1
+          }
+        }
+      }
+    }
+  ],
+  "cursor": 8
+}

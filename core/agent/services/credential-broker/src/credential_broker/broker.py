@@ -30,11 +30,13 @@ from .reasons import store_unavailable
 from .store import Record, Store, StoreUnavailable
 
 _CID = re.compile(r"/[a-f0-9]{32}(?=/|$)")
+_HOOK = re.compile(r"/hk_[a-f0-9]{32}(?=/|$)")
 
 
 def route_of(path: str) -> str:
-    """A path with connection ids folded to {cid}: low-cardinality, and safe to log."""
-    return _CID.sub("/{cid}", path.split("?", 1)[0])
+    """A path with connection ids folded to {cid} and hook ids to {hook}: low-cardinality, and safe
+    to log."""
+    return _CID.sub("/{cid}", _HOOK.sub("/{hook}", path.split("?", 1)[0]))
 
 
 def _host(url: str) -> str:

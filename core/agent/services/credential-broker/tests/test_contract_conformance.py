@@ -5,7 +5,10 @@ registered; each route refuses every role the contract does not grant it; every 
 accepted by the route's model; and the responses the routes actually return conform to their
 response shape.
 """
+import hashlib
+import hmac
 import json
+import time
 from unittest.mock import patch
 
 import jsonschema
@@ -30,6 +33,8 @@ MODELS = {
     "SensorGrantRequest": models.SensorGrantBody,
     "SignalsModelKeyRequest": models.SignalsModelKeyBody,
     "MailCredentialRequest": models.MailCredentialBody,
+    "HookCreateRequest": models.HookCreateBody,
+    "HookEventsRequest": models.HookEventsBody,
 }
 
 
@@ -69,7 +74,7 @@ def test_registered_routes_equal_the_contract(client):
 def test_each_route_refuses_roles_it_does_not_grant(signed, route):
     path = route["path"].replace("{cid}", CID)
     body = {} if route["method"] == "POST" else None
-    for role in {"agent", "human", "git", "bots"} - set(route["roles"]):
+    for role in {"agent", "human", "git", "bots", "sensors", "signals"} - set(route["roles"]):
         r = signed(role, route["method"], path, body, actor="2")
         assert r.status_code in (403, 422), (role, r.status_code)
         if r.status_code == 422:      # body validation runs first; with a valid body it is still 403
@@ -139,5 +144,20 @@ def test_responses_conform(signed, connection, ready, store, client, broker):
     conforms("BotAccountResponse", got.json())
     gone = signed("bots", "POST", "/api/internal/bot-account", {"action": "delete", "id": bot["id"]}, actor="meeting-api")
     conforms("BotAccountResponse", gone.json())
+    hook = signed("human", "POST", "/api/hooks", golden("HookCreateRequest.vexa-generated.json"))
+    conforms("HookCreateResponse", hook.json())
+    conforms("HookCreateResponse", signed("sensors", "POST", "/api/hooks", golden("HookCreateRequest.stripe.json"),
+                                          actor=OWNER).json())
+    hook_id, secret = hook.json()["hook_id"], hook.json()["secret"]
+    event = json.dumps({"event_id": "evt_1", "event_type": "meeting.completed"}).encode()
+    ts = str(int(time.time()))
+    sig = "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + event, hashlib.sha256).hexdigest()
+    accepted = client.post(f"/hooks/{hook_id}", content=event,
+                           headers={"X-Webhook-Signature": sig, "X-Webhook-Timestamp": ts})
+    conforms("HookAccepted", accepted.json())
+    conforms("Error", client.post(f"/hooks/{hook_id}", content=event).json())
+    conforms("HookEventsResponse", signed("sensors", "POST", "/api/internal/sensor/hook-events",
+                                          {"owner": OWNER, "hook_id": hook_id}, actor=OWNER).json())
+    conforms("HookCreateResponse", signed("human", "POST", f"/api/hooks/{hook_id}/revoke").json())
     refused = signed("human", "GET", "/api/connections", at=1)
     conforms("Error", refused.json())

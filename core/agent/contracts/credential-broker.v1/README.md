@@ -23,7 +23,7 @@ three derivations: Python, TypeScript and this validator.
 
 ## The assertion
 
-Every request except `GET /health` carries one header:
+Every request except the probes and a sender's `POST /hooks/{hook_id}` carries one header:
 
 ```
 X-Vexa-Assertion: <base64url(claims JSON), unpadded>.<hex HMAC-SHA256(role key, encoded part)>
@@ -60,7 +60,7 @@ and the assertion's session is recorded as sent.
 | `agent` | agent-api, for the person in the forwarded `X-Vexa-Identity` | list, request, prepare, read mail and calendar, create and update Gmail drafts, create, update and cancel calendar events, read and narrow the person's connection-policy setting (`/api/preferences`), call a saved custom service, issue, list and revoke the person's sensor grants (`/api/sensor-grants`) |
 | `human` | the terminal's server routes, for a signed-in person | everything `agent` may, plus store a credential, save an OAuth application, start and complete consent, disconnect, delete |
 | `git` | agent-api's Git credential store, for the person in the forwarded `X-Vexa-Identity` | read and write that person's Git credentials (`pat/<person>`, `deploy/user-<person>.*`) and the deploy keys of the shared workspaces among the memberships signed with them (`deploy/ws-<id>.*`), nothing else |
-| `sensors` | flows' sensor pool, for the person whose sensor it is (no `X-Vexa-Identity`; actor `<uid>`) | `POST /api/internal/sensor/calendar-changes` under a live sensor grant that person issued; `POST /api/internal/mail/smtp-credential` (actor `flows-mail`). It cannot issue a grant |
+| `sensors` | flows' sensor pool, for the person whose sensor it is (no `X-Vexa-Identity`; actor `<uid>`) | `POST /api/internal/sensor/calendar-changes` under a live sensor grant that person issued; `POST /api/internal/mail/smtp-credential` (actor `flows-mail`); create, revoke and read the person's incoming webhooks (`/api/hooks`, `/api/internal/sensor/hook-events`). It cannot issue a grant |
 | `bots` | meeting-api, for a bot (no `X-Vexa-Identity`; actor `user:<id>`, `company` or `meeting-api`) | `POST /api/internal/bot-account` only: list, read, save, re-state and delete saved signed-in browser profiles (bot accounts) |
 
 ## Bot accounts (role `bots`)
@@ -93,6 +93,27 @@ read; otherwise it answers 409 `sensor_grant_required` (none, revoked or expired
 read `refused`. Disconnecting or deleting the connection ends its grants. Once per state directory,
 at upgrade, a calendar the broker's own audit shows a sensor read successfully in the last 14 days
 gets a 30-day grant (`issued_via: upgrade`).
+
+## Incoming webhooks (roles `agent`, `human`, `sensors`; posted by senders)
+
+A hook is a person's, like a connection. `POST /api/hooks` (`HookCreateRequest` →
+`HookCreateResponse`) makes one for the assertion's actor: an id `hk_` + 32 random hex, the `path`
+a sender posts to (`/hooks/<hook_id>` on the brain's public host), and its signing secret, kept in the
+credential store at `hooks/<hook_id>` sealed with the person. `stripe` needs the endpoint's `whsec_…`;
+`vexa` takes one or gets a generated one, answered in that create only. At most 20 live hooks per
+person (409 above). `POST /api/hooks/{hook_id}/revoke` (the hook's person only, else 404) destroys the
+secret and every kept event.
+
+`POST /hooks/{hook_id}` is the one route besides the probes with **no assertion**: the sender's
+signature over the exact body is its credential (`HookScheme`: Stripe's `Stripe-Signature`, or
+webhook.v1's `X-Webhook-Signature`/`X-Webhook-Timestamp`; a bare `Authorization: Bearer` is never
+accepted; ±300 s). Any other method or path under `/hooks` needs an assertion (401). A verified event
+is committed before the 200 `HookAccepted`, once per (hook, event id), kept 14 days and at most
+10000 per hook. Refusals are fixed sentences: 401 `Signature refused`, 404 `No such hook`, 400, 413
+over 256 KiB. The broker makes no outbound call for hooks and holds no credential of the reader's.
+
+The person's sensor reads them with `POST /api/internal/sensor/hook-events` (`HookEventsRequest` →
+`HookEventsResponse`, role `sensors`, actor = `owner` else 403): up to 100 events after `cursor`.
 
 ## The connection policy on the wire
 
