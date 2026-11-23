@@ -110,11 +110,12 @@ webhook.v1's `X-Webhook-Signature`/`X-Webhook-Timestamp`; a bare `Authorization:
 accepted; ±300 s). Any other method or path under `/hooks` needs an assertion (401). A verified event
 is committed before the 200 `HookAccepted`, once per (hook, event id) (a redelivery writes nothing), kept 14 days, at most
 10000 per hook and 64 MiB per person (the person's oldest first). Refusals are fixed sentences: 401 `Signature refused`, 404 `No such hook`, 400, 413
-over 256 KiB. The broker makes no outbound call for hooks and holds no credential of the reader's.
+over 256 KiB (the broker's cap; brain-edge's own, 256,000 bytes, is lower). The broker makes no outbound call for hooks and holds no credential of the reader's.
 
 The person's sensor reads them with `POST /api/internal/sensor/hook-events` (`HookEventsRequest` →
 `HookEventsResponse`, role `sensors`, actor = `owner` else 403, the owner's own hooks only): up to 100 events after
-`cursor`, fewer once they reach 512 KiB (`has_more`), and `pruned_before`, the lowest seq still kept.
+`cursor`, fewer once they reach 512 KiB (`has_more`), and `pruned_after_cursor`, true when events of that hook after
+`cursor` were pruned unread.
 
 ## The connection policy on the wire
 

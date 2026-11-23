@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS drafts (draft_id TEXT PRIMARY KEY, actor TEXT NOT NUL
 CREATE TABLE IF NOT EXISTS preferences (actor TEXT PRIMARY KEY, value TEXT NOT NULL, updated REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS sensor_grants (id TEXT PRIMARY KEY, actor TEXT NOT NULL, connection TEXT NOT NULL, scope TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL, revoked REAL NOT NULL DEFAULT 0, issued_via TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS sensor_grants_by_person ON sensor_grants(actor, connection);
-CREATE TABLE IF NOT EXISTS hooks (id TEXT PRIMARY KEY, actor TEXT, scheme TEXT, label TEXT, created REAL, revoked REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS hooks (id TEXT PRIMARY KEY, actor TEXT, scheme TEXT, label TEXT, created REAL, revoked REAL DEFAULT 0, pruned_max_seq INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS hook_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, hook TEXT, event_id TEXT, received REAL, body TEXT, size INTEGER NOT NULL DEFAULT 0, UNIQUE(hook, event_id));
 CREATE INDEX IF NOT EXISTS hook_events_by_hook ON hook_events(hook, seq);
 CREATE INDEX IF NOT EXISTS hooks_by_person ON hooks(actor);

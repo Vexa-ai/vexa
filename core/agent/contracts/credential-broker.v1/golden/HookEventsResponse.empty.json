@@ -4,5 +4,5 @@
   "items": [],
   "cursor": 8,
   "has_more": false,
-  "pruned_before": null
+  "pruned_after_cursor": true
 }

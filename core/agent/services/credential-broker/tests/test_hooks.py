@@ -500,12 +500,66 @@ def test_a_given_secret_is_stored_stripped(client, signed, hook, store):
     assert signed("human", "POST", "/api/hooks", {"label": "x", "scheme": "stripe", "secret": "   "}).status_code == 422
 
 
-def test_pruned_before_shows_a_gap(client, signed, hook, monkeypatch):
+def test_pruned_after_cursor_says_events_were_lost_unread(client, signed, hook, monkeypatch):
     h = hook("vexa")
-    assert events(signed, h["hook_id"]).json()["pruned_before"] is None
+    assert events(signed, h["hook_id"]).json()["pruned_after_cursor"] is False
+    _post(client, h, "evt_0")
+    read = events(signed, h["hook_id"]).json()
     monkeypatch.setattr(routes_hooks, "KEEP_EVENTS", 2)
-    for i in range(4):
+    for i in range(1, 5):
         _post(client, h, f"evt_{i}")
+    # evt_1 and evt_2 were pruned before the reader (at evt_0's cursor) saw them
+    page = events(signed, h["hook_id"], read["cursor"]).json()
+    assert [i["event_id"] for i in page["items"]] == ["evt_3", "evt_4"] and page["pruned_after_cursor"] is True
+    # read on from there: nothing lost after this cursor
+    assert events(signed, h["hook_id"], page["cursor"]).json()["pruned_after_cursor"] is False
+
+
+def test_two_interleaved_hooks_do_not_report_a_gap(client, signed, hook):
+    one, two = hook("vexa"), hook("vexa")
+    for i in range(3):
+        _post(client, one, f"one_{i}")
+        _post(client, two, f"two_{i}")
+    for h, prefix in ((one, "one"), (two, "two")):
+        page = events(signed, h["hook_id"]).json()
+        assert [i["event_id"] for i in page["items"]] == [f"{prefix}_{i}" for i in range(3)]
+        assert page["pruned_after_cursor"] is False
+        seqs = [i["seq"] for i in page["items"]]
+        assert seqs[1] - seqs[0] == 2                 # seqs skip the other hook's, and that is no gap
+        assert events(signed, h["hook_id"], seqs[0]).json()["pruned_after_cursor"] is False
+
+
+def test_age_and_byte_pruning_mark_the_gap_too(client, signed, hook, broker, monkeypatch):
+    h = hook("vexa")
+    _post(client, h, "evt_old")
+    broker.sql("UPDATE hook_events SET received=?", (time.time() - 15 * 86400,))
+    _post(client, h, "evt_new")
     page = events(signed, h["hook_id"]).json()
-    assert [i["event_id"] for i in page["items"]] == ["evt_2", "evt_3"]
-    assert page["pruned_before"] == page["items"][0]["seq"] and page["pruned_before"] > 1
+    assert [i["event_id"] for i in page["items"]] == ["evt_new"] and page["pruned_after_cursor"] is True
+    monkeypatch.setattr(routes_hooks, "ACTOR_BYTES", 1500)
+    g = hook("vexa")
+    _post(client, g, "big_0", pad=1000)
+    _post(client, g, "big_1", pad=1000)
+    page = events(signed, g["hook_id"]).json()
+    assert [i["event_id"] for i in page["items"]] == ["big_1"] and page["pruned_after_cursor"] is True
+
+
+def test_a_lone_surrogate_is_refused_before_storing(client, signed, hook, broker):
+    h = hook("vexa")
+    # meeting-api builds its body with json.dumps, which writes a lone surrogate as an escape
+    raw = json.dumps({"event_id": "evt_surrogate", "data": {"note": "\ud800"}}).encode()
+    assert b"\\ud800" in raw
+    r = client.post(h["path"], content=raw, headers=vexa_headers(h["secret"], raw))
+    assert r.status_code == 400
+    assert broker.sql("SELECT COUNT(*) AS n FROM hook_events", one=True)["n"] == 0
+    assert events(signed, h["hook_id"]).status_code == 200
+    ok = json.dumps({"event_id": "evt_pair", "note": "\ud83d\ude00 é"}).encode()
+    assert client.post(h["path"], content=ok, headers=vexa_headers(h["secret"], ok)).status_code == 200
+
+
+def test_old_read_audit_rows_are_pruned(signed, hook, broker):
+    h = hook("vexa")
+    events(signed, h["hook_id"])
+    broker.sql("UPDATE audit SET at=? WHERE action='hooks.events'", (time.time() - 15 * 86400,))
+    events(signed, h["hook_id"])
+    assert broker.sql("SELECT COUNT(*) AS n FROM audit WHERE action='hooks.events'", one=True)["n"] == 1

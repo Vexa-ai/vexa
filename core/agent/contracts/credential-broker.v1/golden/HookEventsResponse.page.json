@@ -21,5 +21,5 @@
   ],
   "cursor": 8,
   "has_more": true,
-  "pruned_before": 3
+  "pruned_after_cursor": false
 }

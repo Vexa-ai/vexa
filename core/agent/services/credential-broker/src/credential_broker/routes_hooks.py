@@ -39,7 +39,8 @@ from .broker import Broker
 from .models import HOOK_ID, HookCreateBody, HookEventsBody
 from .obs import log_event
 
-#: The largest body a sender may post (the edge allows the same).
+#: The largest body the broker accepts (256 KiB). brain-edge's own cap is lower (256 KB, 256,000 bytes),
+#: so this one only binds a caller that reaches the broker some other way.
 MAX_BODY = 256 * 1024
 #: A signature's timestamp may differ from the broker's clock by at most this, either way.
 TOLERANCE = 300
@@ -172,6 +173,14 @@ def build(b: Broker) -> APIRouter:
             b.audit(who, hook_id, "hooks.revoke", "removed")
         return {"hook_id": hook_id, "path": hook_path(hook_id), "scheme": row["scheme"]}
 
+    def prune(c, where: str, args: tuple) -> None:
+        """Delete the events ``where`` names, first raising each touched hook's ``pruned_max_seq`` to
+        the highest seq deleted, so its reader can tell it lost events it never read."""
+        c.execute(f"UPDATE hooks SET pruned_max_seq = MAX(pruned_max_seq, (SELECT MAX(seq) FROM hook_events"
+                  f" WHERE hook=hooks.id AND {where})) WHERE id IN (SELECT hook FROM hook_events WHERE {where})",
+                  args + args)
+        c.execute(f"DELETE FROM hook_events WHERE {where}", args)
+
     def keep(row: dict, event_id: str, text: str, size: int) -> bool:
         """Insert one verified event and prune, in one transaction under the lock a revoke takes.
         False when the hook was revoked meanwhile (nothing written)."""
@@ -185,10 +194,10 @@ def build(b: Broker) -> APIRouter:
                 (hook_id, event_id, now, text, size, hook_id)).rowcount
             if not stored:
                 return True          # a redelivery: nothing new, nothing audited
-            c.execute("DELETE FROM hook_events WHERE received < ?", (now - KEEP_DAYS * 86400,))
+            prune(c, "received < ?", (now - KEEP_DAYS * 86400,))
             c.execute("DELETE FROM audit WHERE action='hooks.receive' AND at < ?", (now - KEEP_DAYS * 86400,))
-            c.execute("DELETE FROM hook_events WHERE hook=? AND seq <= (SELECT seq FROM hook_events WHERE hook=?"
-                      " ORDER BY seq DESC LIMIT 1 OFFSET ?)", (hook_id, hook_id, KEEP_EVENTS))
+            prune(c, "hook=? AND seq <= (SELECT e.seq FROM hook_events e WHERE e.hook=? ORDER BY e.seq DESC"
+                     " LIMIT 1 OFFSET ?)", (hook_id, hook_id, KEEP_EVENTS))
             mine = "hook IN (SELECT id FROM hooks WHERE actor=?)"
             total = c.execute(f"SELECT COALESCE(SUM(size), 0) FROM hook_events WHERE {mine}", (row["actor"],)).fetchone()[0]
             if total > ACTOR_BYTES:
@@ -197,7 +206,7 @@ def build(b: Broker) -> APIRouter:
                     excess, cutoff = excess - n, seq
                     if excess <= 0:
                         break
-                c.execute(f"DELETE FROM hook_events WHERE {mine} AND seq <= ?", (row["actor"], cutoff))
+                prune(c, f"{mine} AND seq <= ?", (row["actor"], cutoff))
         # committed above, before the answer; the audit row carries the outcome, never the body
         b.audit({"actor": row["actor"], "session": "", "role": "public"}, hook_id, "hooks.receive", "stored")
         return True
@@ -222,6 +231,10 @@ def build(b: Broker) -> APIRouter:
             event = json.loads(text)
             if depth(event) > MAX_DEPTH:
                 event = None
+            else:
+                # the event must re-serialize as UTF-8 for its reader (a lone surrogate such as
+                # "\ud800" parses, and then cannot be answered)
+                json.dumps(event, ensure_ascii=False).encode("utf-8")
         except (ValueError, RecursionError):
             event = None
         event_id = event.get(EVENT_ID_KEY[scheme]) if isinstance(event, dict) else None
@@ -267,10 +280,10 @@ def build(b: Broker) -> APIRouter:
             size += len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode())
             if size >= PAGE_BYTES:
                 break
-        oldest = b.sql("SELECT MIN(seq) AS s FROM hook_events WHERE hook=?", (body.hook_id,), one=True)["s"]
+        b.sql("DELETE FROM audit WHERE action='hooks.events' AND at < ?", (time.time() - KEEP_DAYS * 86400,))
         b.audit(who, body.hook_id, "hooks.events", "success", operation=uuid.uuid4().hex, receipt=str(len(items)))
         return {"hook_id": body.hook_id, "scheme": row["scheme"], "items": items,
                 "cursor": items[-1]["seq"] if items else cursor, "has_more": len(rows) > len(items),
-                "pruned_before": oldest}
+                "pruned_after_cursor": (row["pruned_max_seq"] or 0) > cursor}
 
     return router
