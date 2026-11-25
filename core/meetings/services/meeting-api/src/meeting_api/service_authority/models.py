@@ -256,7 +256,7 @@ def clean_billing_treatment(value: Any, *, allow: Any) -> Optional[str]:
     """
     if value is None or allow is not True:
         return None
-    if value in BILLING_TREATMENTS:
+    if isinstance(value, str) and value in BILLING_TREATMENTS:
         return value
     _log.debug("service-authority billing_treatment not understood — ignored")
     return None
@@ -300,7 +300,9 @@ class ServiceAuthorityDecision:
         if self.allow and self.stop_scope is not None:
             raise ValueError("an allowed decision cannot carry a stop scope")
         if self.billing_treatment is not None and (
-            not self.allow or self.billing_treatment not in BILLING_TREATMENTS
+            not self.allow
+            or not isinstance(self.billing_treatment, str)
+            or self.billing_treatment not in BILLING_TREATMENTS
         ):
             raise ValueError(
                 "service-authority billing_treatment must be a known treatment "

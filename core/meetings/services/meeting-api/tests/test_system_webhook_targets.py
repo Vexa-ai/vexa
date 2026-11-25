@@ -25,7 +25,9 @@ from meeting_api.webhooks import (
     SystemWebhookFanout,
     SystemWebhookSink,
     build_envelope,
+    RetryQueue,
     build_system_webhook_from_env,
+    run_system_drain_loop,
     sign_payload,
     system_queue_keys,
     verify_signature,
@@ -383,3 +385,115 @@ def test_lifecycle_completion_reaches_every_target_once():
     assert legacy["body"] == brain["body"]
     assert json.loads(legacy["body"])["event_type"] == "meeting.completed"
     assert verify_signature(brain["body"], brain["headers"], BRAIN_SECRET)
+
+
+# ── 5. one target's slow sweep never delays another's retries (own loop per target) ───────────
+
+
+@pytest.mark.asyncio
+async def test_a_dead_targets_sweep_never_delays_anothers_retries(fake_redis):
+    hang = asyncio.Event()  # never set: every brain POST hangs like a dead endpoint
+    calls = []
+
+    async def transport(url, body, headers):
+        calls.append(url)
+        if url == BRAIN_URL:
+            await hang.wait()
+        return FakeResponse(200)
+
+    webapp = SystemWebhookSink(url=WEBAPP_URL, secret=WEBAPP_SECRET, transport=transport,
+                               redis=fake_redis, allow_private_http=True)
+    brain = SystemWebhookSink(name="brain", url=BRAIN_URL, secret=BRAIN_SECRET,
+                              transport=transport, redis=fake_redis)
+    due = time.time() - BACKOFF_SCHEDULE[0] - 1  # enqueued long enough ago to be due now
+    await RetryQueue(fake_redis, key=webapp.retry_key).enqueue(
+        url=WEBAPP_URL, envelope=_envelope(1), webhook_secret=WEBAPP_SECRET, now=due,
+    )
+    for n in range(6):
+        await RetryQueue(fake_redis, key=brain.retry_key).enqueue(
+            url=BRAIN_URL, envelope=_envelope(10 + n), webhook_secret=BRAIN_SECRET, now=due,
+        )
+
+    tasks = [
+        asyncio.create_task(run_system_drain_loop(brain, interval=0.01)),
+        asyncio.create_task(run_system_drain_loop(webapp, interval=0.01)),
+    ]
+    try:
+        async def _webapp_drained():
+            while await fake_redis.llen(webapp.retry_key) or WEBAPP_URL not in calls:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(_webapp_drained(), timeout=2)
+        assert calls.count(BRAIN_URL) == 1  # the brain sweep is still stuck on its first entry
+        assert await fake_redis.llen(brain.processing_key) == 1
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+# ── 6. system sends never hold up the customer webhook ────────────────────────────────────────
+
+
+class _CustomerSink:
+    def __init__(self):
+        self._delivered = None
+        self.events = []
+
+    @property
+    def delivered(self):
+        # Created on first use inside the app's running loop, by whichever side gets there first.
+        if self._delivered is None:
+            self._delivered = asyncio.Event()
+        return self._delivered
+
+    async def deliver(self, url, envelope, secret=None, *, events_config=None, label="", **_):
+        from meeting_api.webhooks import DeliveryResult
+
+        self.events.append(envelope["event_type"])
+        if envelope["event_type"] == "meeting.completed":
+            self.delivered.set()
+        return DeliveryResult(status="delivered", status_code=200)
+
+
+class _SlowSystem:
+    """Holds its send open until the customer's meeting.completed has gone (or 2 s pass)."""
+
+    def __init__(self, customer):
+        self.customer = customer
+        self.released_by_customer = None
+
+    async def deliver(self, envelope, *, label=""):
+        try:
+            await asyncio.wait_for(self.customer.delivered.wait(), timeout=2)
+            self.released_by_customer = True
+        except asyncio.TimeoutError:
+            self.released_by_customer = False
+        return None
+
+
+def test_a_slow_system_target_does_not_hold_up_the_customer_webhook():
+    repo = InMemoryMeetingRepo()
+    meeting = asyncio.run(repo.create_meeting(
+        user_id=17, platform="google_meet", native_meeting_id="customer-first",
+        data={"webhook_url": "https://customer.example/hook", "webhook_secret": "c-secret",
+              "webhook_events": {"meeting.completed": True}},
+    ))
+    asyncio.run(repo.create_session(meeting_id=meeting["id"], session_uid="sess-cust"))
+    customer = _CustomerSink()
+    system = _SlowSystem(customer)
+    client = TestClient(create_app(
+        open_callbacks=True, meeting_repo=repo,
+        webhook_sink=customer, system_webhook_sink=system,
+    ))
+    for status, ts in (("joining", "10:00"), ("active", "10:01"), ("completed", "10:02")):
+        body = {"connection_id": "sess-cust", "status": status,
+                "timestamp": f"2026-07-29T{ts}:00.000Z"}
+        if status == "completed":
+            body["completion_reason"] = "stopped"
+        response = client.post("/bots/internal/callback/lifecycle", json=body)
+        assert response.status_code == 200, response.text
+
+    assert "meeting.completed" in customer.events
+    # Under the old order the system send ran first and the customer waited 2 s behind it.
+    assert system.released_by_customer is True

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from . import meet_respawn
 
+import asyncio
 from collections import deque
 from typing import TYPE_CHECKING, Optional
 
@@ -494,65 +495,73 @@ def mount_lifecycle(
         # webhook. It receives terminal service facts only, through a destination
         # frozen by deployment config. A transient failure is retained by the
         # sink's dedicated retry queue; it never falls back to a user URL.
-        if (
-            system_webhook_sink is not None
-            and typed_envelope is not None
-            and typed_envelope.get("event_type") in {
-                "meeting.completed",
-                "bot.failed",
-            }
-        ):
-            try:
-                outcome = await system_webhook_sink.deliver(
-                    typed_envelope,
-                    label=f"meeting:{meeting_row.get('id')}"
-                    if isinstance(meeting_row, dict)
-                    else f"session:{rec.connection_id}",
-                )
-                # A fanout answers one (target, result) pair per target; a
-                # single sink answers its one result.
-                target_results = (
-                    outcome
-                    if isinstance(outcome, list)
-                    else [(getattr(system_webhook_sink, "name", "default"), outcome)]
-                )
-                for target_name, result in target_results:
-                    if result is None:
-                        continue
+        # Sent CONCURRENTLY with the customer webhook below and awaited after it: a slow or dead
+        # operator target never delays the customer's delivery, and the callback still answers
+        # only once every system target has delivered or queued the event (no fire-and-forget,
+        # so a crash cannot lose a terminal fact the bot will not resend).
+        async def _deliver_system() -> None:
+            if (
+                system_webhook_sink is not None
+                and typed_envelope is not None
+                and typed_envelope.get("event_type") in {
+                    "meeting.completed",
+                    "bot.failed",
+                }
+            ):
+                try:
+                    outcome = await system_webhook_sink.deliver(
+                        typed_envelope,
+                        label=f"meeting:{meeting_row.get('id')}"
+                        if isinstance(meeting_row, dict)
+                        else f"session:{rec.connection_id}",
+                    )
+                    # A fanout answers one (target, result) pair per target; a
+                    # single sink answers its one result.
+                    target_results = (
+                        outcome
+                        if isinstance(outcome, list)
+                        else [(getattr(system_webhook_sink, "name", "default"), outcome)]
+                    )
+                    for target_name, result in target_results:
+                        if result is None:
+                            continue
+                        log_event(
+                            "system_webhook_delivery",
+                            audience="system",
+                            level=(
+                                "info"
+                                if result.status == "delivered"
+                                else "warning"
+                            ),
+                            span="lifecycle.callback",
+                            meeting_id=(
+                                meeting_row.get("id")
+                                if isinstance(meeting_row, dict)
+                                else None
+                            ),
+                            fields={
+                                "outcome": result.status,
+                                "event_type": typed_envelope.get("event_type"),
+                                "status_code": result.status_code,
+                                "target": target_name,
+                            },
+                        )
+                except Exception as e:  # noqa: BLE001 — terminal fact stays in meeting storage
                     log_event(
-                        "system_webhook_delivery",
+                        "system_webhook_delivery_failed",
                         audience="system",
-                        level=(
-                            "info"
-                            if result.status == "delivered"
-                            else "warning"
-                        ),
+                        level="warning",
                         span="lifecycle.callback",
                         meeting_id=(
                             meeting_row.get("id")
                             if isinstance(meeting_row, dict)
                             else None
                         ),
-                        fields={
-                            "outcome": result.status,
-                            "event_type": typed_envelope.get("event_type"),
-                            "status_code": result.status_code,
-                            "target": target_name,
-                        },
+                        fields={"error_type": type(e).__name__},
                     )
-            except Exception as e:  # noqa: BLE001 — terminal fact stays in meeting storage
-                log_event(
-                    "system_webhook_delivery_failed",
-                    audience="system",
-                    level="warning",
-                    span="lifecycle.callback",
-                    meeting_id=(
-                        meeting_row.get("id")
-                        if isinstance(meeting_row, dict)
-                        else None
-                    ),
-                    fields={"error_type": type(e).__name__},
-                )
+            return None
+
+        system_task = asyncio.ensure_future(_deliver_system())
         # Deliver the sealed webhook.v1 envelopes (meeting.status_change + the typed event, if any)
         # to the user's configured endpoint (per-user config rides on meeting.data — set at spawn
         # from identity via the gateway; NO users-table read). The sink's per-user event filter
@@ -620,6 +629,7 @@ def mount_lifecycle(
                     except Exception as e:  # noqa: BLE001 — delivery is best-effort
                         log_event("webhook_deliver_failed", audience="system", level="warning",
                                   span="lifecycle.callback", fields={"error": str(e)})
+        await system_task
         # Publish each persisted FSM advance to bm:meeting:{id}:status in the canonical 0.10.6 WS
         # contract shape (the source of truth; api-gateway forwards the redis payload verbatim):
         #   {type:"meeting.status", meeting:{id,platform,native_id}, payload:{status}, user_id, ts}

@@ -633,9 +633,9 @@ def _attach_background_loops(
                 return await client.post(url, content=body, headers=headers)
 
         async def _tick():
+            # Customer retries only. Each operator system target drains in its own loop
+            # (_system_webhook_drain_loops), so a dead target never stalls this queue.
             await drain_retry_queue(redis_client, _transport)
-            if system_webhook_sink is not None:
-                await system_webhook_sink.drain()
 
         while True:
             try:
@@ -645,6 +645,25 @@ def _attach_background_loops(
             except Exception:
                 log.exception("webhook retry-drain tick failed")
             await asyncio.sleep(webhook_interval)
+
+    def _system_webhook_drain_tasks() -> list:
+        from .webhooks import run_system_drain_loop, system_target_sinks
+
+        def _on_error(sink) -> None:
+            log.exception("system webhook retry-drain tick failed (target=%s)", sink.name)
+
+        return [
+            asyncio.create_task(
+                run_system_drain_loop(
+                    sink,
+                    interval=webhook_interval,
+                    guard=_guarded,
+                    on_error=_on_error,
+                ),
+                name=f"system-webhook-drain:{sink.name}",
+            )
+            for sink in system_target_sinks(system_webhook_sink)
+        ]
 
     async def _stop_reconcile_loop() -> None:
         # Complete meetings stuck in `stopping` past the grace window AND kill any orphan workload (CC6 /
@@ -978,6 +997,7 @@ def _attach_background_loops(
             asyncio.create_task(_segment_consumer_loop(), name="segment-consumer"),
             asyncio.create_task(_db_writer_loop(), name="db-writer"),
             asyncio.create_task(_webhook_drain_loop(), name="webhook-drain"),
+            *_system_webhook_drain_tasks(),
             asyncio.create_task(_stop_reconcile_loop(), name="stop-reconcile"),
             asyncio.create_task(
                 _service_authority_loop(),

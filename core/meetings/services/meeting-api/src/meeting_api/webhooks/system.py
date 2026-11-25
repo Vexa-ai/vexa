@@ -20,7 +20,7 @@ import math
 import os
 import re
 from ipaddress import ip_address
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlsplit
 
 from .delivery import DeliveryResult, Transport, _deliver_signed
@@ -232,6 +232,44 @@ class SystemWebhookFanout:
             # to the worker's guard so it is logged, not swallowed.
             raise errors[0]
         return processed
+
+
+def system_target_sinks(
+    sink: SystemWebhookSink | SystemWebhookFanout | None,
+) -> list[SystemWebhookSink]:
+    """The individual targets behind a configured system sink (empty when none)."""
+    if sink is None:
+        return []
+    if isinstance(sink, SystemWebhookFanout):
+        return list(sink.sinks)
+    return [sink]
+
+
+async def run_system_drain_loop(
+    sink: SystemWebhookSink,
+    *,
+    interval: float,
+    guard: Optional[Callable[[str, Callable[[], Awaitable[Any]]], Awaitable[Any]]] = None,
+    on_error: Optional[Callable[[SystemWebhookSink], None]] = None,
+) -> None:
+    """Drain ONE target's retry queue forever, on its own clock.
+
+    Each target runs its own loop, so a target whose sweep is slow (a dead endpoint costs a full
+    timeout per due entry) never delays another target's retries, nor the customer webhook queue.
+    ``guard`` is the cross-replica single-flight wrapper, keyed per target.
+    """
+    while True:
+        try:
+            if guard is None:
+                await sink.drain()
+            else:
+                await guard(f"system-webhook-drain:{sink.name}", sink.drain)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — one failed sweep never ends the loop
+            if on_error is not None:
+                on_error(sink)
+        await asyncio.sleep(interval)
 
 
 _TIMEOUT_ERROR = "must be a finite number greater than 0 and at most 60"

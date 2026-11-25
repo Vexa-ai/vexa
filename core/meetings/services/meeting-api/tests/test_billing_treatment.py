@@ -78,9 +78,38 @@ def test_absent_treatment_is_none_and_unchanged_wire_still_parses_strictly():
     assert _parse(_wire(), strict=True).billing_treatment is None
 
 
-def test_unknown_treatment_is_ignored_never_an_outage():
-    assert _parse(_wire(billing_treatment="trial")).billing_treatment is None
-    assert _parse(_wire(billing_treatment=7)).billing_treatment is None
+@pytest.mark.parametrize(
+    "value", ["trial", "", 7, 1.5, True, [], {}, ["included"], {"included": True}],
+)
+def test_unknown_or_malformed_treatment_is_ignored_never_an_outage(value):
+    assert _parse(_wire(billing_treatment=value)).billing_treatment is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [[], {}, ["included"], {"t": "included"}])
+async def test_malformed_treatment_through_the_http_adapter_still_admits(value):
+    import httpx
+
+    from meeting_api.service_authority import HttpServiceAuthority, ServiceAuthorityConfig
+
+    request = _admit_request()
+
+    def handler(http_request):
+        return httpx.Response(200, json=_wire(billing_treatment=value))
+
+    authority = HttpServiceAuthority(
+        ServiceAuthorityConfig(
+            url="https://authority.example/decide",
+            secret="fixture-authority-secret",
+            timeout_seconds=1,
+            response_max_age_seconds=60,
+            mode="enforce",
+        ),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    decision = await authority.decide(request)
+    assert decision.allow is True
+    assert decision.billing_treatment is None
 
 
 def test_denied_decision_carries_no_treatment():
