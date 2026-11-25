@@ -161,7 +161,8 @@ subjectTickets:
 # ---------- Shared secrets ----------
 # Recommended: override via --set-file / external secret tooling, or point existingSecretName at a
 # Secret carrying these keys: ADMIN_API_TOKEN, INTERNAL_API_SECRET, TRANSCRIPTION_SERVICE_TOKEN,
-# VEXA_SERVICE_AUTHORITY_SECRET, VEXA_SYSTEM_WEBHOOK_SECRET, VEXA_DISPATCH_SIGNING_KEY,
+# VEXA_SERVICE_AUTHORITY_SECRET, VEXA_SYSTEM_WEBHOOK_SECRET, VEXA_SYSTEM_WEBHOOK_TARGET_SECRETS,
+# VEXA_DISPATCH_SIGNING_KEY,
 # VEXA_BOT_API_KEY, ANTHROPIC_API_KEY,
 # ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, CLAUDE_CODE_OAUTH_TOKEN.
 # The deployment profile, the same word the mcp and transcription services read. Anything but
@@ -184,6 +185,7 @@ secrets:
   transcriptionServiceToken: ""     # funded STT token threaded into spawned bots
   serviceAuthoritySecret: ""        # exact-byte HMAC secret; required only when meetingApi.serviceAuthorityConfig is set
   systemWebhookSecret: ""           # exact-byte HMAC secret; required only when meetingApi.systemWebhookUrl is set
+  systemWebhookTargetSecrets: ""    # JSON {name: secret}, one own secret per meetingApi.systemWebhookTargets entry
   dispatchSigningKey: ""            # agent-api signs each dispatch's identity token with it
                                     # (VEXA_DISPATCH_SIGNING_KEY, 32+ bytes, never a published value).
                                     # Empty → kept from this release's Secret, else generated; with
@@ -670,6 +672,9 @@ meetingApi:
   systemWebhookUrl: ""
   systemWebhookAllowPrivateHttp: "false"
   systemWebhookTimeoutSeconds: "10"
+  # Further operator callbacks (JSON list, credential-free): [{"name":"brain","url":"https://…"}];
+  # each name's secret goes in secrets.systemWebhookTargetSecrets.
+  systemWebhookTargets: ""
   # Voice notes (docs: /minutes/voice-notes). The longest note, in seconds of audio
   # (VOICE_NOTE_MAX_DURATION_SEC), and how long a note's bot waits with neither audio nor Stop
   # before it ends the note (VOICE_NOTE_IDLE_TIMEOUT_SEC).

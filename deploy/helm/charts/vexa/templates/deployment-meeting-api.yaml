@@ -159,6 +159,14 @@ spec:
               value: {{ .Values.meetingApi.systemWebhookAllowPrivateHttp | default "false" | quote }}
             - name: VEXA_SYSTEM_WEBHOOK_TIMEOUT_S
               value: {{ .Values.meetingApi.systemWebhookTimeoutSeconds | default "10" | quote }}
+            - name: VEXA_SYSTEM_WEBHOOK_TARGETS
+              value: {{ .Values.meetingApi.systemWebhookTargets | default "" | quote }}
+            - name: VEXA_SYSTEM_WEBHOOK_TARGET_SECRETS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_SYSTEM_WEBHOOK_TARGET_SECRETS
+                  optional: true
             # diagnostics.captureSignal (default "false"): no captured-signal tape unless turned on.
             - name: VEXA_CAPTURE_SIGNAL_DEFAULT
               value: {{ include "vexa.captureSignalDefault" . | quote }}

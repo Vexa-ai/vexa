@@ -495,13 +495,22 @@ def mount_lifecycle(
             }
         ):
             try:
-                result = await system_webhook_sink.deliver(
+                outcome = await system_webhook_sink.deliver(
                     typed_envelope,
                     label=f"meeting:{meeting_row.get('id')}"
                     if isinstance(meeting_row, dict)
                     else f"session:{rec.connection_id}",
                 )
-                if result is not None:
+                # A fanout answers one (target, result) pair per target; a
+                # single sink answers its one result.
+                target_results = (
+                    outcome
+                    if isinstance(outcome, list)
+                    else [(getattr(system_webhook_sink, "name", "default"), outcome)]
+                )
+                for target_name, result in target_results:
+                    if result is None:
+                        continue
                     log_event(
                         "system_webhook_delivery",
                         audience="system",
@@ -520,6 +529,7 @@ def mount_lifecycle(
                             "outcome": result.status,
                             "event_type": typed_envelope.get("event_type"),
                             "status_code": result.status_code,
+                            "target": target_name,
                         },
                     )
             except Exception as e:  # noqa: BLE001 — terminal fact stays in meeting storage

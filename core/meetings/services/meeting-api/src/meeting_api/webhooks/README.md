@@ -19,6 +19,10 @@ webhooks.py}`, reimplemented clean. The wire shape is sealed in `meetings/contra
 - **Operator terminal callback** — `SystemWebhookSink` freezes one deployment-owned destination at
   boot and accepts only `meeting.completed` / `bot.failed`. In-cluster HTTP needs an explicit
   operator opt-in. It never consumes a user URL, and customer delivery retains the SSRF guard.
+  `SystemWebhookFanout` adds further named targets (`VEXA_SYSTEM_WEBHOOK_TARGETS` +
+  `VEXA_SYSTEM_WEBHOOK_TARGET_SECRETS`): the same envelope to each, each signed with its own secret,
+  each with its own `webhook:system:<name>:{retry_queue,retry_processing,dead_letter}` lists,
+  delivered and drained concurrently. The legacy target keeps its keys and bytes unchanged.
 - **Retry** (`retry.py`) — a `RetryQueue` over a Redis list (`webhook:retry_queue`); a 5xx/429/
   transport-error enqueues; `drain_retry_queue` is one worker sweep (exponential `BACKOFF_SCHEDULE`
   = 1m·5m·30m·2h, 24h max-age). The eval drives the clock forward — no real sleeps.

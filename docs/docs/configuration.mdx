@@ -102,10 +102,13 @@ API caller or meeting payload, and receives only `meeting.completed` and `bot.fa
 | `VEXA_SYSTEM_WEBHOOK_SECRET` | — | HMAC-SHA256 secret for the exact timestamped envelope bytes. Required with the URL and stored only in the deployment secret store. |
 | `VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP` | `false` | Explicitly permits a private/in-cluster HTTP destination such as a billing service on the Compose/Kubernetes network. It does not change customer webhook SSRF protection. |
 | `VEXA_SYSTEM_WEBHOOK_TIMEOUT_S` | `10` | Bounded delivery timeout, greater than zero and at most 60 seconds. |
+| `VEXA_SYSTEM_WEBHOOK_TARGETS` | — | Optional JSON list of further operator endpoints, each `{"name", "url", "allow_private_http"?, "timeout_s"?}`. The same rules as the URL above apply to each. |
+| `VEXA_SYSTEM_WEBHOOK_TARGET_SECRETS` | — | JSON object mapping each target name to its own HMAC secret. Required with the targets; no two targets may share a secret. |
 
-Transient delivery failures enter a dedicated retry/dead-letter queue and retain the same
+Every target is delivered concurrently and has its own retry/dead-letter queue, so a slow or
+failing target never delays another. Transient delivery failures retain the same
 deterministic event ID. Customer webhook destinations continue through DNS/IP validation and cannot
-redirect this operator callback. Leave all four values unset for the stock OSS behavior.
+redirect this operator callback. Leave all of these unset for the stock OSS behavior.
 
 ## Secrets & identity
 

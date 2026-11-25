@@ -15,6 +15,7 @@ in `meetings/contracts/webhook.v1`.
 * ``RetryQueue`` — the fakeredis-backed exponential-backoff retry queue.
 * ``drain_retry_queue`` — the retry-worker sweep (the worker loop's one tick).
 * ``SystemWebhookSink`` — one boot-frozen operator destination for terminal service facts.
+* ``SystemWebhookFanout`` — several such destinations, each with its own secret and queues.
 * ``WEBHOOK_API_VERSION`` / ``RETRY_QUEUE_KEY`` / ``BACKOFF_SCHEDULE`` — frozen constants.
 """
 from .delivery import (
@@ -46,8 +47,10 @@ from .system import (
     SYSTEM_DEAD_LETTER_KEY,
     SYSTEM_PROCESSING_KEY,
     SYSTEM_RETRY_QUEUE_KEY,
+    SystemWebhookFanout,
     SystemWebhookSink,
     build_system_webhook_from_env,
+    system_queue_keys,
 )
 
 __all__ = [
@@ -74,6 +77,8 @@ __all__ = [
     "SYSTEM_DEAD_LETTER_KEY",
     "SYSTEM_PROCESSING_KEY",
     "SYSTEM_RETRY_QUEUE_KEY",
+    "SystemWebhookFanout",
     "SystemWebhookSink",
     "build_system_webhook_from_env",
+    "system_queue_keys",
 ]

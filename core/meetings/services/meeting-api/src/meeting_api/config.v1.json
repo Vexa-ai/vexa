@@ -724,6 +724,29 @@
    ]
   },
   {
+   "key": "VEXA_SYSTEM_WEBHOOK_TARGETS",
+   "class": "defaulted",
+   "default": "(unset — only the VEXA_SYSTEM_WEBHOOK_URL target, if any)",
+   "description": "Credential-free JSON list of further operator-owned terminal callbacks, each {\"name\", \"url\", optional \"allow_private_http\" (bool), optional \"timeout_s\" (0 < n <= 60)}. Names match [a-z][a-z0-9-]{0,31}; 'default' is reserved. Each target gets the same signed meeting.completed / bot.failed envelopes with its own secret and its own retry, processing and dead-letter queues (webhook:system:<name>:*), delivered concurrently so one slow or failing target never delays another.",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
+   "key": "VEXA_SYSTEM_WEBHOOK_TARGET_SECRETS",
+   "class": "defaulted",
+   "default": "(unset — required when VEXA_SYSTEM_WEBHOOK_TARGETS is set)",
+   "secret": true,
+   "description": "JSON object mapping each VEXA_SYSTEM_WEBHOOK_TARGETS name to its own HMAC secret; must name exactly those targets, and no two targets (the URL target included) may share a secret.",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
    "key": "HOST",
    "class": "defaulted",
    "default": "0.0.0.0",
