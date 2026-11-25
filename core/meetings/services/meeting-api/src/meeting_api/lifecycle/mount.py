@@ -109,6 +109,7 @@ def mount_lifecycle(
         the meeting block the typed webhooks carry (golden Envelope.meeting-completed.json).
         completion_reason/failure_stage are hoisted to top level; internal data keys stripped."""
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        authority = data.get("service_authority")
         return {
             "id": row.get("id"),
             "user_id": row.get("user_id"),
@@ -119,6 +120,13 @@ def mount_lifecycle(
             "completion_reason": data.get("completion_reason"),
             "failure_stage": data.get("failure_stage"),
             "service_provenance": data.get("service_provenance"),
+            # The billing treatment fixed at admission (service-authority.v1), or null when the
+            # deciding service did not state one. Additive (webhook.v1 README).
+            "billing_treatment": (
+                authority.get("billing_treatment")
+                if isinstance(authority, dict)
+                else None
+            ),
             "start_time": _iso(row.get("start_time")),
             "end_time": _iso(row.get("end_time")),
             "data": clean_meeting_data(data),

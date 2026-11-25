@@ -15,6 +15,12 @@ AUTHORITY_VERSION = "service-authority.v1"
 LIFECYCLE_CONTRACT_VERSION = "2026-07-28"
 Action = Literal["admit", "continue"]
 TranscriptionProvider = Literal["vexa", "customer", "none"]
+# How the deciding service will bill the service it admits, fixed at admission. meeting-api never
+# interprets it: it freezes the admission's value on the meeting and carries it on the terminal
+# system webhook, so a downstream ledger rates a meeting by its admission and not by whatever plan
+# the account is on when the meeting ends.
+BillingTreatment = Literal["metered", "included", "commitment"]
+BILLING_TREATMENTS = frozenset({"metered", "included", "commitment"})
 
 
 def _utc(value: datetime) -> datetime:
@@ -227,6 +233,8 @@ _DECISION_KEYS = frozenset({
     # caller became "authority unavailable" — a 503 in place of an actionable 403.
     "message",
     "action_url",
+    # Optional, allowed decisions only: the billing treatment fixed at admission.
+    "billing_treatment",
 })
 # THIS SET IS NOW THE CONTRACT'S CENSUS, NOT A GATE. `from_wire` ignores what it does not find here
 # (see its docstring); only `from_wire(..., strict=True)` — the contract test — refuses. Adding a
@@ -234,7 +242,24 @@ _DECISION_KEYS = frozenset({
 # customer their meeting.
 
 # Present-but-empty is the same as absent everywhere below, so the required set is spelled once.
-_OPTIONAL_DECISION_KEYS = frozenset({"stop_scope", "message", "action_url"})
+_OPTIONAL_DECISION_KEYS = frozenset({
+    "stop_scope", "message", "action_url", "billing_treatment",
+})
+
+
+def clean_billing_treatment(value: Any, *, allow: Any) -> Optional[str]:
+    """The admission's billing treatment, or None.
+
+    Tolerant like the courtesy fields: a value this meeting-api does not know (a newer decider)
+    becomes None — the downstream ledger then treats the meeting as unresolved — rather than turning
+    an admission into "authority unavailable". A denied decision admits nothing, so it carries none.
+    """
+    if value is None or allow is not True:
+        return None
+    if value in BILLING_TREATMENTS:
+        return value
+    _log.debug("service-authority billing_treatment not understood — ignored")
+    return None
 
 
 @dataclass(frozen=True)
@@ -252,6 +277,7 @@ class ServiceAuthorityDecision:
     # sanitising) and never interpreted here.
     message: Optional[str] = None
     action_url: Optional[str] = None
+    billing_treatment: Optional[BillingTreatment] = None
 
     def __post_init__(self) -> None:
         if self.authority_version != AUTHORITY_VERSION:
@@ -273,6 +299,13 @@ class ServiceAuthorityDecision:
             raise ValueError("unsupported service-authority stop scope")
         if self.allow and self.stop_scope is not None:
             raise ValueError("an allowed decision cannot carry a stop scope")
+        if self.billing_treatment is not None and (
+            not self.allow or self.billing_treatment not in BILLING_TREATMENTS
+        ):
+            raise ValueError(
+                "service-authority billing_treatment must be a known treatment "
+                "on an allowed decision"
+            )
         for field_name in ("message", "action_url"):
             value = getattr(self, field_name)
             if value is not None and not isinstance(value, str):
@@ -338,6 +371,10 @@ class ServiceAuthorityDecision:
             enforced=enforced,
             message=clean_message(value.get("message")),
             action_url=clean_action_url(value.get("action_url")),
+            billing_treatment=clean_billing_treatment(
+                value.get("billing_treatment"),
+                allow=value.get("allow"),
+            ),
         )
         if (
             decision.request_id != request.request_id

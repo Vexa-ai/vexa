@@ -792,6 +792,11 @@ async def request_bot(
         "last_decision_id": authority_decision.decision_id,
         "teardown_confirmed": False,
     }
+    # Frozen at admission and never overwritten by a continuation (continuations merge
+    # `to_record()`, which does not carry it): the terminal system webhook reports the treatment
+    # this run was ADMITTED under, which is what the meeting is rated by.
+    if authority_decision.billing_treatment is not None:
+        authority_record["billing_treatment"] = authority_decision.billing_treatment
 
     # The Meet respawn block a qualifying first spawn starts with (lifecycle/meet_respawn.py).
     respawn_block = (

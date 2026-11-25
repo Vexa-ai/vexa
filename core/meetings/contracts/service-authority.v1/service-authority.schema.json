@@ -88,6 +88,11 @@
         "stop_scope": {
           "type": ["string", "null"],
           "enum": ["billable_service", null]
+        },
+        "billing_treatment": {
+          "description": "Optional, allowed decisions only: how the deciding service bills the service it admits (metered from prepaid credit, included in a plan, or under a commitment contract). The consumer freezes the admission's value and reports it on its terminal system webhook; it never interprets it.",
+          "type": ["string", "null"],
+          "enum": ["metered", "included", "commitment", null]
         }
       },
       "allOf": [
@@ -98,6 +103,15 @@
           },
           "then": {
             "properties": { "stop_scope": { "type": "null" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "allow": { "const": false } },
+            "required": ["allow"]
+          },
+          "then": {
+            "properties": { "billing_treatment": { "type": "null" } }
           }
         }
       ]

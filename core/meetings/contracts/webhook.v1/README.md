@@ -29,6 +29,14 @@ this shape.
   states admitted/departed time, bot outcome, transcription provider/outcome, and lifecycle
   contract version. It contains no endpoint URL, token, credential, meeting title, or transcript.
   Absence means provenance is unresolved; consumers must not infer it from legacy intent flags.
+- **Meeting blocks carry the admission's billing treatment.** `data.meeting.billing_treatment` is
+  `metered` · `included` · `commitment` as the deciding service stated it when it admitted the bot
+  (`service-authority.v1`), frozen for the run, or `null` when none was stated. Additive: consumers
+  ignore fields they do not know. A ledger that rates a meeting must rate it by this value, never by
+  the account's plan at the end; `null` means the treatment is unresolved.
+- **An operator may configure several system targets.** Each receives the same envelope bytes,
+  signed with that target's own secret, and retries from its own queue; the `event_id` is the same
+  for every target.
 
 ## Shapes (`$defs`)
 - **`Envelope`** — `event_id · event_type · api_version · created_at · data`. The body POSTed is
