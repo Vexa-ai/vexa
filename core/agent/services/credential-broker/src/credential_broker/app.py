@@ -1,6 +1,7 @@
 """The credential broker's HTTP front door (credential-broker.v1): the app factory.
 
-Every route except the two probes (GET /health, GET /ready) requires an X-Vexa-Assertion signed
+Every route except the two probes (GET /health, GET /ready) and a sender's POST to a hook
+(`/hooks/hk_…`, verified by its own signature in `routes_hooks.py`) requires an X-Vexa-Assertion signed
 with a role key; the role decides what the caller may do (contract `x-routes`). An agent- or
 git-role call must ALSO carry the gateway's signed identity (gateway-identity.v1 `X-Vexa-Identity`)
 naming the same person as the assertion's actor: agent-api holds both keys, and neither key alone
@@ -22,12 +23,14 @@ route — and never with a value.
 from __future__ import annotations
 
 import hmac
+import re
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import assertion, identity_token, providers, routes_bots, routes_connections, routes_git, routes_mail, routes_sensors, routes_signals
+from . import (assertion, identity_token, providers, routes_bots, routes_connections, routes_git, routes_hooks,
+               routes_mail, routes_sensors, routes_signals)
 from .broker import Broker, route_of, shared, signed_session, unwatched
 from .faults import UpstreamFault
 from .obs import TraceMiddleware, log_event, set_session
@@ -38,6 +41,10 @@ from .store import StoreUnavailable
 #: The probes an orchestrator calls without an assertion. Liveness is the process; readiness is the
 #: credential store answering.
 PROBES = ("/health", "/ready")
+#: The one other route without an assertion: a sender posting to a person's hook. The sender's
+#: signature, checked by the route against the hook's secret, is its only credential
+#: (`routes_hooks.py`). Anything else under /hooks needs an assertion like every route.
+HOOK_PATH = re.compile(r"^/hooks/hk_[0-9a-f]{32}$")
 
 
 def create_app(broker: Broker) -> FastAPI:
@@ -71,6 +78,12 @@ def create_app(broker: Broker) -> FastAPI:
     async def boundaries(request: Request, call_next):
         if request.method == "GET" and request.url.path in PROBES:
             return await call_next(request)
+        # the raw scope path, the one the router matches (`request.url.path` is rebuilt and loses \t\r\n)
+        if request.method == "POST" and HOOK_PATH.fullmatch(request.scope.get("path", "")):
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            return response
         header = request.headers.get(assertion.HEADER.lower(), "")
         body = await request.body()
         path = request.url.path + ("?" + request.url.query if request.url.query else "")
@@ -144,4 +157,5 @@ def create_app(broker: Broker) -> FastAPI:
     app.include_router(routes_sensors.build(b))
     app.include_router(routes_signals.build(b))
     app.include_router(routes_mail.build(b))
+    app.include_router(routes_hooks.build(b))
     return app

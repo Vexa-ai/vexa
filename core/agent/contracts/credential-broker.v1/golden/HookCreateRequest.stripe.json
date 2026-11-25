@@ -1,0 +1,5 @@
+{
+  "label": "Stripe payments",
+  "scheme": "stripe",
+  "secret": "whsec_fixture-not-a-real-secret"
+}

@@ -1,0 +1,6 @@
+{
+  "hook_id": "hk_0123456789abcdef0123456789abcdef",
+  "path": "/hooks/hk_0123456789abcdef0123456789abcdef",
+  "scheme": "vexa",
+  "secret": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+}

@@ -221,6 +221,23 @@
       "created": "REAL NOT NULL",
       "draft_id": "TEXT PRIMARY KEY"
     },
+    "hook_events": {
+      "body": "TEXT",
+      "event_id": "TEXT",
+      "hook": "TEXT",
+      "received": "REAL",
+      "seq": "INTEGER PRIMARY KEY",
+      "size": "INTEGER NOT NULL DEFAULT 0"
+    },
+    "hooks": {
+      "actor": "TEXT",
+      "created": "REAL",
+      "id": "TEXT PRIMARY KEY",
+      "label": "TEXT",
+      "pruned_max_seq": "INTEGER NOT NULL DEFAULT 0",
+      "revoked": "REAL DEFAULT 0",
+      "scheme": "TEXT"
+    },
     "oauth_states": {
       "actor": "TEXT",
       "connection": "TEXT",
