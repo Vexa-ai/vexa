@@ -2,9 +2,10 @@
 
 service-authority.v1 lets an ALLOWED decision state how the deciding service bills the service it
 admits (`metered` · `included` · `commitment`). meeting-api never interprets it: it freezes the
-admission's value on the meeting, a continuation never changes it, and webhook.v1 carries it as
-`data.meeting.billing_treatment` (null when unstated), so a downstream ledger rates a meeting by its
-admission and not by the account's plan at the end.
+admission's value on the meeting, a continuation never changes it, and a downstream ledger rates a
+meeting by its admission and not by the account's plan at the end. The default target's and customers' body
+keep their exact shape (the value stays in `data.meeting.data.service_authority`); a named system
+target receives it lifted into its allow-listed meeting block.
 """
 from __future__ import annotations
 
@@ -260,16 +261,44 @@ def _complete(authority_record):
     return envelope["data"]["meeting"]
 
 
-def test_completed_webhook_carries_the_admission_treatment():
+_MAIN_MEETING_KEYS = {
+    # The meeting block on origin/main (lifecycle/mount.py _meeting_projection_from_row): the
+    # default target's and the customer's body must not gain or lose a key.
+    "id", "user_id", "platform", "native_meeting_id", "constructed_meeting_url", "status",
+    "completion_reason", "failure_stage", "service_provenance", "start_time", "end_time",
+    "data", "created_at", "updated_at",
+}
+
+
+def test_full_body_keeps_its_shape_and_the_treatment_rides_in_the_admission_record():
     meeting = _complete({
         "authority_version": "service-authority.v1",
         "decision_id": "decision-admit-1",
         "service_identity": "meeting-session:x",
         "billing_treatment": "commitment",
     })
-    assert meeting["billing_treatment"] == "commitment"
+    assert set(meeting) == _MAIN_MEETING_KEYS
+    assert meeting["data"]["service_authority"]["billing_treatment"] == "commitment"
 
 
-def test_completed_webhook_says_null_when_no_treatment_was_stated():
-    assert _complete(None)["billing_treatment"] is None
-    assert _complete({"authority_version": "service-authority.v1"})["billing_treatment"] is None
+def test_named_target_projection_lifts_the_admission_treatment():
+    from meeting_api.webhooks import minimal_terminal_envelope
+
+    meeting = _complete({
+        "authority_version": "service-authority.v1",
+        "billing_treatment": "commitment",
+    })
+    envelope = {"event_id": "evt_1", "event_type": "meeting.completed",
+                "api_version": "2026-03-01", "created_at": "x", "data": {"meeting": meeting}}
+    assert minimal_terminal_envelope(envelope)["data"]["meeting"]["billing_treatment"] == "commitment"
+
+
+def test_projection_says_null_when_no_treatment_was_stated():
+    from meeting_api.webhooks import minimal_terminal_envelope
+
+    for record in (None, {"authority_version": "service-authority.v1"}, {"billing_treatment": ["x"]}):
+        meeting = _complete(record)
+        assert set(meeting) == _MAIN_MEETING_KEYS
+        envelope = {"event_id": "e", "event_type": "meeting.completed", "api_version": "v",
+                    "created_at": "c", "data": {"meeting": meeting}}
+        assert minimal_terminal_envelope(envelope)["data"]["meeting"]["billing_treatment"] is None

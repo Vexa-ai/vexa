@@ -29,14 +29,17 @@ this shape.
   states admitted/departed time, bot outcome, transcription provider/outcome, and lifecycle
   contract version. It contains no endpoint URL, token, credential, meeting title, or transcript.
   Absence means provenance is unresolved; consumers must not infer it from legacy intent flags.
-- **Meeting blocks carry the admission's billing treatment.** `data.meeting.billing_treatment` is
-  `metered` · `included` · `commitment` as the deciding service stated it when it admitted the bot
-  (`service-authority.v1`), frozen for the run, or `null` when none was stated. Additive: consumers
-  ignore fields they do not know. A ledger that rates a meeting must rate it by this value, never by
-  the account's plan at the end; `null` means the treatment is unresolved.
-- **An operator may configure several system targets.** Each receives the same envelope bytes,
-  signed with that target's own secret, and retries from its own queue; the `event_id` is the same
-  for every target.
+- **The admission's billing treatment.** When the deciding service stated one
+  (`service-authority.v1`), it is frozen in `data.meeting.data.service_authority.billing_treatment`;
+  the meeting block's shape is otherwise unchanged. A named system target (below) receives it as
+  `data.meeting.billing_treatment` (`metered` · `included` · `commitment`, or `null` when unstated);
+  a ledger rates a meeting by this value, never by the account's plan at the end.
+- **An operator may configure several system targets.** The default target receives the full
+  envelope. Each additional named target receives the same envelope shape reduced to an allow-list
+  (envelope frame; meeting id, user_id, platform, native_meeting_id, status, start/end time,
+  billing_treatment; provenance admitted/departed times, transcription provider/outcome, lifecycle
+  version) — never `meeting.data` — signed with that target's own secret and retried from its own
+  queue. The `event_id` is the same for every target.
 
 ## Shapes (`$defs`)
 - **`Envelope`** — `event_id · event_type · api_version · created_at · data`. The body POSTed is

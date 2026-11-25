@@ -727,7 +727,7 @@
    "key": "VEXA_SYSTEM_WEBHOOK_TARGETS",
    "class": "defaulted",
    "default": "(unset — only the VEXA_SYSTEM_WEBHOOK_URL target, if any)",
-   "description": "Credential-free JSON list of further operator-owned terminal callbacks, each {\"name\", \"url\", optional \"allow_private_http\" (bool), optional \"timeout_s\" (0 < n <= 60)}. Names match [a-z][a-z0-9-]{0,31}; 'default' is reserved. Each target gets the same signed meeting.completed / bot.failed envelopes with its own secret and its own retry, processing and dead-letter queues (webhook:system:<name>:*), delivered concurrently so one slow or failing target never delays another.",
+   "description": "Credential-free JSON list of further operator-owned terminal callbacks, each {\"name\", \"url\", optional \"allow_private_http\" (bool), optional \"timeout_s\" (0 < n <= 60)}. Names match [a-z][a-z0-9-]{0,31}; 'default' is reserved. Each target gets the signed meeting.completed / bot.failed envelope reduced to an allow-list (event_id/type/api_version/created_at; meeting id, user_id, platform, native_meeting_id, status, start/end time, billing_treatment; provenance admitted/departed times, transcription provider/outcome, lifecycle version; never meeting.data), with its own secret and its own retry, processing and dead-letter queues (webhook:system:<name>:*), delivered concurrently so one slow or failing target never delays another.",
    "targets": [
     "compose",
     "helm",

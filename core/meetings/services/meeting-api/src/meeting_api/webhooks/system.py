@@ -36,6 +36,66 @@ _TARGET_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}")
 _TARGET_KEYS = frozenset({"name", "url", "allow_private_http", "timeout_s"})
 
 
+# What a NAMED target (VEXA_SYSTEM_WEBHOOK_TARGETS) may receive. Everything else is dropped:
+# meeting.data in particular carries share-grant hashes, browser-session paths, viewer emails,
+# calendar invites, bot logs and screenshot pointers, none of which a ledger needs. The legacy
+# default target keeps the full body it has always had (the web app's contract).
+MINIMAL_ENVELOPE_FIELDS = ("event_id", "event_type", "api_version", "created_at")
+MINIMAL_MEETING_FIELDS = (
+    "id",
+    "user_id",
+    "platform",
+    "native_meeting_id",
+    "status",
+    "start_time",
+    "end_time",
+    "billing_treatment",
+)
+MINIMAL_PROVENANCE_FIELDS = (
+    "bot_admitted_at",
+    "bot_departed_at",
+    "transcription_provider",
+    "transcription_outcome",
+    "lifecycle_contract_version",
+)
+
+
+def _scalar(value: Any) -> Any:
+    """Keep only a plain scalar; anything structured is dropped, never passed through."""
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def minimal_terminal_envelope(envelope: dict) -> dict:
+    """Project a terminal webhook.v1 envelope onto the named-target allow-list.
+
+    Same envelope shape and the same ``event_id``; ``data`` holds only ``meeting`` with the
+    allow-listed fields and an allow-listed ``service_provenance`` (null when unresolved).
+    """
+    data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+    meeting = data.get("meeting") if isinstance(data.get("meeting"), dict) else {}
+    provenance = meeting.get("service_provenance")
+    projected_meeting = {key: _scalar(meeting.get(key)) for key in MINIMAL_MEETING_FIELDS}
+    if projected_meeting["billing_treatment"] is None:
+        # The full body keeps the admission record where it always was (meeting.data
+        # .service_authority); only this one value is lifted out of it for a named target.
+        meeting_data = meeting.get("data") if isinstance(meeting.get("data"), dict) else {}
+        authority = meeting_data.get("service_authority")
+        if isinstance(authority, dict):
+            projected_meeting["billing_treatment"] = _scalar(authority.get("billing_treatment"))
+    projected_meeting["service_provenance"] = (
+        {key: _scalar(provenance.get(key)) for key in MINIMAL_PROVENANCE_FIELDS}
+        if isinstance(provenance, dict)
+        else None
+    )
+    projected = {key: _scalar(envelope.get(key)) for key in MINIMAL_ENVELOPE_FIELDS}
+    projected["data"] = {"meeting": projected_meeting}
+    return projected
+
+
 def system_queue_keys(name: str = DEFAULT_TARGET_NAME) -> tuple[str, str, str]:
     """Return ``(retry, processing, dead_letter)`` Redis keys for one target.
 
@@ -120,6 +180,9 @@ class SystemWebhookSink:
             raise ValueError("system webhook secret is required")
 
         self.name = name
+        # Only the legacy target receives the full body. A named target always gets the
+        # allow-listed projection; there is deliberately no setting that widens it.
+        self.full_body = name == DEFAULT_TARGET_NAME
         self.url = url.strip()
         self.secret = secret.strip()
         self.transport = transport
@@ -147,7 +210,8 @@ class SystemWebhookSink:
             transport=self.transport,
             queue=self.queue,
             url=self.url,
-            envelope=envelope,
+            # The projection is also what a retry re-sends: the queue never holds more.
+            envelope=envelope if self.full_body else minimal_terminal_envelope(envelope),
             webhook_secret=self.secret,
             label=label,
             metadata={"scope": "operator-system"},
@@ -165,6 +229,9 @@ class SystemWebhookSink:
             self._redis,
             self.transport,
             now=now,
+            # A named target re-projects every stored entry before it is sent, re-queued or
+            # dead-lettered, so nothing queued by an older build can leak through a retry.
+            payload_filter=None if self.full_body else minimal_terminal_envelope,
             key=self.retry_key,
             processing_key=self.processing_key,
             dead_letter_key=self.dead_letter_key,

@@ -233,6 +233,7 @@ async def drain_retry_queue(
     key: str = RETRY_QUEUE_KEY,
     processing_key: str = PROCESSING_KEY,
     dead_letter_key: str = DEAD_LETTER_KEY,
+    payload_filter: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
 ) -> int:
     """One crash-safe worker sweep: process every READY entry once. Returns #processed.
 
@@ -275,6 +276,13 @@ async def drain_retry_queue(
             await redis.lrem(processing_key, 1, raw)  # corrupt — drop from processing
             processed += 1
             continue
+        if payload_filter is not None:
+            # Applied before ANY use: delivery, re-queue and dead-letter all see the filtered
+            # payload, and a not-yet-due entry goes back filtered too.
+            entry["payload"] = payload_filter(entry.get("payload") or {})
+            raw_requeue = json.dumps(entry)
+        else:
+            raw_requeue = raw
 
         # Stamp a lease clock + unique claim token so a crash leaves a reclaimable entry, and so the
         # LREM that finalizes this entry matches EXACTLY it (the just-claimed row is at head/index 0).
@@ -298,7 +306,7 @@ async def drain_retry_queue(
             # not due yet — return the ORIGINAL entry to the queue HEAD (LPUSH: we claim from the
             # tail via RPOPLPUSH, so a head re-queue is not re-popped within this same sweep).
             # LPUSH-before-LREM so a crash here duplicates rather than loses (deduped on event_id).
-            await redis.lpush(key, raw)
+            await redis.lpush(key, raw_requeue)
             await redis.lrem(processing_key, 1, stamped)
             continue
 

@@ -27,6 +27,7 @@ from meeting_api.webhooks import (
     build_envelope,
     RetryQueue,
     build_system_webhook_from_env,
+    minimal_terminal_envelope,
     run_system_drain_loop,
     sign_payload,
     system_queue_keys,
@@ -150,20 +151,21 @@ def test_nothing_configured_is_still_no_sink(monkeypatch, fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_each_target_gets_the_same_body_signed_with_its_own_secret(monkeypatch, fake_redis):
+async def test_each_target_gets_its_body_signed_with_its_own_secret(monkeypatch, fake_redis):
     _set_env(monkeypatch, targets=BRAIN_TARGETS, secrets=BRAIN_SECRETS)
     router = _Router()
     fanout = build_system_webhook_from_env(fake_redis, transport=router)
     assert isinstance(fanout, SystemWebhookFanout)
     assert [s.name for s in fanout.sinks] == ["default", "brain"]
 
-    results = await fanout.deliver(_envelope(), label="meeting:51")
+    envelope = _envelope()
+    results = await fanout.deliver(envelope, label="meeting:51")
     assert [(name, r.status) for name, r in results] == [
         ("default", "delivered"), ("brain", "delivered"),
     ]
     [legacy] = router.to(WEBAPP_URL)
     [brain] = router.to(BRAIN_URL)
-    assert brain["body"] == legacy["body"]
+    assert brain["body"] == json.dumps(minimal_terminal_envelope(envelope)).encode()
     assert json.loads(brain["body"])["event_id"] == "evt_" + "0" * 30 + "51"
     assert verify_signature(brain["body"], brain["headers"], BRAIN_SECRET)
     assert not verify_signature(brain["body"], brain["headers"], WEBAPP_SECRET)
@@ -273,6 +275,8 @@ async def test_an_exhausted_target_dead_letters_only_into_its_own_list(monkeypat
     assert await fake_redis.llen(SYSTEM_RETRY_QUEUE_KEY) == 0
     await fanout.drain(now=t0 + MAX_AGE_SECONDS + 1)
     assert await fake_redis.llen(BRAIN_DEAD) == 1
+    [dead] = await fake_redis.lrange(BRAIN_DEAD, 0, -1)
+    assert set(json.loads(dead)["payload"]["data"]) == {"meeting"}
     assert await fake_redis.llen(SYSTEM_DEAD_LETTER_KEY) == 0
     assert await fake_redis.llen(BRAIN_QUEUE) == 0
 
@@ -382,8 +386,12 @@ def test_lifecycle_completion_reaches_every_target_once():
 
     [legacy] = router.to(WEBAPP_URL)
     [brain] = router.to(BRAIN_URL)
-    assert legacy["body"] == brain["body"]
-    assert json.loads(legacy["body"])["event_type"] == "meeting.completed"
+    legacy_body = json.loads(legacy["body"])
+    brain_body = json.loads(brain["body"])
+    assert legacy_body["event_type"] == brain_body["event_type"] == "meeting.completed"
+    assert legacy_body["event_id"] == brain_body["event_id"]
+    assert "data" in legacy_body["data"]["meeting"]  # the web app keeps the full body
+    assert brain_body == minimal_terminal_envelope(legacy_body)
     assert verify_signature(brain["body"], brain["headers"], BRAIN_SECRET)
 
 
@@ -497,3 +505,221 @@ def test_a_slow_system_target_does_not_hold_up_the_customer_webhook():
     assert "meeting.completed" in customer.events
     # Under the old order the system send ran first and the customer waited 2 s behind it.
     assert system.released_by_customer is True
+
+
+# ── 7. per-target field allow-list (card 01a212de) ────────────────────────────────────────────
+
+_SENSITIVE = {
+    "share_grants": [{"token_hash": "sha256-SHARE-GRANT-HASH", "viewer_email": "viewer@example.com"}],
+    "browser_session": {"profile_path": "/var/lib/vexa/BROWSER-SESSION-PATH"},
+    "viewers": ["viewer2@example.com"],
+    "calendar_invite": "BEGIN:VCALENDAR RAW-INVITE",
+    "bot_logs": ["BOT-LOG-LINE"],
+    "join_screenshot": "s3://bucket/JOIN-SCREENSHOT.png",
+    "webhook_url": "https://customer.example/hook",
+}
+_SENSITIVE_MARKERS = (
+    "SHARE-GRANT-HASH", "viewer@example.com", "viewer2@example.com", "BROWSER-SESSION-PATH",
+    "RAW-INVITE", "BOT-LOG-LINE", "JOIN-SCREENSHOT", "customer.example",
+    "completion_reason", "constructed_meeting_url", "bot_outcome",
+)
+
+
+def _rich_envelope(event_type="meeting.completed"):
+    return build_envelope(
+        event_type,
+        {
+            "meeting": {
+                "id": 77,
+                "user_id": 17,
+                "platform": "google_meet",
+                "native_meeting_id": "abc-defg-hij",
+                "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
+                "status": "completed" if event_type == "meeting.completed" else "failed",
+                "completion_reason": "stopped",
+                "failure_stage": None,
+                "billing_treatment": "metered",
+                "service_provenance": {
+                    "bot_admitted_at": "2026-07-29T10:01:00Z",
+                    "bot_departed_at": "2026-07-29T10:12:00Z",
+                    "bot_outcome": "served",
+                    "transcription_provider": "vexa",
+                    "transcription_outcome": "served",
+                    "lifecycle_contract_version": "2026-07-28",
+                    "extra_future_field": "DROP-ME",
+                },
+                "start_time": "2026-07-29T10:00:00+00:00",
+                "end_time": "2026-07-29T10:12:00+00:00",
+                "data": dict(_SENSITIVE),
+                "created_at": "2026-07-29T09:59:00+00:00",
+                "updated_at": "2026-07-29T10:12:00+00:00",
+            },
+        },
+        event_id="evt_" + "7" * 32,
+    )
+
+
+def _golden_minimal(envelope):
+    return {
+        "event_id": "evt_" + "7" * 32,
+        "event_type": envelope["event_type"],
+        "api_version": envelope["api_version"],
+        "created_at": envelope["created_at"],
+        "data": {
+            "meeting": {
+                "id": 77,
+                "user_id": 17,
+                "platform": "google_meet",
+                "native_meeting_id": "abc-defg-hij",
+                "status": envelope["data"]["meeting"]["status"],
+                "start_time": "2026-07-29T10:00:00+00:00",
+                "end_time": "2026-07-29T10:12:00+00:00",
+                "billing_treatment": "metered",
+                "service_provenance": {
+                    "bot_admitted_at": "2026-07-29T10:01:00Z",
+                    "bot_departed_at": "2026-07-29T10:12:00Z",
+                    "transcription_provider": "vexa",
+                    "transcription_outcome": "served",
+                    "lifecycle_contract_version": "2026-07-28",
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", ["meeting.completed", "bot.failed"])
+async def test_golden_bodies_per_target(monkeypatch, fake_redis, event_type):
+    _set_env(monkeypatch, targets=BRAIN_TARGETS, secrets=BRAIN_SECRETS)
+    router = _Router()
+    fanout = build_system_webhook_from_env(fake_redis, transport=router)
+    envelope = _rich_envelope(event_type)
+    await fanout.deliver(envelope, label="meeting:77")
+
+    [legacy] = router.to(WEBAPP_URL)
+    [brain] = router.to(BRAIN_URL)
+    # default target: today's body, byte for byte (meeting.data included — the web app's contract)
+    assert legacy["body"] == json.dumps(envelope).encode()
+    # named target: exactly the allow-list, nothing else
+    assert json.loads(brain["body"]) == _golden_minimal(envelope)
+    assert brain["body"] == json.dumps(_golden_minimal(envelope)).encode()
+    for marker in _SENSITIVE_MARKERS + ("DROP-ME",):
+        assert marker.encode() not in brain["body"], marker
+    assert verify_signature(brain["body"], brain["headers"], BRAIN_SECRET)
+
+
+@pytest.mark.asyncio
+async def test_named_targets_retry_queue_holds_only_the_allow_list(monkeypatch, fake_redis):
+    _set_env(monkeypatch, targets=BRAIN_TARGETS, secrets=BRAIN_SECRETS)
+    router = _Router({BRAIN_URL: 503})
+    fanout = build_system_webhook_from_env(fake_redis, transport=router)
+    envelope = _rich_envelope()
+    await fanout.deliver(envelope, label="meeting:77")
+    [raw] = await fake_redis.lrange(BRAIN_QUEUE, 0, -1)
+    for marker in _SENSITIVE_MARKERS:
+        assert marker not in raw, marker
+    assert json.loads(raw)["payload"] == _golden_minimal(envelope)
+
+    router.codes[BRAIN_URL] = 200
+    await fanout.drain(now=time.time() + BACKOFF_SCHEDULE[0] + 1)
+    redelivered = router.to(BRAIN_URL)[-1]["body"]
+    assert json.loads(redelivered) == _golden_minimal(envelope)
+
+
+def test_structured_values_are_dropped_not_passed_through():
+    envelope = _rich_envelope()
+    envelope["data"]["meeting"]["status"] = {"nested": "BOT-LOG-LINE"}
+    envelope["data"]["meeting"]["user_id"] = True
+    envelope["data"]["meeting"]["service_provenance"]["transcription_outcome"] = ["x"]
+    projected = minimal_terminal_envelope(envelope)
+    meeting = projected["data"]["meeting"]
+    assert meeting["status"] is None
+    assert meeting["user_id"] is None
+    assert meeting["service_provenance"]["transcription_outcome"] is None
+    assert "BOT-LOG-LINE" not in json.dumps(projected)
+
+
+def test_unresolved_provenance_stays_null():
+    envelope = _rich_envelope()
+    envelope["data"]["meeting"]["service_provenance"] = None
+    assert minimal_terminal_envelope(envelope)["data"]["meeting"]["service_provenance"] is None
+
+
+def test_lifecycle_path_never_sends_meeting_data_to_a_named_target():
+    repo = InMemoryMeetingRepo()
+    meeting = asyncio.run(repo.create_meeting(
+        user_id=17, platform="google_meet", native_meeting_id="leak-check",
+        data=dict(_SENSITIVE),
+    ))
+    asyncio.run(repo.create_session(meeting_id=meeting["id"], session_uid="sess-leak"))
+    router = _Router()
+    fanout = SystemWebhookFanout([
+        SystemWebhookSink(url=WEBAPP_URL, secret=WEBAPP_SECRET, transport=router,
+                          allow_private_http=True),
+        SystemWebhookSink(name="brain", url=BRAIN_URL, secret=BRAIN_SECRET, transport=router),
+    ])
+    client = TestClient(
+        create_app(open_callbacks=True, meeting_repo=repo, system_webhook_sink=fanout),
+    )
+    for status, ts in (("joining", "10:00"), ("active", "10:01"), ("completed", "10:02")):
+        body = {"connection_id": "sess-leak", "status": status,
+                "timestamp": f"2026-07-29T{ts}:00.000Z"}
+        if status == "completed":
+            body["completion_reason"] = "stopped"
+        assert client.post("/bots/internal/callback/lifecycle", json=body).status_code == 200
+    [legacy] = router.to(WEBAPP_URL)
+    [brain] = router.to(BRAIN_URL)
+    assert b"BOT-LOG-LINE" in legacy["body"]  # unchanged web app body
+    for marker in ("SHARE-GRANT-HASH", "viewer@example.com", "BROWSER-SESSION-PATH",
+                   "RAW-INVITE", "BOT-LOG-LINE", "JOIN-SCREENSHOT", "customer.example"):
+        assert marker.encode() not in brain["body"], marker
+    meeting_block = json.loads(brain["body"])["data"]["meeting"]
+    assert set(meeting_block) == {
+        "id", "user_id", "platform", "native_meeting_id", "status", "start_time",
+        "end_time", "billing_treatment", "service_provenance",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_full_entry_left_by_an_older_build_is_reprojected_before_any_use(fake_redis):
+    """An entry queued before the allow-list existed carries full meeting.data. The named target's
+    drain must project it again before it is sent, re-queued or dead-lettered."""
+    router = _Router()
+    brain = SystemWebhookSink(name="brain", url=BRAIN_URL, secret=BRAIN_SECRET,
+                              transport=router, redis=fake_redis)
+    envelope = _rich_envelope()
+    t0 = time.time()
+    queue = RetryQueue(fake_redis, key=brain.retry_key)
+    await queue.enqueue(url=BRAIN_URL, envelope=envelope, webhook_secret=BRAIN_SECRET,
+                        now=t0 - BACKOFF_SCHEDULE[0] - 1)            # due: delivered
+    await queue.enqueue(url=BRAIN_URL, envelope=envelope, webhook_secret=BRAIN_SECRET, now=t0)
+    await queue.enqueue(url=BRAIN_URL, envelope=envelope, webhook_secret=BRAIN_SECRET,
+                        now=t0 - MAX_AGE_SECONDS - 10)               # aged out: dead-lettered
+
+    await brain.drain(now=t0)
+
+    [sent] = router.to(BRAIN_URL)
+    assert json.loads(sent["body"]) == _golden_minimal(envelope)
+    assert verify_signature(sent["body"], sent["headers"], BRAIN_SECRET)
+    stored = await fake_redis.lrange(brain.retry_key, 0, -1) + await fake_redis.lrange(
+        brain.dead_letter_key, 0, -1)
+    assert len(stored) == 2
+    for raw in stored:
+        for marker in _SENSITIVE_MARKERS:
+            assert marker not in raw, marker
+        assert json.loads(raw)["payload"] == _golden_minimal(envelope)
+
+
+@pytest.mark.asyncio
+async def test_the_default_target_drain_still_resends_its_stored_body_unchanged(fake_redis):
+    router = _Router()
+    webapp = SystemWebhookSink(url=WEBAPP_URL, secret=WEBAPP_SECRET, transport=router,
+                               redis=fake_redis, allow_private_http=True)
+    envelope = _rich_envelope()
+    await RetryQueue(fake_redis, key=webapp.retry_key).enqueue(
+        url=WEBAPP_URL, envelope=envelope, webhook_secret=WEBAPP_SECRET,
+        now=time.time() - BACKOFF_SCHEDULE[0] - 1,
+    )
+    await webapp.drain()
+    [sent] = router.to(WEBAPP_URL)
+    assert sent["body"] == json.dumps(envelope).encode()

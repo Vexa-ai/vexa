@@ -19,9 +19,9 @@ unavailable, never an advisory denial that leaves paid work running.
 An allowed decision may carry an optional `billing_treatment`
 (`metered` · `included` · `commitment`): how the deciding service bills the
 service it admits. The consumer never interprets it. It freezes the admission's
-value on the meeting (a continuation never changes it) and reports it on the
-terminal system webhook (`webhook.v1` `data.meeting.billing_treatment`), so a
-downstream ledger rates a meeting by its admission. A value the consumer does
+value in the meeting's admission record (a continuation never changes it), and
+a named operator system target receives it as `data.meeting.billing_treatment`,
+so a downstream ledger rates a meeting by its admission. A value the consumer does
 not know is ignored (reported as absent), never a reason to refuse service. A
 denied decision carries none.
 

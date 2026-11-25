@@ -50,6 +50,7 @@ from .system import (
     SystemWebhookFanout,
     SystemWebhookSink,
     build_system_webhook_from_env,
+    minimal_terminal_envelope,
     run_system_drain_loop,
     system_queue_keys,
     system_target_sinks,
@@ -84,5 +85,6 @@ __all__ = [
     "build_system_webhook_from_env",
     "system_queue_keys",
     "run_system_drain_loop",
+    "minimal_terminal_envelope",
     "system_target_sinks",
 ]
