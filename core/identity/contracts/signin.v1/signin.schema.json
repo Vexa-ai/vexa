@@ -139,6 +139,27 @@
       "additionalProperties": false,
       "required": ["bound"],
       "properties": { "bound": { "enum": ["first", "same"], "description": "first: this sign-in bound the provider; same: it was already bound to this subject." } }
+    },
+    "ConnectRequest": {
+      "description": "POST /connect — a verified sign-in asks for its Vexa user and that user's own key. The raw ID token is the only credential; an email is never a parameter. 401 when the token does not verify (issuer keys, issuer, expiry, an audience in VEXA_CONNECT_GOOGLE_CLIENT_IDS) or its email is not verified; 429 over the cap for one token subject; 403 when the address is not admitted; 409 when the account is bound to another identity of that provider. Nothing is created on any of them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "id_token"],
+      "properties": {
+        "provider": { "enum": ["google"] },
+        "id_token": { "type": "string", "minLength": 1, "maxLength": 16384 }
+      }
+    },
+    "ConnectResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_id", "key", "key_expires_at", "bound"],
+      "properties": {
+        "user_id": { "type": "integer", "minimum": 1 },
+        "key": { "type": "string", "description": "the user's own key, answered this once; a new connect ends the earlier one" },
+        "key_expires_at": { "type": "string", "description": "the key's end time, UTC, ISO 8601" },
+        "bound": { "enum": ["first", "same"], "description": "first: this connect bound the provider subject to the account; same: it was already bound to it." }
+      }
     }
   }
 }
