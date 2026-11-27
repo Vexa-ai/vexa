@@ -348,6 +348,13 @@
    "description": "people's photos (app/idp_tokens.py): the Google client id the terminal signs people in with; a sign-in's ID token must name it as its audience before its `picture` is used. The same value as the terminal's."
   },
   {
+   "key": "VEXA_CONNECT_GOOGLE_CLIENT_IDS",
+   "class": "defaulted",
+   "default": "(unset \u2014 the connect route accepts no Google sign-in)",
+   "targets": ["compose", "helm"],
+   "description": "the connect route (app/connect.py, POST /connect): the Google client ids, comma-separated, whose sign-in ID tokens it accepts as an audience. The operator's to set; for the brain, the client id of its Google sign-in Connection."
+  },
+  {
    "key": "VEXA_OIDC_ISSUER",
    "class": "defaulted",
    "default": "(unset \u2014 no OIDC provider photo)",
