@@ -351,7 +351,7 @@
    "key": "VEXA_CONNECT_GOOGLE_CLIENT_IDS",
    "class": "defaulted",
    "default": "(unset \u2014 the connect route accepts no Google sign-in)",
-   "targets": ["compose", "helm"],
+   "targets": [],
    "description": "the connect route (app/connect.py, POST /connect): the Google client ids, comma-separated, whose sign-in ID tokens it accepts as an audience. The operator's to set; for the brain, the client id of its Google sign-in Connection."
   },
   {
