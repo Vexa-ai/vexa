@@ -35,6 +35,8 @@ ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES
 LEEWAY_S = 60
 KEYS_TTL_S = 3600.0
 MAX_DOC_BYTES = 256 * 1024
+#: The connect route's audiences (``app/connect.py``), the operator's to set (config.v1).
+CONNECT_GOOGLE_CLIENT_IDS = "VEXA_CONNECT_GOOGLE_CLIENT_IDS"
 
 
 class Invalid(Exception):
@@ -45,11 +47,19 @@ def _strip(u: str) -> str:
     return (u or "").strip().rstrip("/")
 
 
-def issuer_config(provider: str) -> Optional[dict]:
-    """``{"issuers", "audience", "keys"|"discovery"}`` for a provider, or None when unconfigured."""
+def issuer_config(provider: str, connect: bool = False) -> Optional[dict]:
+    """``{"issuers", "audience", "keys"|"discovery"}`` for a provider, or None when unconfigured.
+
+    ``connect`` asks for the connect route's audiences (``app/connect.py``): the Google client ids of
+    the sign-ins allowed to connect, ``VEXA_CONNECT_GOOGLE_CLIENT_IDS``, comma-separated. Any one of
+    them is accepted; unset, nothing verifies. Every other caller keeps the one audience, OUR client."""
     if provider == "google":
-        aud = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
+        aud: Any = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
+        if connect:
+            aud = [x.strip() for x in (os.getenv(CONNECT_GOOGLE_CLIENT_IDS) or "").split(",") if x.strip()]
         return {"issuers": list(GOOGLE_ISSUERS), "audience": aud, "keys": GOOGLE_KEYS} if aud else None
+    if connect:
+        return None
     if provider == "oidc":
         iss = _strip(os.getenv("VEXA_OIDC_ISSUER") or "")
         aud = (os.getenv("VEXA_OIDC_CLIENT_ID") or "").strip()
@@ -129,12 +139,13 @@ async def _jwk(cfg: dict, kid: str) -> dict:
     raise Invalid("the token was not signed with one of the issuer's keys")
 
 
-async def verified_claims(provider: str, id_token: str) -> dict:
+async def verified_claims(provider: str, id_token: str, connect: bool = False) -> dict:
     """The claims of ``id_token`` once it is proven to be ``provider``'s, for OUR client, unexpired.
+    With ``connect``, for one of the connect route's clients instead (:func:`issuer_config`).
     Raises :class:`Invalid` otherwise."""
     import jwt
 
-    cfg = issuer_config(provider)
+    cfg = issuer_config(provider, connect)
     if cfg is None:
         raise Invalid(f"{provider} sign-in is not configured here")
     token = (id_token or "").strip()
