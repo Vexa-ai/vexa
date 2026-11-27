@@ -2,7 +2,7 @@
 
 The internal wire between the terminal's server (every sign-in door) and admin-api, which holds every
 input and decides (`app/signin_allow.py`, `app/claim_code.py`). The terminal asks and obeys; it holds
-no list of its own. Internal tier only (`X-Internal-Secret`).
+no list of its own. Internal tier only (`X-Internal-Secret`), except `POST /connect`, which takes a raw ID token and no secret.
 
 | Route | Request | Response |
 |---|---|---|
@@ -12,6 +12,7 @@ no list of its own. Internal tier only (`X-Internal-Secret`).
 | `GET /internal/instance` | — | `InstanceState` |
 | `POST /internal/signin-links/redeem` | `SigninLinkRedeemRequest` | `SigninLinkRedeemResponse` (200, the first time); `409` already redeemed or expired; `503` the record could not be written |
 | `PUT /internal/users/{id}/provider-subject` | `ProviderSubjectBindRequest` | `ProviderSubjectBindResponse` (200); `409` the account is bound to another identity of that provider; `404` unknown account |
+| `POST /connect` | `ConnectRequest` | `ConnectResponse` (200); `401` the token did not verify or its email is not verified; `429` too many connects for one sign-in; `403` not admitted; `409` the account is bound to another identity of that provider |
 
 **The reason vocabularies are the contract.** `AdmittedReason`, `RefusedReason` and `ClaimReason`
 are generated into both languages by `gen.mjs` — admin-api's `app/signin_wire.py` and the terminal's
