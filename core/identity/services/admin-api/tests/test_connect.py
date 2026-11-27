@@ -384,3 +384,19 @@ def _rows_exec(pg_url, sql, **params):
             conn.execute(text(sql), params)
     finally:
         engine.dispose()
+
+
+def test_the_same_token_respelled_is_still_used(client, pg_url):
+    """Re-review 179468: PyJWT tolerates added padding, so `token + '=='` verified and hashed apart."""
+    token = id_token()
+    first = connect(client, token)
+    assert first.status_code == 200, first.text
+    uid = first.json()["user_id"]
+    before = _keys(pg_url, uid)
+    head, payload, sig = token.split(".")
+    respelled = [token + "==", f"{head}.{payload}.{sig}==", f"{head}==.{payload}.{sig}",
+                 f"{head}.{payload}=.{sig}", f"{head}.{payload}.{sig[:-1]}" + ("A" if sig[-1] != "A" else "Q")]
+    for t in respelled:
+        r = connect(client, t)
+        assert r.status_code == 401, (t[-6:], r.status_code, r.text)
+    assert _keys(pg_url, uid) == before, "no key ended, none issued"

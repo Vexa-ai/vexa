@@ -78,6 +78,23 @@ def issuer_config(provider: str, connect: bool = False) -> Optional[dict]:
     return None
 
 
+_B64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def canonical_segment(seg: str) -> bool:
+    """Is ``seg`` base64url in its one canonical spelling: no padding, no characters outside the
+    alphabet, and no bits set past the last whole byte (it re-encodes to itself)?"""
+    import base64
+
+    if not seg or not _B64URL_RE.match(seg) or len(seg) % 4 == 1:
+        return False
+    try:
+        raw = base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4))
+    except (ValueError, TypeError):
+        return False
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode() == seg
+
+
 def connect_client_ids() -> list:
     """``VEXA_CONNECT_GOOGLE_CLIENT_IDS`` as a list — or [] (nothing verifies) when unset, or when any
     entry is not a plausible Google client id."""
@@ -174,6 +191,10 @@ async def verified_claims(provider: str, id_token: str, connect: bool = False) -
     token = (id_token or "").strip()
     if token.count(".") != 2 or len(token) > 16384:
         raise Invalid("not a signed token")
+    if connect and not all(canonical_segment(seg) for seg in token.split(".")):
+        # One token, one spelling: base64url with no `=` padding and no stray bits, so the same
+        # signed token cannot be sent again as different text (connect.py keeps each token once).
+        raise Invalid("not a canonical signed token")
     try:
         header = jwt.get_unverified_header(token)
     except jwt.PyJWTError:

@@ -112,14 +112,16 @@ async def _take_rate(subject: str) -> bool:
 
 
 async def _spend(id_token: str, claims: dict) -> bool:
-    """Record this ID token as used; False when it already was. Raises on a store fault. Only a hash
-    of the token is kept, never the token."""
+    """Record this ID token as used; False when it already was. Raises on a store fault. Keyed on
+    what the signature covers (the canonical ``header.payload`` signing input), so another spelling of
+    the signature cannot make the same token new; only a hash is kept, never the token."""
     try:
         exp = float(claims.get("exp"))
     except (TypeError, ValueError):
         exp = time.time()
     ttl = max(1, int(exp - time.time()) + idp_tokens.LEEWAY_S)
-    digest = hashlib.sha256(id_token.strip().encode()).hexdigest()
+    signing_input = id_token.strip().rsplit(".", 1)[0]
+    digest = hashlib.sha256(signing_input.encode()).hexdigest()
     return bool(await signin_links._redis().set(USED_PREFIX + digest, "1", nx=True, ex=ttl))
 
 
