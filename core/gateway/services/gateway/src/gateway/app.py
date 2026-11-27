@@ -131,10 +131,12 @@ CARRIED_DOMAINS: FrozenSet[str] = frozenset(_ASSEMBLED.domains)
 ROUTE_SCOPES: Dict[Tuple[str, str], FrozenSet[str]] = dict(_ASSEMBLED.scopes)
 
 # The routes that carry NO scope requirement, declared explicitly so "no entry" can mean "denied"
-# everywhere else. Both are identity-only and forward nothing downstream: /health is the LB probe
-# (unauthenticated by design) and /auth/me is "who is this key" — a browser-only key must be able
-# to learn that it is a browser-only key. They are the EDGE's own two routes, and the only ones it
-# declares for itself (`core/gateway/services/gateway/routes.v1.json`).
+# everywhere else. The EDGE's own three are identity-only and forward nothing downstream: /health is
+# the LB probe (unauthenticated by design), /auth/me is "who is this key" — a browser-only key must be
+# able to learn that it is a browser-only key — and /internal/mcp/taint; they are the only ones it
+# declares for itself (`core/gateway/services/gateway/routes.v1.json`). The one row another domain
+# declares with no scope is identity's `POST /connect`, the one route forwarded with NO key: its body's
+# raw ID token is the credential, and identity verifies it (`_forward_no_key` below).
 UNSCOPED_ROUTES: FrozenSet[Tuple[str, str]] = frozenset(_ASSEMBLED.unscoped)
 
 
@@ -218,6 +220,12 @@ _DEFAULT_AGENT_API_URL = "http://agent-api"
 # The identity control plane (admin-api): the self-serve /user/webhook config lives there
 # (writes to user.data JSONB — the same blob /internal/validate reads the webhook config from).
 _DEFAULT_ADMIN_API_URL = "http://admin-api"
+
+# POST /connect, the one route forwarded with no key (`_forward_no_key`): its body is one ID token
+# (signin.v1 ConnectRequest caps the token at 16384 characters), and calls from one address are capped.
+CONNECT_MAX_BODY_BYTES = 32 * 1024
+CONNECT_BURST = 10
+CONNECT_REFILL_PER_SEC = 10 / 60
 # The MCP service (streamable-HTTP transport at ``/mcp``). Fronted at the gateway edge so an MCP
 # client points at the SAME authenticated front door as every other Vexa client.
 _DEFAULT_MCP_URL = "http://mcp:8010"
@@ -310,6 +318,7 @@ def create_app(
     vnc_connect=None,
     agent_allow: Optional[str] = None,
     taint_marker=None,
+    connect_limiter=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
 
@@ -324,6 +333,8 @@ def create_app(
                       ``None`` and forward plain headers.
     ``agent_allow`` — the people the agent tier is enabled for (`agent_admission.py`); ``None`` reads
                       ``VEXA_AGENT_ALLOW`` from the environment.
+    ``connect_limiter`` — the cap for each caller address on ``POST /connect`` (a ``PerUserRateLimiter``
+                      keyed by address); ``None`` is CONNECT_BURST calls refilled at CONNECT_REFILL_PER_SEC.
     ``vnc_connect`` — opens the upstream websocket of a bot-account sign-in session's live view
                       (``vnc_relay.py``); ``None`` is the ``websockets`` client, a test injects a fake.
     """
@@ -1109,6 +1120,61 @@ def create_app(
     # no entry at all, and "no entry" meant "no check" (sweep finding B2).
     def _admin(path: str) -> str:
         return f"{admin_api_url}{path}"
+
+    # ---- POST /connect — the ONE route forwarded with no key (identity's `app/connect.py`). A verified
+    # sign-in elsewhere gets its Vexa user and that user's own key. There is no key to resolve: the raw
+    # ID token in the body is the only credential, and identity verifies it. So this never goes through
+    # `_forward`, whose `_authorize` refuses a call with no key. The edge caps the body and the calls
+    # from each address, strips every header a client may not set (and any key: this route takes none),
+    # adds NO identity header, and passes the answer on unchanged.
+    from .ratelimit import PerUserRateLimiter  # noqa: PLC0415
+    _connect_limiter = connect_limiter if connect_limiter is not None else PerUserRateLimiter(
+        capacity=CONNECT_BURST, refill_per_sec=CONNECT_REFILL_PER_SEC)
+    _connect_guard: list = []
+
+    def _connect_address(request: Request) -> str:
+        """The caller's address, through the trusted proxies the operator names (GUARD_TRUSTED_PROXIES),
+        exactly as the edge guard resolves it — a spoofed X-Forwarded-For from anyone else is ignored."""
+        from .edge_guard import build_guard_config, resolve_ws_client_ip  # noqa: PLC0415
+        if not _connect_guard:
+            _connect_guard.append(build_guard_config())
+        return resolve_ws_client_ip(request, _connect_guard[0])
+
+    def _connect_refused(status_code: int, detail: str, headers: Optional[dict] = None) -> Response:
+        return Response(content=json.dumps({"detail": detail}), status_code=status_code,
+                        media_type="application/json", headers=headers)
+
+    async def _forward_no_key(method: str, url: str, request: Request) -> Response:
+        declared = request.headers.get("content-length")
+        if declared is not None and declared.isdigit() and int(declared) > CONNECT_MAX_BODY_BYTES:
+            return _connect_refused(413, f"request body is larger than {CONNECT_MAX_BODY_BYTES} bytes")
+        if not _connect_limiter.allow(_connect_address(request)):
+            return _connect_refused(429, "Rate limit exceeded", {"Retry-After": "6"})
+        content = await request.body()
+        if len(content) > CONNECT_MAX_BODY_BYTES:
+            return _connect_refused(413, f"request body is larger than {CONNECT_MAX_BODY_BYTES} bytes")
+        if not content.strip():
+            return _connect_refused(400, "a body is required")
+        excluded = {"host", "content-length", "transfer-encoding", "x-api-key", "authorization", "cookie"}
+        headers = {k.lower(): v for k, v in request.headers.items()
+                   if k.lower() not in excluded and not _is_authority_header(k)}
+        headers[TRACE_HEADER] = get_trace_id() or ""
+        try:
+            resp = await downstream.request(method, url, headers=headers, content=content)
+        except httpx.InvalidURL:
+            return invalid_path_param_response()
+        except httpx.TimeoutException:
+            return _upstream_fault(url, None)
+        except httpx.RequestError as e:
+            return _upstream_fault(url, e)
+        log_event("downstream_forwarded", audience="system", level="debug", span="proxy",
+                  fields={"method": method, "path": url, "downstream_status": resp.status_code})
+        return Response(content=resp.content, status_code=resp.status_code,
+                        media_type=resp.headers.get("content-type", "application/json"))
+
+    @app.post("/connect")
+    async def connect(request: Request):
+        return await _forward_no_key("POST", _admin("/connect"), request)
 
     @app.put("/user/webhook")
     async def set_user_webhook(request: Request):
