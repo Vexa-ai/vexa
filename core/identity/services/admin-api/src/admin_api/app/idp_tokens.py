@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -37,6 +38,13 @@ KEYS_TTL_S = 3600.0
 MAX_DOC_BYTES = 256 * 1024
 #: The connect route's audiences (``app/connect.py``), the operator's to set (config.v1).
 CONNECT_GOOGLE_CLIENT_IDS = "VEXA_CONNECT_GOOGLE_CLIENT_IDS"
+#: What a Google OAuth client id looks like. One entry of the connect list that is not is a
+#: misconfiguration, and the whole list is refused (nothing verifies) rather than guessed at.
+GOOGLE_CLIENT_ID_RE = re.compile(r"^[0-9]{6,32}-[a-z0-9]{8,64}\.apps\.googleusercontent\.com$")
+#: The connect route takes only a FRESH sign-in: issued no more than this many seconds ago.
+CONNECT_MAX_AGE_S = 300
+#: A token naming a kid the cached keys do not hold re-reads the issuer's keys at most this often.
+KEYS_MISS_REFETCH_S = 60.0
 
 
 class Invalid(Exception):
@@ -56,7 +64,7 @@ def issuer_config(provider: str, connect: bool = False) -> Optional[dict]:
     if provider == "google":
         aud: Any = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
         if connect:
-            aud = [x.strip() for x in (os.getenv(CONNECT_GOOGLE_CLIENT_IDS) or "").split(",") if x.strip()]
+            aud = connect_client_ids()
         return {"issuers": list(GOOGLE_ISSUERS), "audience": aud, "keys": GOOGLE_KEYS} if aud else None
     if connect:
         return None
@@ -68,6 +76,13 @@ def issuer_config(provider: str, connect: bool = False) -> Optional[dict]:
         return {"issuers": [iss, iss + "/"], "audience": aud,
                 "discovery": f"{iss}/.well-known/openid-configuration"}
     return None
+
+
+def connect_client_ids() -> list:
+    """``VEXA_CONNECT_GOOGLE_CLIENT_IDS`` as a list — or [] (nothing verifies) when unset, or when any
+    entry is not a plausible Google client id."""
+    ids = [x.strip() for x in (os.getenv(CONNECT_GOOGLE_CLIENT_IDS) or "").split(",") if x.strip()]
+    return ids if ids and all(GOOGLE_CLIENT_ID_RE.match(x) for x in ids) else []
 
 
 def bound_subject(provider: str, claims: dict) -> str:
@@ -106,10 +121,12 @@ async def _http_json(url: str) -> Any:
 #: The seam tests replace.
 _fetch_json: Callable[[str], Awaitable[Any]] = _http_json
 _keys: Dict[str, tuple] = {}         # keys url -> (expires, {kid: jwk})
+_fetched_at: Dict[str, float] = {}   # keys url -> when its keys were last read
 
 
 def reset() -> None:
     _keys.clear()
+    _fetched_at.clear()
 
 
 async def _keys_url(cfg: dict) -> str:
@@ -126,12 +143,18 @@ async def _jwk(cfg: dict, kid: str) -> dict:
     url = await _keys_url(cfg)
     for attempt in range(2):
         hit = _keys.get(url)
-        if attempt == 0 and hit and hit[0] > time.monotonic():
+        now = time.monotonic()
+        if attempt == 0 and hit and hit[0] > now:
             keys = hit[1]
+        elif attempt == 1 and hit and now - _fetched_at.get(url, 0.0) < KEYS_MISS_REFETCH_S:
+            # An unknown kid re-reads the keys at most once a minute: a stream of made-up kids is
+            # not a stream of fetches to the issuer.
+            break
         else:
             doc = await _fetch_json(url)
             keys = {str(k.get("kid") or ""): k for k in (doc or {}).get("keys") or [] if isinstance(k, dict)}
             _keys[url] = (time.monotonic() + KEYS_TTL_S, keys)
+            _fetched_at[url] = time.monotonic()
         if kid in keys:
             return keys[kid]
         if len(keys) == 1 and not kid:
@@ -165,4 +188,16 @@ async def verified_claims(provider: str, id_token: str, connect: bool = False) -
                             leeway=LEEWAY_S, options={"require": ["exp", "iat", "iss", "aud", "sub"]})
     except (jwt.PyJWTError, ValueError, TypeError) as e:
         raise Invalid(f"the token did not verify ({type(e).__name__})") from None
-    return claims if isinstance(claims, dict) else {}
+    claims = claims if isinstance(claims, dict) else {}
+    if connect:
+        # A FRESH sign-in only, and when Google names the party the token was issued to (azp), it is
+        # one of the listed clients too.
+        try:
+            iat = float(claims.get("iat"))
+        except (TypeError, ValueError):
+            raise Invalid("the token has no issue time") from None
+        if iat < time.time() - CONNECT_MAX_AGE_S:
+            raise Invalid("the sign-in is not fresh")
+        if "azp" in claims and claims.get("azp") not in cfg["audience"]:
+            raise Invalid("the token was issued to another client")
+    return claims

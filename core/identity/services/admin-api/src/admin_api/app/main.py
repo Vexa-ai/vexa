@@ -50,7 +50,6 @@ from . import photo_storage as photo_storage_mod
 from . import profile_doors as profile_doors_mod
 from . import orgs as orgs_mod
 from . import claim_code
-from . import claim_code as claim_code_mod
 from . import admin_account
 from . import signin_allow
 from . import signin_wire
@@ -599,6 +598,19 @@ async def issue_admin_claim_code(db: AsyncSession, *, host: str, now: datetime,
     return code, "issued"
 
 
+def mint_key(db: AsyncSession, *, user_id: int, scopes: List[str], name: Optional[str],
+             expires_at: Optional[datetime], created_at: Optional[datetime] = None) -> APIToken:
+    """THE ONE PLACE A KEY IS MINTED — `POST /admin/users/{id}/tokens` and `POST /connect`
+    (app/connect.py) both call it. One `api_tokens` row, its value prefixed by its first scope, added
+    to the caller's transaction (the caller commits). Always a KEY (D13): nothing here reaches
+    `kind`; a session is minted only by `POST /internal/sessions` (app/sessions.py)."""
+    tok = APIToken(token=generate_prefixed_token(scopes[0]), user_id=user_id, scopes=list(scopes),
+                   name=name, created_at=created_at or datetime.utcnow(), expires_at=expires_at,
+                   kind="key")
+    db.add(tok)
+    return tok
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Vexa Admin API (v0.12)")
     # logevent.v1 trace (#1783): read/mint X-Trace-Id, bind it, echo it, log received/completed.
@@ -887,16 +899,10 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=f"the key name {sessions_mod.DEFAULT_NAME!r} is reserved for sign-in")
         token_expires_in = body.expires_in if body.expires_in is not None else expires_in
-        token_value = generate_prefixed_token(scope_list[0])
         expires_at = None
         if token_expires_in is not None and token_expires_in > 0:
             expires_at = datetime.utcnow() + timedelta(seconds=token_expires_in)
-        # Always a KEY (D13): this door has no parameter that reaches `kind`; a session is minted
-        # only by `POST /internal/sessions` (app/sessions.py).
-        tok = APIToken(token=token_value, user_id=user_id, scopes=scope_list,
-                       name=token_name, created_at=datetime.utcnow(), expires_at=expires_at,
-                       kind="key")
-        db.add(tok)
+        tok = mint_key(db, user_id=user_id, scopes=scope_list, name=token_name, expires_at=expires_at)
         await db.commit()
         await db.refresh(tok)
         return TokenResponse.model_validate(tok)
@@ -1432,11 +1438,11 @@ def create_app() -> FastAPI:
         here, which is exactly the enumeration the sign-in form is built not to reveal, so this door
         is never open without the secret, dev mode included."""
         check_internal_no_dev_bypass(request)
-        admitted, why = await _admission(payload.email, db, claim_code=payload.claim_code,
+        admitted, why = await _admission(payload.email, db, claim_code_value=payload.claim_code,
                                          via_invite=bool(payload.via_invite))
         return {"admitted": admitted, "why": why}
 
-    async def _admission(email: str, db: AsyncSession, *, claim_code: Optional[str] = None,
+    async def _admission(email: str, db: AsyncSession, *, claim_code_value: Optional[str] = None,
                          via_invite: bool = False) -> "tuple[bool, str]":
         """(admitted, why) for this address — THE decision every sign-in door asks, here and from
         `POST /connect` (app/connect.py, which presents no claim code and no invite)."""
@@ -1455,7 +1461,7 @@ def create_app() -> FastAPI:
         if user is None and not admins and not allow:
             admin_claimed_now = await _admin_exists(db)
             if not admin_claimed_now:
-                code_ok = claim_code_mod.matches(claim_code, await _claim_record(db))
+                code_ok = claim_code.matches(claim_code_value, await _claim_record(db))
         return signin_allow.decide(
             email,
             user_exists=user is not None,
@@ -1476,7 +1482,8 @@ def create_app() -> FastAPI:
         return made.id
 
     app.include_router(connect_mod.build_router(find_or_create=_connect_find_or_create,
-                                                admission=_admission, load_user=_load_user))
+                                                admission=_admission, load_user=_load_user,
+                                                mint_key=mint_key))
 
     @app.post("/internal/admin-claim/check", include_in_schema=False,
               response_model=ClaimCodeCheckResponse)
