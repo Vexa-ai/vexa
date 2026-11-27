@@ -100,3 +100,27 @@ def test_a_client_cannot_set_an_authority_header_on_connect():
     assert client.post("/connect", json=BODY, headers=spoof).status_code == 200
     sent = {k.lower() for k in down.last["headers"]}
     assert not sent & {k.lower() for k in spoof}, sent & {k.lower() for k in spoof}
+
+
+def test_a_chunked_body_over_the_cap_is_refused_while_it_streams_whatever_its_type():
+    client, down = _client()
+    sent = []
+
+    def chunks():
+        for _ in range(64):            # 64 x 4 KiB = 256 KiB, eight times the cap, no Content-Length
+            sent.append(1)
+            yield b"x" * 4096
+
+    r = client.post("/connect", content=chunks(), headers={"content-type": "application/octet-stream"})
+    assert r.status_code == 413
+    assert down.last is None
+
+
+def test_the_address_cap_keeps_a_bounded_memory():
+    now = [0.0]
+    cap = app_module.AddressCap(capacity=2, refill_per_sec=0, max_addresses=100, clock=lambda: now[0])
+    for i in range(10_000):
+        cap.allow(f"2001:db8::{i:x}")
+    assert len(cap) == 100, "rotating addresses cannot grow the cap's memory"
+    assert cap.allow("203.0.113.1") and cap.allow("203.0.113.1") and not cap.allow("203.0.113.1")
+
