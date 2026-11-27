@@ -226,6 +226,45 @@ _DEFAULT_ADMIN_API_URL = "http://admin-api"
 CONNECT_MAX_BODY_BYTES = 32 * 1024
 CONNECT_BURST = 10
 CONNECT_REFILL_PER_SEC = 10 / 60
+#: The most caller addresses the cap remembers at once; past it the least recently seen is forgotten
+#: (an address that comes back starts a fresh bucket), so rotating addresses cannot grow memory.
+CONNECT_MAX_ADDRESSES = 10000
+
+
+class AddressCap:
+    """A token bucket for each caller address, with a bounded memory: at most ``max_addresses``
+    buckets, least recently used evicted first. ``allow(address)`` takes one token."""
+
+    def __init__(self, *, capacity: float = CONNECT_BURST, refill_per_sec: float = CONNECT_REFILL_PER_SEC,
+                 max_addresses: int = CONNECT_MAX_ADDRESSES, clock=None):
+        import time as _time
+        from collections import OrderedDict
+
+        if capacity <= 0 or refill_per_sec < 0 or max_addresses < 1:
+            raise ValueError("capacity > 0, refill_per_sec >= 0 and max_addresses >= 1")
+        self._capacity = float(capacity)
+        self._refill = float(refill_per_sec)
+        self._max = int(max_addresses)
+        self._clock = clock or _time.monotonic
+        self._buckets: "OrderedDict[str, list]" = OrderedDict()   # address -> [tokens, last]
+
+    def __len__(self) -> int:
+        return len(self._buckets)
+
+    def allow(self, address: str) -> bool:
+        now = self._clock()
+        b = self._buckets.pop(address, None)
+        if b is None:
+            b = [self._capacity, now]
+        b[0] = min(self._capacity, b[0] + (now - b[1]) * self._refill)
+        b[1] = now
+        ok = b[0] >= 1.0
+        if ok:
+            b[0] -= 1.0
+        self._buckets[address] = b
+        while len(self._buckets) > self._max:
+            self._buckets.popitem(last=False)
+        return ok
 # The MCP service (streamable-HTTP transport at ``/mcp``). Fronted at the gateway edge so an MCP
 # client points at the SAME authenticated front door as every other Vexa client.
 _DEFAULT_MCP_URL = "http://mcp:8010"
@@ -333,8 +372,9 @@ def create_app(
                       ``None`` and forward plain headers.
     ``agent_allow`` — the people the agent tier is enabled for (`agent_admission.py`); ``None`` reads
                       ``VEXA_AGENT_ALLOW`` from the environment.
-    ``connect_limiter`` — the cap for each caller address on ``POST /connect`` (a ``PerUserRateLimiter``
-                      keyed by address); ``None`` is CONNECT_BURST calls refilled at CONNECT_REFILL_PER_SEC.
+    ``connect_limiter`` — the cap for each caller address on ``POST /connect`` (anything with
+                      ``allow(address)``); ``None`` is an :class:`AddressCap` of CONNECT_BURST calls refilled
+                      at CONNECT_REFILL_PER_SEC, remembering at most CONNECT_MAX_ADDRESSES addresses.
     ``vnc_connect`` — opens the upstream websocket of a bot-account sign-in session's live view
                       (``vnc_relay.py``); ``None`` is the ``websockets`` client, a test injects a fake.
     """
@@ -1127,9 +1167,7 @@ def create_app(
     # `_forward`, whose `_authorize` refuses a call with no key. The edge caps the body and the calls
     # from each address, strips every header a client may not set (and any key: this route takes none),
     # adds NO identity header, and passes the answer on unchanged.
-    from .ratelimit import PerUserRateLimiter  # noqa: PLC0415
-    _connect_limiter = connect_limiter if connect_limiter is not None else PerUserRateLimiter(
-        capacity=CONNECT_BURST, refill_per_sec=CONNECT_REFILL_PER_SEC)
+    _connect_limiter = connect_limiter if connect_limiter is not None else AddressCap()
     _connect_guard: list = []
 
     def _connect_address(request: Request) -> str:
@@ -1150,9 +1188,16 @@ def create_app(
             return _connect_refused(413, f"request body is larger than {CONNECT_MAX_BODY_BYTES} bytes")
         if not _connect_limiter.allow(_connect_address(request)):
             return _connect_refused(429, "Rate limit exceeded", {"Retry-After": "6"})
-        content = await request.body()
-        if len(content) > CONNECT_MAX_BODY_BYTES:
-            return _connect_refused(413, f"request body is larger than {CONNECT_MAX_BODY_BYTES} bytes")
+        # The cap holds WHILE the body streams, whatever its Content-Type or length header: past it,
+        # reading stops and nothing is forwarded.
+        chunks: List[bytes] = []
+        seen = 0
+        async for chunk in request.stream():
+            seen += len(chunk)
+            if seen > CONNECT_MAX_BODY_BYTES:
+                return _connect_refused(413, f"request body is larger than {CONNECT_MAX_BODY_BYTES} bytes")
+            chunks.append(chunk)
+        content = b"".join(chunks)
         if not content.strip():
             return _connect_refused(400, "a body is required")
         excluded = {"host", "content-length", "transfer-encoding", "x-api-key", "authorization", "cookie"}
