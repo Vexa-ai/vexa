@@ -401,6 +401,15 @@ async def validate_token(payload: ValidateRequest, request: Request,
     if api_token.expires_at is not None and api_token.expires_at < datetime.utcnow():
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token expired")
 
+    # A KEY MADE BY `POST /connect` NEVER CARRIES AN ADMIN'S REACH (app/connect.py): a key of that name
+    # whose person is an admin by any source (users.data.is_admin, VEXA_ADMIN_EMAILS, the admin-account
+    # stamp) is refused, whenever the person became one. It only refuses; nothing else here changes.
+    from .connect import KEY_NAME as CONNECT_KEY_NAME  # noqa: PLC0415
+    if api_token.name == CONNECT_KEY_NAME and (
+            signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0])
+            or admin_account.is_stamped(user.data)):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
+
     await _stamp_last_used(db, api_token)
 
     scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
