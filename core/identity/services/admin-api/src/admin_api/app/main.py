@@ -50,12 +50,14 @@ from . import photo_storage as photo_storage_mod
 from . import profile_doors as profile_doors_mod
 from . import orgs as orgs_mod
 from . import claim_code
+from . import claim_code as claim_code_mod
 from . import admin_account
 from . import signin_allow
 from . import signin_wire
 from . import platform_settings as platform_settings_mod
 from . import provider_subjects as provider_subjects_mod
 from . import signin_links as signin_links_mod
+from . import connect as connect_mod
 from . import validate as validate_mod
 from . import transcription_language as transcription_language_mod
 from .platform_settings import (MODELS_FIELDS, TRANSCRIPTION_FIELDS, apply_config_update,
@@ -1430,9 +1432,17 @@ def create_app() -> FastAPI:
         here, which is exactly the enumeration the sign-in form is built not to reveal, so this door
         is never open without the secret, dev mode included."""
         check_internal_no_dev_bypass(request)
-        email = signin_allow.normalize_email(payload.email)
+        admitted, why = await _admission(payload.email, db, claim_code=payload.claim_code,
+                                         via_invite=bool(payload.via_invite))
+        return {"admitted": admitted, "why": why}
+
+    async def _admission(email: str, db: AsyncSession, *, claim_code: Optional[str] = None,
+                         via_invite: bool = False) -> "tuple[bool, str]":
+        """(admitted, why) for this address — THE decision every sign-in door asks, here and from
+        `POST /connect` (app/connect.py, which presents no claim code and no invite)."""
+        email = signin_allow.normalize_email(email)
         if not signin_allow.is_address(email):
-            return {"admitted": False, "why": signin_allow.WHY_NOT_ALLOWED}
+            return False, signin_allow.WHY_NOT_ALLOWED
         user = (await db.execute(
             select(User).where(func.lower(User.email) == email).limit(1)
         )).scalars().first()
@@ -1445,8 +1455,8 @@ def create_app() -> FastAPI:
         if user is None and not admins and not allow:
             admin_claimed_now = await _admin_exists(db)
             if not admin_claimed_now:
-                code_ok = claim_code.matches(payload.claim_code, await _claim_record(db))
-        admitted, why = signin_allow.decide(
+                code_ok = claim_code_mod.matches(claim_code, await _claim_record(db))
+        return signin_allow.decide(
             email,
             user_exists=user is not None,
             is_admin=data.get("is_admin") is True,
@@ -1455,10 +1465,18 @@ def create_app() -> FastAPI:
             allow=allow,
             claim_code_ok=code_ok,
             admin_accounts=admin_account.designated()[0],
-            invited=bool(payload.via_invite),
+            invited=via_invite,
             invites_admit=signin_allow.invites_admit(),
         )
-        return {"admitted": admitted, "why": why}
+
+    # --- POST /connect — a verified sign-in elsewhere gets its user and that user's own key, once
+    #     (app/connect.py). No admin key and no internal secret: the raw ID token is the credential.
+    async def _connect_find_or_create(email: str, name: Optional[str], db: AsyncSession) -> int:
+        made = await create_user(UserCreate(email=email, name=name), Response(), db)
+        return made.id
+
+    app.include_router(connect_mod.build_router(find_or_create=_connect_find_or_create,
+                                                admission=_admission, load_user=_load_user))
 
     @app.post("/internal/admin-claim/check", include_in_schema=False,
               response_model=ClaimCodeCheckResponse)
