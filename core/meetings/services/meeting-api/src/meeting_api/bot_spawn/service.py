@@ -43,6 +43,7 @@ from .meeting_host import TEAMS_HOST_SUFFIXES, allowance_entries, check_meeting_
 from . import transcription_language as tlang
 from .workload_redis import voice_note_stream
 from .ports import (
+    AccountErasing,
     AuthSessionBusy,
     DuplicateMeeting,
     MaxBotsExceeded,
@@ -224,6 +225,9 @@ async def _fetch_bot_context(user_id: int) -> dict:
                 f"{admin_api_url}/internal/users/{user_id}/bot-context",
                 headers={"X-Internal-Secret": internal_secret},
             )
+        if r.status_code == 404:
+            # Identity has no such account (erased): never a bot for it (``AccountErasing``).
+            return {"erasing": True}
         if r.status_code != 200:
             return {}
         body = r.json()
@@ -567,6 +571,10 @@ async def request_bot(
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
     transcription_model = os.getenv("TRANSCRIPTION_MODEL") or None
     bot_context = await _fetch_bot_context(user_id)
+    # AN ACCOUNT BEING ERASED GETS NO BOT (P15): checked here, before any DB write, because every
+    # spawn path — POST /bots and the calendar sweep alike — comes through this function.
+    if bot_context.get("erasing") is True:
+        raise AccountErasing("this account is being erased; no bot is started for it")
     configured = _transcription_from_context(bot_context)
     # O-TEL-1 fixture collection, resolved from the SAME best-effort lookup (one hop, two readers).
     # Default ON: only an explicit false from identity stops the tape.

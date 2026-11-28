@@ -885,16 +885,19 @@ class InMemoryTranscriptStore:
         return True
 
     async def account_meetings(self, user_id):
+        from .ports import account_room_row
+
         return [{"id": mid, "status": m["status"], "platform": m["platform"],
                  "native_meeting_id": m["native_meeting_id"],
-                 "recordings": list((m.get("data") or {}).get("recordings") or [])}
+                 "recordings": list((m.get("data") or {}).get("recordings") or []),
+                 "room": account_room_row(m.get("data"))}
                 for mid, m in sorted(self._meetings.items()) if m.get("user_id") == int(user_id)]
 
     async def erase_account_meeting(self, user_id, meeting_id):
         from .ports import ACCOUNT_ERASABLE_STATUSES, erased_meeting_cache_keys
 
         m = self._meetings.get(int(meeting_id))
-        if m is None or m.get("user_id") != int(user_id):
+        if m is None or not share_access.owns(m.get("user_id"), m.get("data"), int(user_id)):
             return None
         if m["status"] not in ACCOUNT_ERASABLE_STATUSES:
             return {"error": "conflict", "status": m["status"]}
@@ -905,16 +908,29 @@ class InMemoryTranscriptStore:
         del self._meetings[int(meeting_id)]
         return {"transcripts": transcripts, "sessions": 0}   # sessions live in the bot_spawn fake
 
-    async def erase_account_cache(self, user_id):
+    async def erase_account_cache(self, user_id, meeting_ids=()):
         if self._redis is None:
-            return 0
+            return {"cache_keys": 0, "webhook_deliveries": 0}
+        from ..webhooks.retry import purge_labels
         from .ports import account_cache_keys, account_cache_patterns
 
         keys = list(account_cache_keys(user_id))
         for pattern in account_cache_patterns(user_id):
             async for key in self._redis.scan_iter(match=pattern):
                 keys.append(key)
-        return int(await self._redis.delete(*keys) or 0)
+        deliveries = await purge_labels(self._redis, {f"meeting:{int(m)}" for m in meeting_ids})
+        return {"cache_keys": int(await self._redis.delete(*keys) or 0), "webhook_deliveries": deliveries}
+
+    async def forget_reader(self, user_id):
+        uid, changed = int(user_id), 0
+        for m in self._meetings.values():
+            if m.get("user_id") == uid:
+                continue
+            data = dict(m.get("data") or {})
+            if share_access.forget_reader(data, uid):
+                m["data"] = data
+                changed += 1
+        return changed
 
     def _row_or_placeholder(self, meeting_id) -> dict:
         m = self._meetings.get(meeting_id)

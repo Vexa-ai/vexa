@@ -35,8 +35,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..schema.models import (APIToken, Membership, PersonPhoto, PlatformSetting, Principal, User,
-                             Workspace)
+from ..schema.models import (APIToken, Meeting, Membership, PersonPhoto, PlatformSetting, Principal,
+                             User, Workspace)
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .. import obs
 from .db import get_db
@@ -814,67 +814,119 @@ def create_app() -> FastAPI:
 
     @app.delete("/admin/users/{user_id}", dependencies=[Depends(verify_admin_token)])
     async def delete_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
-        """ERASE one person and everything keyed to them, and answer the receipt. Irreversible.
+        """ERASE one person and everything that is theirs, and answer the receipt. Irreversible.
 
-        WHY IT HAS TO EXIST. There was no per-user delete anywhere in the product, so the only way
-        to remove somebody was `blank-instance.sh`, which deletes EVERY person on the stack. PRD
-        decision 38.3 (`subject_reset`) needs one person reset; P15 needs a person to erase their own
-        account with nothing left, and a receipt.
+        WHY IT HAS TO EXIST. PRD decision 38.3 (`subject_reset`) needs one person reset; P15 needs a
+        person to erase their own account with nothing of theirs left, and a receipt — never other
+        people's or a company's records, and nothing that moves money.
 
-        THE MEETINGS GO FIRST, THROUGH MEETING-API'S OWN DOOR (`account_erase.erase_meetings`): it
-        stops a live bot, deletes the recordings and session tapes in storage, then the transcripts,
-        sessions and meeting rows, and the person's Redis keys. `meetings.user_id` has no ForeignKey
-        to `users`, so nothing cascades; and the objects and keys are meeting-api's, out of reach of a
-        SQL delete from here. If it does not confirm (409 a bot is still running, 502 otherwise),
-        nothing here is deleted and a retry is safe.
+        REFUSED BEFORE ANYTHING IS TOUCHED (409/503, nothing deleted): an account that pays for a
+        workspace's principal (`principals.bills_to`), a subscription that can still charge it
+        (`active_subscription`; Stripe is not called — a later slice), or meeting rows for it in
+        the shared database while no meetings domain is configured (fail closed).
 
-        THEN, in one transaction: the personal CRM through crm-api's door (`orgs.erase_personal`,
-        fails closed the same way), every api_token (sessions included), the photo rows, the
-        workspace memberships, the owner mark on workspaces they owned, and the users row, which
-        carries the calendar connections and the webhook URL and secret in `data`. The photo objects
-        follow. Stripe is NOT called (a later slice): the receipt names the Stripe ids found.
+        1. FREEZE, committed on its own: every api_token goes (sessions included), the calendar
+           connections and the webhook leave `users.data`, and `users.data.erasing` is set — so no
+           key, no calendar sweep and no spawn (`bot-context` says `erasing`) can make a new meeting.
+        2. meeting-api erases the person's meetings through its own door (`account_erase`): stops a
+           live bot, deletes objects first, then transcripts, sessions and rows, keys, queued webhook
+           deliveries, reader entries on other people's meetings, bot accounts. A room's row keyed to
+           them stays (`retained`).
+        3. In one transaction: the personal CRM through crm-api's door, photos, workspace
+           memberships, the owner mark on workspaces they owned, and the users row.
+        4. A FINAL SWEEP through the same meeting-api door, for anything made while 1–3 ran.
 
-        An account that pays for a workspace's principal (`principals.bills_to`) is refused (409)
-        before anything is deleted: that workspace needs a new payer first.
-
-        It does NOT touch the workspace volume or the flows lanes: those stores belong to other
-        services, and `subject_reset` clears them through their own owners.
+        A hop that fails after step 1 answers its error with `incomplete: true` and what was done; a
+        retry finishes the job. A retry for an id whose users row is already gone still runs the
+        meeting-api sweep, and answers 200 `sweep_only` when it removed something (404 otherwise).
         """
+        def _failed(code, error, detail, done=None, **extra):
+            body = {"error": error, "incomplete": bool(done), "detail": detail, **extra}
+            if done:
+                body["done"] = done
+            elif "nothing was deleted" not in detail:
+                body["detail"] = f"{detail} Nothing was deleted."
+            raise HTTPException(code, detail=body)
+
         user = await db.get(User, user_id)
         if not user:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+            # The retry after a crash past step 3: the row is gone, the meetings may not be.
+            try:
+                sweep = await account_erase_mod.erase_meetings(user_id)
+            except account_erase_mod.MeetingsHopFailed as e:
+                _failed(e.status, e.error, e.detail, running=e.running)
+            if sweep is None or not account_erase_mod.anything_deleted(sweep):
+                raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+            return {"user_id": user_id, "sweep_only": True,
+                    "deleted": {"user": 0, "meetings": sweep["deleted"]},
+                    "retained": sweep.get("retained") or {}, "bot_accounts": sweep.get("bot_accounts")}
+
         payer_of = [row[0] for row in (await db.execute(
             select(Principal.id).where(Principal.bills_to == user_id))).all()]
         if payer_of:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail={
-                "error": "pays_for_workspaces", "principals": payer_of,
-                "detail": "This account pays for workspace principals; move them to another payer first. "
-                          "Nothing was deleted."})
-        # No transaction stays open across the hop to meeting-api (it may wait for a bot to leave).
-        await db.rollback()
-        meetings = await account_erase_mod.erase_meetings(user_id)
+            _failed(status.HTTP_409_CONFLICT, "pays_for_workspaces",
+                    "This account pays for workspace principals; move them to another payer first.",
+                    principals=payer_of)
+        subscription = account_erase_mod.live_subscription(user.data)
+        if subscription:
+            _failed(status.HTTP_409_CONFLICT, "active_subscription",
+                    f"This account has a subscription that can still charge it ({subscription}); "
+                    "cancel it first.")
+        if not account_erase_mod.meeting_api_url():
+            # No meetings domain configured. Fail closed if the shared database says otherwise.
+            rows = (await db.execute(select(func.count()).select_from(Meeting)
+                                     .where(Meeting.user_id == user_id))).scalar() or 0
+            if rows:
+                _failed(status.HTTP_503_SERVICE_UNAVAILABLE, "meetings_domain_not_configured",
+                        f"MEETING_API_URL is unset but {rows} meeting row(s) belong to this account.")
 
-        user = (await db.execute(
-            select(User).where(User.id == user_id).with_for_update()
-        )).scalar_one_or_none()
+        # 1. FREEZE — its own committed transaction.
+        from sqlalchemy.orm import attributes  # noqa: PLC0415
+        from .calendars import connections_from_data  # noqa: PLC0415
+        user = (await db.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one_or_none()
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
-        from .calendars import connections_from_data  # noqa: PLC0415
         data = dict(user.data or {})
         stripe = account_erase_mod.stripe_ids(data)
-        calendars = len(connections_from_data(data, user_id, include_deleted=True))
-        webhook = 1 if (data.get("webhook_url") or data.get("webhook_secret")) else 0
-        # An individual's org of one and their whole personal CRM go with the account — the CRM's
-        # rows through the CRM's own erase door, FIRST: if it cannot confirm, nothing is deleted.
-        await orgs_mod.erase_personal(db, user)
-        tokens = (await db.execute(delete(APIToken).where(APIToken.user_id == user_id))).rowcount
+        done = {
+            "api_tokens": int((await db.execute(
+                delete(APIToken).where(APIToken.user_id == user_id))).rowcount or 0),
+            "calendar_connections": len(connections_from_data(data, user_id, include_deleted=True)),
+            "webhook": 1 if (data.get("webhook_url") or data.get("webhook_secret")) else 0,
+        }
+        for key in account_erase_mod.FROZEN_DATA_KEYS:
+            data.pop(key, None)
+        data[account_erase_mod.ERASING_KEY] = True
+        user.data = data
+        attributes.flag_modified(user, "data")
+        await db.commit()
+
+        # 2. The meetings, through meeting-api's door. No transaction stays open across it.
+        try:
+            meetings = await account_erase_mod.erase_meetings(user_id)
+        except account_erase_mod.MeetingsHopFailed as e:
+            _failed(e.status, e.error, e.detail, done={**done, "frozen": True}, running=e.running)
+        done["meetings"] = meetings["deleted"] if meetings is not None else "not_present"
+
+        # 3. Identity's own rows, and the account.
+        user = (await db.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        try:
+            await orgs_mod.erase_personal(db, user)
+        except HTTPException as e:
+            await db.rollback()
+            _failed(e.status_code, "crm_not_confirmed", str(e.detail), done={**done, "frozen": True})
+        done["api_tokens"] += int((await db.execute(
+            delete(APIToken).where(APIToken.user_id == user_id))).rowcount or 0)
         await db.execute(delete(PersonPhoto).where(PersonPhoto.user_id == user_id))
-        memberships = (await db.execute(
-            delete(Membership).where(Membership.principal_id == str(user_id)))).rowcount
-        unowned = (await db.execute(
-            update(Workspace).where(Workspace.owner == str(user_id)).values(owner=None))).rowcount
+        done["workspace_memberships"] = int((await db.execute(
+            delete(Membership).where(Membership.principal_id == str(user_id)))).rowcount or 0)
+        done["workspaces_unowned"] = int((await db.execute(
+            update(Workspace).where(Workspace.owner == str(user_id)).values(owner=None))).rowcount or 0)
         await db.delete(user)
         await db.commit()
+        done["user"] = 1
         # Their photos' bytes live in the object store (`photo_storage.py`): removed with them.
         photos = photo_storage_mod.from_env()
         if photos is not None:
@@ -882,15 +934,22 @@ def create_app() -> FastAPI:
                 photos.delete_person(user_id)
             except Exception:  # noqa: BLE001 — the row is gone; say so loudly, the objects need a sweep
                 logger.error("user %s deleted but their photo objects were not (person-photos/%s/)", user_id, user_id)
+
+        # 4. The final sweep: anything that reached meeting-api while 1–3 ran.
+        if meetings is not None:
+            try:
+                final = await account_erase_mod.erase_meetings(user_id)
+            except account_erase_mod.MeetingsHopFailed as e:
+                _failed(e.status, e.error, f"{e.detail} The account is deleted; retry to finish the sweep.",
+                        done=done, running=e.running)
+            done["final_sweep"] = final["deleted"]
         logger.info("account %s erased: meetings=%s tokens=%s memberships=%s", user_id,
-                    meetings.get("meetings") if isinstance(meetings, dict) else meetings, tokens, memberships)
+                    done["meetings"], done["api_tokens"], done["workspace_memberships"])
         return {
             "user_id": user_id,
-            "deleted": {
-                "user": 1, "meetings": meetings, "api_tokens": int(tokens or 0),
-                "calendar_connections": calendars, "workspace_memberships": int(memberships or 0),
-                "webhook": webhook, "workspaces_unowned": int(unowned or 0),
-            },
+            "deleted": done,
+            "retained": (meetings or {}).get("retained") or {"room_meetings": 0},
+            "bot_accounts": (meetings or {}).get("bot_accounts"),
             # Not called by this route (a later slice): what is still held at Stripe for this person.
             "stripe": stripe,
         }
@@ -1930,6 +1989,9 @@ def create_app() -> FastAPI:
             # the sweep never has to tell "no list" from "an older identity".
             "auto_join_block": list(data.get("auto_join_block") or []),
         }
+        # An account being erased (account_erase.ERASING_KEY) gets no bot: meeting-api refuses it.
+        if data.get(account_erase_mod.ERASING_KEY):
+            resp["erasing"] = True
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.
         # ALWAYS present in the response — a missing key downstream is indistinguishable from an
         # unreachable identity, and bot_spawn must default ON in BOTH cases, so it is stated here

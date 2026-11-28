@@ -48,10 +48,13 @@ async def test_erase_hard_deletes_rows_sessions_and_transcripts_in_postgres():
     sf = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sf() as db:
-            for mid, uid, status in ((1, GONE, "scheduled"), (2, GONE, "completed"),
-                                     (3, GONE, "active"), (4, KEEP, "completed")):
+            for mid, uid, status, data in (
+                    (1, GONE, "scheduled", {}), (2, GONE, "completed", {}), (3, GONE, "active", {}),
+                    (4, KEEP, "completed", {"transcript_viewers": [GONE],
+                                            "share_viewers": [{"user_id": GONE, "email": "g@x.test"}]}),
+                    (5, GONE, "completed", {"room_principal": {"principal": "900"}})):
                 db.add(Meeting(id=mid, user_id=uid, platform="google_meet",
-                               platform_specific_id=f"room-{mid}", status=status, data={}))
+                               platform_specific_id=f"room-{mid}", status=status, data=data))
             await db.flush()
             for mid in (2, 3, 4):
                 db.add(MeetingSession(meeting_id=mid, session_uid=f"sess-{mid}"))
@@ -70,16 +73,20 @@ async def test_erase_hard_deletes_rows_sessions_and_transcripts_in_postgres():
                                 headers={"X-Internal-Secret": SECRET})
         assert r.status_code == 409, r.text
         assert [row["id"] for row in r.json()["running"]] == [3]
-        assert await count(Meeting, Meeting.user_id == GONE) == 3
+        assert await count(Meeting, Meeting.user_id == GONE) == 4
 
         async with sf() as db:
             (await db.get(Meeting, 3)).status = "completed"
             await db.commit()
         r = await client.delete(f"/internal/users/{GONE}/meetings", headers={"X-Internal-Secret": SECRET})
         assert r.status_code == 200, r.text
-        assert r.json()["deleted"] == {"meetings": 3, "transcripts": 2, "sessions": 2,
-                                       "objects": 0, "cache_keys": 0}
-        assert await count(Meeting, Meeting.user_id == GONE) == 0
+        assert r.json()["deleted"] == {"meetings": 3, "transcripts": 2, "sessions": 2, "objects": 0,
+                                       "cache_keys": 0, "webhook_deliveries": 0, "reader_entries": 1}
+        assert r.json()["retained"] == {"room_meetings": 1}
+        assert await count(Meeting, Meeting.user_id == GONE) == 1, "the room's row stays"
+        async with sf() as db:
+            other = (await db.get(Meeting, 4)).data
+        assert other.get("transcript_viewers") == [] and other.get("share_viewers") == []
         assert await count(MeetingSession, MeetingSession.meeting_id.in_([1, 2, 3])) == 0
         assert await count(Transcription, Transcription.meeting_id.in_([1, 2, 3])) == 0
         # the other person's row, session and transcript are untouched

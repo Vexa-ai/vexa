@@ -175,6 +175,7 @@ def build_router(
     reader_email: Optional[Callable] = None,
     meeting_stopper: Optional[Callable] = None,
     owner_object_deleter: Optional[Callable] = None,
+    bot_account_eraser: Optional[Callable] = None,
     internal_secret: Optional[str] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
@@ -1818,16 +1819,25 @@ def build_router(
             raise HTTPException(status_code=403, detail="Invalid internal secret")
 
     async def erase_account(user_id: int, *, wait_s: float) -> dict:
-        """Stop the person's live bots (bounded wait), then for every meeting: its objects FIRST
-        (recordings, session tapes), then its transcripts, sessions and row; then the owner's whole
-        object namespaces and Redis keys. A bot still running when the wait ends → ``running`` is
-        set and NOTHING is deleted. Every step is idempotent, so a retry finishes a partial run."""
+        """Stop the person's live bots (bounded wait), then for every meeting OF THEIRS: its objects
+        FIRST (recordings, session tapes), then its transcripts, sessions and row; then the owner's
+        object namespaces (minus what retained rows hold), their Redis keys and queued webhook
+        deliveries, their reader entries on other people's meetings and their bot accounts.
+
+        A ROOM'S ROW keyed to them (they paid for its bot) is the room's, not theirs: it is left
+        whole, objects included, and counted in ``retained``. A bot still running when the wait
+        ends → ``running`` is set and NOTHING is deleted. Every step is idempotent, so a retry
+        finishes a partial run."""
         import asyncio
 
+        from ..recordings.deletion import retained_prefixes
         from .ports import ACCOUNT_ERASABLE_STATUSES
 
+        def _mine(rows):
+            return [r for r in rows if not r.get("room")]
+
         def _live(rows):
-            return [r for r in rows if r["status"] not in ACCOUNT_ERASABLE_STATUSES]
+            return [r for r in _mine(rows) if r["status"] not in ACCOUNT_ERASABLE_STATUSES]
 
         rows = await store.account_meetings(user_id)
         stop_requested: list = []
@@ -1856,12 +1866,19 @@ def build_router(
             return {"user_id": user_id, "running": running, "stop_requested": stop_requested,
                     "detail": "A bot is still running; nothing was deleted. Retry once it has left."}
 
-        if any(r["recordings"] for r in rows) and artifact_object_deleter is None:
+        mine = _mine(rows)
+        retained = [r for r in rows if r.get("room")]
+        if any(r["recordings"] for r in mine) and artifact_object_deleter is None:
             raise HTTPException(status_code=503, detail="Artifact storage deletion unavailable")
-        if rows and fixture_object_deleter is None:
+        if mine and fixture_object_deleter is None:
             raise HTTPException(status_code=503, detail="Fixture storage deletion unavailable")
-        deleted = {"meetings": 0, "transcripts": 0, "sessions": 0, "objects": 0, "cache_keys": 0}
-        for row in rows:
+        deleted = {"meetings": 0, "transcripts": 0, "sessions": 0, "objects": 0, "cache_keys": 0,
+                   "webhook_deliveries": 0, "reader_entries": 0}
+        # Their queued webhook deliveries first: the ids are known now, and gone with the rows.
+        cache = await store.erase_account_cache(user_id, [r["id"] for r in mine])
+        deleted["cache_keys"] += cache["cache_keys"]
+        deleted["webhook_deliveries"] += cache["webhook_deliveries"]
+        for row in mine:
             for recording in row["recordings"]:
                 deleted["objects"] += len(await artifact_object_deleter(recording))
             deleted["objects"] += len(await fixture_object_deleter(user_id, row["id"]))
@@ -1871,6 +1888,7 @@ def build_router(
             if erased.get("error") == "conflict":
                 # A bot was started for this row after the wait: the caller must retry.
                 return {"user_id": user_id, "stop_requested": stop_requested, "deleted": deleted,
+                        "incomplete": True,
                         "running": [{"id": row["id"], "status": erased.get("status"),
                                      "platform": row["platform"],
                                      "native_meeting_id": row["native_meeting_id"]}],
@@ -1879,18 +1897,26 @@ def build_router(
             deleted["transcripts"] += erased["transcripts"]
             deleted["sessions"] += erased["sessions"]
         if owner_object_deleter is not None:
-            deleted["objects"] += len(await owner_object_deleter(user_id))
-        deleted["cache_keys"] = await store.erase_account_cache(user_id)
+            keep = [p for r in retained
+                    for p in retained_prefixes(user_id=user_id, meeting_id=r["id"],
+                                               recordings=r["recordings"])]
+            deleted["objects"] += len(await owner_object_deleter(user_id, keep))
+        deleted["reader_entries"] = await store.forget_reader(user_id)
+        bot_accounts = (await bot_account_eraser(user_id)) if bot_account_eraser is not None \
+            else {"deleted": 0, "configured": False}
         log_event("account_meetings_erased", audience="operator", span="meetings.account.erase",
-                  user_id=user_id, fields=dict(deleted))
-        return {"user_id": user_id, "deleted": deleted, "stop_requested": stop_requested}
+                  user_id=user_id, fields={**deleted, "retained_room_meetings": len(retained)})
+        return {"user_id": user_id, "deleted": deleted, "stop_requested": stop_requested,
+                "retained": {"room_meetings": len(retained)}, "bot_accounts": bot_accounts}
 
     @router.delete("/internal/users/{user_id}/meetings", include_in_schema=False)
     async def erase_account_meetings(user_id: int, request: Request,
                                      wait_s: float = Query(default=20.0, ge=0, le=60)):
-        """``200 {user_id, deleted:{meetings, transcripts, sessions, objects, cache_keys},
-        stop_requested}``; ``409 {user_id, running:[…], stop_requested, detail}`` when a bot did not
-        leave within ``wait_s`` (nothing deleted). A person with nothing is a 200 with zero counts."""
+        """``200 {user_id, deleted:{meetings, transcripts, sessions, objects, cache_keys,
+        webhook_deliveries, reader_entries}, stop_requested, retained:{room_meetings}, bot_accounts}``;
+        ``409 {user_id, running:[…], stop_requested, detail}`` when a bot did not leave within
+        ``wait_s`` (nothing deleted; ``incomplete`` + ``deleted`` when one started mid-erase). A
+        person with nothing is a 200 with zero counts."""
         _require_internal(request)
         result = await erase_account(user_id, wait_s=wait_s)
         return JSONResponse(status_code=409 if result.get("running") else 200, content=result)

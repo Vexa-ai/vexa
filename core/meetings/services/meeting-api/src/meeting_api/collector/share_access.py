@@ -243,6 +243,19 @@ def remove_viewer(data: dict, viewer_id: int) -> bool:
     return True
 
 
+def forget_reader(data: dict, viewer_id: int) -> bool:
+    """Account erase: take an erased person out of another person's meeting — ``remove_viewer``
+    (their id and roster entry leave, their single-person invites are revoked), and no
+    ``share_removed`` entry is left naming them either. False if the meeting never named them."""
+    named = any(r.get("user_id") == viewer_id for r in data.get("share_removed") or [])
+    removed = remove_viewer(data, viewer_id)
+    data["share_removed"] = [r for r in (data.get("share_removed") or [])
+                             if r.get("user_id") != viewer_id]
+    if not data["share_removed"]:
+        data.pop("share_removed", None)
+    return removed or named
+
+
 def stamp_mail(data: dict, grant_id: str) -> bool:
     """Mark the grant whose invite mail was just handed to flows (``mailed_at``). True if found."""
     grants, hit = [], False

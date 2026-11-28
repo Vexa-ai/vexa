@@ -2580,4 +2580,11 @@ if command -v openssl >/dev/null 2>&1; then
   tb "a changed subjectTickets.agent.signingKey rolls agent-api and the gateway, not meeting-api or the flows Deployments" \
     'python3 -c "$CK_PY" moved "$ckf/A.yaml" "$ckf/TK.yaml" vexa-vexa-agent-api,vexa-vexa-gateway vexa-vexa-meeting-api,vexa-vexa-flows-worker,vexa-vexa-flows-mailbox,vexa-vexa-flows-api >/dev/null'
 fi
+# The account erase (P15): admin-api reaches meeting-api only where meeting-api is deployed; without
+# it MEETING_API_URL stays unset and admin-api fails closed if the database holds meeting rows.
+ad_ma_off="$(doc Deployment vexa-vexa-admin-api "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set meetingApi.enabled=false)")"
+tb "admin-api carries MEETING_API_URL when meeting-api is deployed" \
+  'printf "%s\n" "$ad_dep" | grep -q "name: MEETING_API_URL"'
+tb "admin-api carries no MEETING_API_URL when meetingApi.enabled=false" \
+  '! printf "%s\n" "$ad_ma_off" | grep -q "name: MEETING_API_URL"'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

@@ -103,13 +103,31 @@ async def delete_meeting_fixtures(storage: Storage, *, user_id: int, meeting_id:
     return keys
 
 
-async def delete_owner_objects(storage: Storage, *, user_id: int) -> list[str]:
+def retained_prefixes(*, user_id: int, meeting_id: int, recordings: list) -> list[str]:
+    """The object prefixes of a meeting row an account erase KEEPS (a room's row): its recordings'
+    and its session tapes', so the owner sweep below never reaches them."""
+    out = [signal_meeting_prefix(user_id=int(user_id), meeting_id=int(meeting_id))]
+    for recording in recordings or []:
+        prefix = _recording_prefix(recording)
+        if prefix:
+            out.append(prefix)
+        for media_file in recording.get("media_files") or []:
+            path = media_file.get("storage_path") if isinstance(media_file, dict) else None
+            if path:
+                out.append(path)
+    return out
+
+
+async def delete_owner_objects(storage: Storage, *, user_id: int, keep: "list[str]" = ()) -> list[str]:
     """Account erase: every object in the person's two namespaces — recordings and session tapes —
     including any that no meeting row names any more (an object whose row was lost, an aborted
-    upload). Run after the per-meeting deletes; idempotent."""
+    upload), except those under ``keep`` (the rows the erase retains). Run after the per-meeting
+    deletes; idempotent."""
     deleted: list[str] = []
+    keep = tuple(keep)
     for prefix in (f"recordings/{int(user_id)}/", f"{SIGNAL_ROOT_PREFIX}{int(user_id)}/"):
-        keys = [key for key in await storage.list(prefix) if key.startswith(prefix)]
+        keys = [key for key in await storage.list(prefix)
+                if key.startswith(prefix) and not (keep and key.startswith(keep))]
         for key in keys:
             await storage.delete(key)
         deleted.extend(keys)

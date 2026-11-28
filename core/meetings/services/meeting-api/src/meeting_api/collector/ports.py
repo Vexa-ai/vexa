@@ -85,6 +85,12 @@ def erased_meeting_cache_keys(meeting_id) -> tuple[str, ...]:
 ACCOUNT_ERASABLE_STATUSES = ("idle", "scheduled", "completed", "failed")
 
 
+def account_room_row(data) -> bool:
+    """A row a ROOM'S turn made (``share_access.ROOM_PRINCIPAL``): keyed to the account that paid for
+    the bot, but the room's, not the person's. An account erase leaves it (P15: never another's)."""
+    return isinstance(data, dict) and bool(data.get("room_principal"))
+
+
 def account_cache_keys(user_id) -> tuple[str, ...]:
     """Every Redis key this service keeps for ONE PERSON (not per meeting), removed by an account
     erase: the webhook delivery history (``webhooks.ledger.RedisDeliveryLedger``) and the calendar

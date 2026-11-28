@@ -1,21 +1,21 @@
 """The account erase's reach into the meetings domain (P15: a person erases their own account,
-nothing left, with a receipt).
+nothing of theirs left, with a receipt — never other people's or a company's records, and nothing
+that moves money).
 
 ``DELETE /admin/users/{id}`` asks meeting-api to erase every meeting of the person through
-meeting-api's own internal door, ``DELETE /internal/users/{id}/meetings``, BEFORE it deletes
-anything of its own. The two services share a database, but the meetings tables are meeting-api's:
-it owns their objects in storage (recordings, session tapes), their Redis keys and the stop of a
-live bot, none of which a SQL delete from here could reach. If meeting-api does not confirm, this
-service deletes nothing, so a retry is safe.
+meeting-api's own internal door, ``DELETE /internal/users/{id}/meetings``. The two services share a
+database, but the meetings tables are meeting-api's: it owns their objects in storage (recordings,
+session tapes), their Redis keys, the stop of a live bot and the rule for which rows are the
+person's (a room's row keyed to them stays). Identity only reads that table to refuse an erase it
+cannot complete (``meeting_rows``).
 
-Stripe is not called here (a later slice). The person's Stripe ids are named in the receipt so the
-caller knows what is still held there.
+Stripe is not called here (a later slice). The person's Stripe ids are named in the receipt, and an
+account with a subscription still running is refused (``active_subscription``).
 """
 from __future__ import annotations
 
 import os
-
-from fastapi import HTTPException, status
+from typing import Optional
 
 from .internal_tier import internal_secret
 
@@ -28,6 +28,23 @@ TIMEOUT_S = STOP_WAIT_S + 40.0
 #: The Stripe ids an account carries in ``users.data`` (``PlatformBillingDataPatch``).
 STRIPE_KEYS = ("stripe_customer_id", "stripe_subscription_id", "stripe_tx_subscription_id",
                "stripe_payment_method_id")
+#: Stripe subscription statuses under which the subscription can still charge the person.
+LIVE_SUBSCRIPTION_STATUSES = frozenset({"active", "trialing", "past_due", "unpaid", "incomplete"})
+#: What the freeze removes from ``users.data``: every way a new meeting reaches this account
+#: (calendar auto-join) or its data leaves it (the webhook). ``erasing`` marks the account so bot
+#: spawn refuses it (``bot-context``).
+FROZEN_DATA_KEYS = ("calendar_connections", "calendar_ics_url", "calendar_auto_join",
+                    "webhook_url", "webhook_secret", "webhook_events")
+ERASING_KEY = "erasing"
+
+
+class MeetingsHopFailed(Exception):
+    """meeting-api did not confirm the erase: ``status`` is the answer to give (409 a bot is still
+    running, 502 otherwise), ``error`` and ``detail`` say why, ``running`` names the live bots."""
+
+    def __init__(self, status: int, error: str, detail: str, running: Optional[list] = None):
+        super().__init__(detail)
+        self.status, self.error, self.detail, self.running = status, error, detail, running or []
 
 
 def meeting_api_url() -> str:
@@ -39,13 +56,28 @@ def stripe_ids(data) -> dict:
     return {key: data[key] for key in STRIPE_KEYS if data.get(key)}
 
 
-async def erase_meetings(user_id: int):
-    """meeting-api's erase of every meeting of ``user_id``: its per-kind counts, or ``"not_present"``
-    when no meetings domain is deployed. Raises 409 when a bot did not leave in time and 502 when
-    meeting-api did not confirm — nothing was deleted."""
+def live_subscription(data) -> Optional[str]:
+    """The status of a subscription that can still charge this person, or None."""
+    data = data if isinstance(data, dict) else {}
+    for key in ("subscription_status", "tx_subscription_status"):
+        value = str(data.get(key) or "").strip().lower()
+        if value in LIVE_SUBSCRIPTION_STATUSES:
+            return value
+    return None
+
+
+def anything_deleted(receipt: dict) -> bool:
+    """Whether meeting-api's receipt says it removed anything at all."""
+    return any(isinstance(v, int) and v > 0 for v in (receipt.get("deleted") or {}).values()) or \
+        bool((receipt.get("bot_accounts") or {}).get("deleted"))
+
+
+async def erase_meetings(user_id: int) -> Optional[dict]:
+    """meeting-api's receipt for erasing every meeting of ``user_id`` (``deleted``, ``retained``,
+    ``bot_accounts``), or None when no meetings domain is configured. Raises ``MeetingsHopFailed``."""
     base = meeting_api_url()
     if not base:
-        return "not_present"
+        return None
     import httpx  # noqa: PLC0415
 
     try:
@@ -54,18 +86,18 @@ async def erase_meetings(user_id: int):
                                     params={"wait_s": STOP_WAIT_S},
                                     headers={"X-Internal-Secret": internal_secret()})
     except httpx.HTTPError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
-                            detail="meeting-api could not erase this person's meetings; nothing was deleted") from exc
+        raise MeetingsHopFailed(502, "meetings_unreachable",
+                                "meeting-api could not be reached to erase this person's meetings") from exc
     try:
         body = r.json()
     except ValueError:
         body = {}
     body = body if isinstance(body, dict) else {}
     if r.status_code == 409:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail={
-            "error": "bot_still_running", "running": body.get("running") or [],
-            "detail": "A bot of this person is still in a meeting; nothing was deleted. Retry once it has left."})
+        raise MeetingsHopFailed(409, "bot_still_running",
+                                "A bot of this person is still in a meeting. Retry once it has left.",
+                                running=body.get("running"))
     if r.status_code != 200 or not isinstance(body.get("deleted"), dict):
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
-                            detail=f"meeting-api did not confirm the erase ({r.status_code}); nothing was deleted")
-    return body["deleted"]
+        raise MeetingsHopFailed(502, "meetings_not_confirmed",
+                                f"meeting-api did not confirm the erase ({r.status_code})")
+    return body

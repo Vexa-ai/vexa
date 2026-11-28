@@ -1848,8 +1848,9 @@ class SqlAlchemyTranscriptStore:
 
     # ── account erase (P15): every row keyed to one person, HARD-deleted — no tombstone ─────────
     async def account_meetings(self, user_id) -> "list[dict]":
-        """Every meeting row keyed to ``user_id`` — personal and room rows alike (a room's row is
-        keyed to the account that pays for it), with what the erase needs to delete its objects."""
+        """Every meeting row keyed to ``user_id``, each with ``room`` (a room's row, which an account
+        erase leaves) and its recordings. Reads only the columns and JSONB paths it needs: the erase
+        polls this while it waits for a bot to leave."""
         from sqlalchemy import select
 
         from .models import Meeting
@@ -1857,12 +1858,14 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             rows = (await db.execute(
                 select(Meeting.id, Meeting.status, Meeting.platform, Meeting.platform_specific_id,
-                       Meeting.data).where(Meeting.user_id == int(user_id)).order_by(Meeting.id)
+                       Meeting.data["recordings"].label("recordings"),
+                       Meeting.data["room_principal"].label("room"))
+                .where(Meeting.user_id == int(user_id)).order_by(Meeting.id)
             )).all()
         return [{"id": int(r.id), "status": r.status, "platform": r.platform,
                  "native_meeting_id": r.platform_specific_id,
-                 "recordings": list((r.data or {}).get("recordings") or [])
-                 if isinstance(r.data, dict) else []} for r in rows]
+                 "recordings": list(r.recordings) if isinstance(r.recordings, list) else [],
+                 "room": bool(r.room)} for r in rows]
 
     async def erase_account_meeting(self, user_id, meeting_id) -> "Optional[dict]":
         """Hard-delete one of the person's meetings: its Redis keys, then transcripts, sessions and
@@ -1875,7 +1878,7 @@ class SqlAlchemyTranscriptStore:
         from .ports import ACCOUNT_ERASABLE_STATUSES, erased_meeting_cache_keys
 
         mid = int(meeting_id)
-        owned = (Meeting.id == mid, Meeting.user_id == int(user_id))
+        owned = (Meeting.id == mid, _owned(Meeting, user_id))
         async with self._session_factory() as db:
             status = (await db.execute(select(Meeting.status).where(*owned))).scalars().first()
         if status is None:
@@ -1903,17 +1906,48 @@ class SqlAlchemyTranscriptStore:
         self._erased.discard(mid)
         return {"transcripts": int(transcripts), "sessions": int(sessions)}
 
-    async def erase_account_cache(self, user_id) -> int:
-        """Delete the person's own Redis keys (``ports.account_cache_keys``); the count removed."""
+    async def erase_account_cache(self, user_id, meeting_ids=()) -> dict:
+        """Delete the person's own Redis keys (``ports.account_cache_keys``) and the queued webhook
+        deliveries of ``meeting_ids``; the counts removed."""
         if self._redis is None:
-            return 0
+            return {"cache_keys": 0, "webhook_deliveries": 0}
+        from ..webhooks.retry import purge_labels
         from .ports import account_cache_keys, account_cache_patterns
 
         keys = list(account_cache_keys(user_id))
         for pattern in account_cache_patterns(user_id):
             async for key in self._redis.scan_iter(match=pattern):
                 keys.append(key)
-        return int(await self._redis.delete(*keys) or 0)
+        deliveries = await purge_labels(self._redis, {f"meeting:{int(m)}" for m in meeting_ids})
+        return {"cache_keys": int(await self._redis.delete(*keys) or 0), "webhook_deliveries": deliveries}
+
+    async def forget_reader(self, user_id) -> int:
+        """Take the person out of every OTHER person's meeting they were a reader of
+        (``share_access.forget_reader``); the number of meetings changed."""
+        from sqlalchemy import or_, select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        uid = int(user_id)
+        changed = 0
+        async with self._session_factory() as db:
+            rows = (await db.execute(
+                select(Meeting).where(
+                    Meeting.user_id != uid,
+                    or_(Meeting.data["transcript_viewers"].contains([uid]),
+                        Meeting.data["share_viewers"].contains([{"user_id": uid}]),
+                        Meeting.data["share_removed"].contains([{"user_id": uid}])))
+                .order_by(Meeting.id).with_for_update()
+            )).scalars().all()
+            for meeting in rows:
+                data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+                if share_access.forget_reader(data, uid):
+                    meeting.data = data
+                    flag_modified(meeting, "data")
+                    changed += 1
+            await db.commit()
+        return changed
 
 
 class RedisStreamBus:

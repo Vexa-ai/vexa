@@ -207,6 +207,28 @@ class BotAccounts:
                 "usable": usable(a, user_id=user_id, policy=policy, roles=roles)} for a in accounts]
         return {"accounts": out, "company_bot_use": policy}
 
+    async def erase_owned(self, user_id: int) -> dict:
+        """Account erase: delete every bot account the person owns (``user:<id>``), never a company
+        one. With no store configured there is nothing; an unreachable store is reported, not
+        guessed — what could not be deleted is listed."""
+        if self.broker is None:
+            return {"deleted": 0, "configured": False}
+        mine = owner_of(user_id)
+        try:
+            accounts = [a for a in await self.broker.list([mine], actor=mine) if a.get("owner") == mine]
+        except BrokerError:
+            return {"deleted": 0, "unreachable": True}
+        deleted, remaining = 0, []
+        for account in accounts:
+            try:
+                await self.broker.delete(account["id"], actor=mine)
+                deleted += 1
+            except BrokerNotFound:
+                continue
+            except BrokerError:
+                remaining.append(account["id"])
+        return {"deleted": deleted, "remaining": remaining} if remaining else {"deleted": deleted}
+
     # ── browser sessions ──────────────────────────────────────────────────────────────────────
     async def open_session(self, user_id: int, body: dict) -> dict:
         self._require()

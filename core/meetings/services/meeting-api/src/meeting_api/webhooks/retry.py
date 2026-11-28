@@ -328,3 +328,21 @@ async def drain_retry_queue(
         await redis.lrem(processing_key, 1, stamped)
 
     return processed
+
+
+async def purge_labels(redis: Any, labels: "set[str]") -> int:
+    """Account erase: remove every queued, in-flight and dead-lettered delivery whose ``label`` is
+    one of ``labels`` (``meeting:{id}`` — the lifecycle's label, ``lifecycle/mount.py``). Each one
+    carries the person's payload, webhook URL and secret. Returns the number of entries removed."""
+    if not labels:
+        return 0
+    removed = 0
+    for key in (RETRY_QUEUE_KEY, PROCESSING_KEY, DEAD_LETTER_KEY):
+        for raw in await redis.lrange(key, 0, -1) or []:
+            try:
+                label = json.loads(raw).get("label")
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if label in labels:
+                removed += int(await redis.lrem(key, 0, raw) or 0)
+    return removed

@@ -34,6 +34,7 @@ from ..service_authority import (
 from .env_flags import InvalidFlagValue, resolve_spawn_flag
 from .meeting_host import MeetingHostRefused, meeting_host_allowance
 from .ports import (
+    AccountErasing,
     AuthSessionBusy,
     AuthSessionNotConfigured,
     MaxBotsExceeded,
@@ -747,6 +748,8 @@ def build_router(
             raise HTTPException(status_code=409, detail=str(e))
         except (MaxBotsExceeded, QuotaExceeded) as e:
             raise HTTPException(status_code=429, detail=str(e) or "Bot concurrency limit reached")
+        except AccountErasing as e:
+            raise HTTPException(status_code=409, detail={"code": "account_erasing", "reason": str(e)})
         except SpawnFailed as e:
             raise HTTPException(status_code=502, detail=str(e) or "Failed to start bot workload")
 

@@ -356,6 +356,11 @@ class WorkloadUnknown(Exception):
         super().__init__(f"runtime does not know workload {workload_id!r} (termination unconfirmed)")
 
 
+class AccountErasing(SpawnFailed):
+    """Identity says this account is being erased (``bot-context`` ``erasing``), or it no longer
+    exists: no bot is spawned for it. A ``SpawnFailed`` so every spawn path already refuses it."""
+
+
 class TranscriptionNotConfigured(Exception):
     """transcribe_enabled=true but no transcription backend resolved (Settings nor env)."""
 

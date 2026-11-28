@@ -86,8 +86,10 @@ async def test_erase_leaves_nothing_of_the_person_and_everything_of_everyone_els
     r = await client.delete(f"/internal/users/{GONE}/meetings", headers=_hdr())
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["deleted"] == {"meetings": 2, "transcripts": 1, "sessions": 0,
-                               "objects": 4, "cache_keys": 3}
+    assert body["deleted"] == {"meetings": 2, "transcripts": 1, "sessions": 0, "objects": 4,
+                               "cache_keys": 3, "webhook_deliveries": 0, "reader_entries": 0}
+    assert body["retained"] == {"room_meetings": 0}
+    assert body["bot_accounts"] == {"deleted": 0, "configured": False}
     # zero rows, objects and keys for the person
     assert [m for m in store._meetings.values() if m["user_id"] == GONE] == []
     assert [k for k in storage.blobs if k.startswith(("recordings/7/", "signal/7/"))] == []
@@ -108,8 +110,8 @@ async def test_a_second_erase_is_a_200_with_nothing_left_to_delete():
     assert (await client.delete(f"/internal/users/{GONE}/meetings", headers=_hdr())).status_code == 200
     again = await client.delete(f"/internal/users/{GONE}/meetings", headers=_hdr())
     assert again.status_code == 200
-    assert again.json()["deleted"] == {"meetings": 0, "transcripts": 0, "sessions": 0,
-                                       "objects": 0, "cache_keys": 0}
+    assert again.json()["deleted"] == {"meetings": 0, "transcripts": 0, "sessions": 0, "objects": 0,
+                                       "cache_keys": 0, "webhook_deliveries": 0, "reader_entries": 0}
 
 
 async def test_only_the_internal_tier_may_erase():
@@ -205,3 +207,120 @@ def test_the_person_s_cache_keys_are_the_ones_their_writers_write():
     keys, patterns = set(account_cache_keys(GONE)), account_cache_patterns(GONE)
     for key in rec.keys:
         assert key in keys or any(fnmatch.fnmatch(key, p) for p in patterns), key
+
+
+# ── review round: rooms, queued deliveries, reader entries, bot accounts, spawn refusal ──────────
+
+async def test_a_room_s_row_keyed_to_the_payer_is_retained_with_its_objects():
+    client, store, repo, storage, redis = await _world()
+    store.seed_meeting(meeting_id=12, user_id=GONE, platform="google_meet", native_meeting_id="room-call",
+                       status="completed",
+                       data={"room_principal": {"principal": "900", "principal_workspace": "w1"},
+                             "recordings": [_recording(GONE, 12, 9003)]}, segments=[
+                           {"segment_id": "s1", "start": 0, "end": 1, "text": "the room's", "language": "en"}])
+    room_objects = ["recordings/7/9003/sess-12/audio/master.wav", "signal/7/12/sess-12/events.jsonl"]
+    for key in room_objects:
+        storage.blobs[key] = b"room"
+    r = await client.delete(f"/internal/users/{GONE}/meetings", headers=_hdr())
+    assert r.status_code == 200, r.text
+    assert r.json()["retained"] == {"room_meetings": 1}
+    assert r.json()["deleted"]["meetings"] == 2
+    assert store._meetings[12]["segments"]["s1"]["text"] == "the room's"
+    assert all(storage.blobs.get(k) == b"room" for k in room_objects), "the sweep skips retained rows"
+    assert "recordings/7/4242/sess-lost/audio/master.wav" not in storage.blobs, "orphans still go"
+
+
+async def test_queued_webhook_deliveries_of_the_person_s_meetings_are_purged():
+    import json as _json
+
+    from meeting_api.webhooks.retry import DEAD_LETTER_KEY, PROCESSING_KEY, RETRY_QUEUE_KEY
+
+    client, store, repo, storage, redis = await _world()
+    for key, label in ((RETRY_QUEUE_KEY, "meeting:11"), (PROCESSING_KEY, "meeting:10"),
+                       (DEAD_LETTER_KEY, "meeting:11"), (RETRY_QUEUE_KEY, "meeting:20")):
+        await redis.rpush(key, _json.dumps({"label": label, "url": "https://hook.test", "payload": {}}))
+    r = await client.delete(f"/internal/users/{GONE}/meetings", headers=_hdr())
+    assert r.json()["deleted"]["webhook_deliveries"] == 3
+    left = [_json.loads(x)["label"] for k in (RETRY_QUEUE_KEY, PROCESSING_KEY, DEAD_LETTER_KEY)
+            for x in await redis.lrange(k, 0, -1)]
+    assert left == ["meeting:20"], "the other person's delivery stays"
+
+
+async def test_the_person_leaves_other_people_s_meetings_they_could_read():
+    client, store, repo, storage, redis = await _world()
+    store._meetings[20]["data"].update({
+        "transcript_viewers": [GONE, 99],
+        "share_viewers": [{"user_id": GONE, "email": "gone@x.test"}, {"user_id": 99, "email": "k@x.test"}],
+        "share_grants": [{"id": "g1", "mode": "restricted", "allowed_emails": ["gone@x.test"]}],
+        "share_removed": [{"user_id": GONE, "at": "2026-11-01T00:00:00Z"}]})
+    r = await client.delete(f"/internal/users/{GONE}/meetings", headers=_hdr())
+    assert r.json()["deleted"]["reader_entries"] == 1
+    data = store._meetings[20]["data"]
+    assert data["transcript_viewers"] == [99]
+    assert data["share_viewers"] == [{"user_id": 99, "email": "k@x.test"}]
+    assert "share_removed" not in data
+    assert data["share_grants"][0]["revoked"] is True
+    assert data["recordings"][0]["id"] == 9002, "the owner's own data is untouched"
+
+
+async def test_the_person_s_bot_accounts_go_and_a_company_one_stays():
+    from meeting_api.bot_accounts import BotAccounts
+    from meeting_api.bot_accounts.broker import FakeBroker
+
+    broker = FakeBroker()
+    broker.seed({"id": "a" * 32, "owner": f"user:{GONE}", "platform": "google_meet", "display_name": "Mine"})
+    broker.seed({"id": "b" * 32, "owner": "company", "platform": "google_meet", "display_name": "Co"})
+    broker.seed({"id": "c" * 32, "owner": f"user:{KEEP}", "platform": "google_meet", "display_name": "Theirs"})
+    accounts = BotAccounts(broker=broker, runtime=None)
+    assert await accounts.erase_owned(GONE) == {"deleted": 1}
+    assert sorted(broker.accounts) == ["b" * 32, "c" * 32]
+    broker.fail = True
+    assert await accounts.erase_owned(KEEP) == {"deleted": 0, "unreachable": True}
+
+
+async def test_no_bot_is_spawned_for_an_account_being_erased(monkeypatch):
+    from meeting_api.bot_spawn import service
+    from meeting_api.bot_spawn.ports import AccountErasing
+
+    async def erasing(user_id):
+        return {"erasing": True}
+
+    monkeypatch.setattr(service, "_fetch_bot_context", erasing)
+    repo = InMemoryMeetingRepo()
+    app = create_app(meeting_repo=repo)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://ma")
+    r = await client.post("/bots", headers={"x-user-id": str(GONE)},
+                          json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"})
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["code"] == "account_erasing"
+    assert repo._meetings == {}, "refused before any row is written"
+    assert issubclass(AccountErasing, service.SpawnFailed), "the calendar sweep refuses it too"
+
+
+async def test_identity_answering_no_such_account_reads_as_erasing(monkeypatch):
+    from meeting_api.bot_spawn import service
+
+    class _R:
+        status_code = 404
+
+        def json(self):
+            return {"detail": "User not found"}
+
+    class _C:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            return _R()
+
+    monkeypatch.setenv("ADMIN_API_URL", "http://admin-api:8001")
+    monkeypatch.setenv("INTERNAL_API_SECRET", "s")
+    monkeypatch.setattr(httpx, "AsyncClient", _C)
+    assert await service._fetch_bot_context(GONE) == {"erasing": True}
+
