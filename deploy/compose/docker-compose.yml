@@ -397,6 +397,8 @@ services:
       - CRM_ORG_ID=${CRM_ORG_ID:-}
       # account delete erases a person's own CRM (an individual's org of one) through the CRM's door
       - CRM_API_URL=${CRM_API_URL:-}
+      # …and every meeting of theirs through meeting-api's door (DELETE /internal/users/{id}/meetings)
+      - MEETING_API_URL=http://meeting-api:8080
       # ── the publish edge (config.v1 class `publish-edge`) ──────────────────────────────────
       # Identity hands `onboarding.completed` to flows here. Same variable, same default-empty
       # shape as the mcp service's assembly URLs: EMPTY IS A PROFILE, not a misconfiguration —

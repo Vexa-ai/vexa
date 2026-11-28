@@ -5047,6 +5047,21 @@
    "protocol": "HTTP"
   },
   {
+   "unique-id": "admin-meetings-erase",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "admin-api"
+     },
+     "destination": {
+      "node": "meeting-api"
+     }
+    }
+   },
+   "description": "account delete (P15): DELETE /internal/users/{id}/meetings (internal secret) erases every meeting of the person first: stops a live bot (bounded wait, else 409), deletes recordings and session tapes in storage, transcripts, sessions, the meeting rows and the person's Redis keys; identity deletes nothing unless it confirms (MEETING_API_URL)",
+   "protocol": "HTTP"
+  },
+  {
    "unique-id": "mcp-crm-discover",
    "relationship-type": {
     "connects": {

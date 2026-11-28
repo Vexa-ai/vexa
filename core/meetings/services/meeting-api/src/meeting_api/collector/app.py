@@ -174,6 +174,8 @@ def build_router(
     fixture_object_deleter: Optional[Callable] = None,
     reader_email: Optional[Callable] = None,
     meeting_stopper: Optional[Callable] = None,
+    owner_object_deleter: Optional[Callable] = None,
+    internal_secret: Optional[str] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -1800,6 +1802,98 @@ def build_router(
             fields={"authorized": len(authorized), "errors": len(errors)},
         )
         return JSONResponse(content={"authorized": authorized, "errors": errors, "user_id": user_id})
+
+    # --- DELETE /internal/users/{user_id}/meetings → ACCOUNT ERASE (P15): every meeting of one person,
+    # gone, rows included — no tombstone, because the person who could read one is being removed.
+    # The internal tier only: admin-api's DELETE /admin/users/{id} calls it before it deletes the
+    # account. No gateway row reaches this path, so a signed identity is refused by the scope gate.
+    def _require_internal(request: Request) -> None:
+        import hmac
+
+        secret = internal_secret or ""
+        if not secret:
+            raise HTTPException(status_code=503, detail="INTERNAL_API_SECRET not configured")
+        presented = request.headers.get("x-internal-secret") or ""
+        if not hmac.compare_digest(presented.encode(), secret.encode()):
+            raise HTTPException(status_code=403, detail="Invalid internal secret")
+
+    async def erase_account(user_id: int, *, wait_s: float) -> dict:
+        """Stop the person's live bots (bounded wait), then for every meeting: its objects FIRST
+        (recordings, session tapes), then its transcripts, sessions and row; then the owner's whole
+        object namespaces and Redis keys. A bot still running when the wait ends → ``running`` is
+        set and NOTHING is deleted. Every step is idempotent, so a retry finishes a partial run."""
+        import asyncio
+
+        from .ports import ACCOUNT_ERASABLE_STATUSES
+
+        def _live(rows):
+            return [r for r in rows if r["status"] not in ACCOUNT_ERASABLE_STATUSES]
+
+        rows = await store.account_meetings(user_id)
+        stop_requested: list = []
+        if _live(rows):
+            for row in _live(rows):
+                if meeting_stopper is not None and row.get("platform") and row.get("native_meeting_id"):
+                    try:
+                        await meeting_stopper(user_id, row["platform"], row["native_meeting_id"])
+                    except HTTPException as e:
+                        # 404: already asked to leave, or no bot left to ask. 422: a platform the stop
+                        # path does not know. Either way the wait below decides.
+                        if e.status_code not in (404, 422):
+                            raise
+                stop_requested.append(row["id"])
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + wait_s
+            while _live(rows) and loop.time() < deadline:
+                await asyncio.sleep(min(0.5, max(0.0, deadline - loop.time())))
+                rows = await store.account_meetings(user_id)
+        running = [{"id": r["id"], "status": r["status"], "platform": r["platform"],
+                    "native_meeting_id": r["native_meeting_id"]} for r in _live(rows)]
+        if running:
+            log_event("account_meetings_erase_refused", audience="operator", level="warning",
+                      span="meetings.account.erase", user_id=user_id,
+                      fields={"running": len(running), "stop_requested": len(stop_requested)})
+            return {"user_id": user_id, "running": running, "stop_requested": stop_requested,
+                    "detail": "A bot is still running; nothing was deleted. Retry once it has left."}
+
+        if any(r["recordings"] for r in rows) and artifact_object_deleter is None:
+            raise HTTPException(status_code=503, detail="Artifact storage deletion unavailable")
+        if rows and fixture_object_deleter is None:
+            raise HTTPException(status_code=503, detail="Fixture storage deletion unavailable")
+        deleted = {"meetings": 0, "transcripts": 0, "sessions": 0, "objects": 0, "cache_keys": 0}
+        for row in rows:
+            for recording in row["recordings"]:
+                deleted["objects"] += len(await artifact_object_deleter(recording))
+            deleted["objects"] += len(await fixture_object_deleter(user_id, row["id"]))
+            erased = await store.erase_account_meeting(user_id, row["id"])
+            if erased is None:
+                continue
+            if erased.get("error") == "conflict":
+                # A bot was started for this row after the wait: the caller must retry.
+                return {"user_id": user_id, "stop_requested": stop_requested, "deleted": deleted,
+                        "running": [{"id": row["id"], "status": erased.get("status"),
+                                     "platform": row["platform"],
+                                     "native_meeting_id": row["native_meeting_id"]}],
+                        "detail": "A bot started during the erase; retry to finish it."}
+            deleted["meetings"] += 1
+            deleted["transcripts"] += erased["transcripts"]
+            deleted["sessions"] += erased["sessions"]
+        if owner_object_deleter is not None:
+            deleted["objects"] += len(await owner_object_deleter(user_id))
+        deleted["cache_keys"] = await store.erase_account_cache(user_id)
+        log_event("account_meetings_erased", audience="operator", span="meetings.account.erase",
+                  user_id=user_id, fields=dict(deleted))
+        return {"user_id": user_id, "deleted": deleted, "stop_requested": stop_requested}
+
+    @router.delete("/internal/users/{user_id}/meetings", include_in_schema=False)
+    async def erase_account_meetings(user_id: int, request: Request,
+                                     wait_s: float = Query(default=20.0, ge=0, le=60)):
+        """``200 {user_id, deleted:{meetings, transcripts, sessions, objects, cache_keys},
+        stop_requested}``; ``409 {user_id, running:[…], stop_requested, detail}`` when a bot did not
+        leave within ``wait_s`` (nothing deleted). A person with nothing is a 200 with zero counts."""
+        _require_internal(request)
+        result = await erase_account(user_id, wait_s=wait_s)
+        return JSONResponse(status_code=409 if result.get("running") else 200, content=result)
 
     async def complete_deferred_delete(user_id: int, meeting_id: int) -> Optional[dict]:
         """Called when a meeting's lifecycle ends: finish a deletion the person asked for while its

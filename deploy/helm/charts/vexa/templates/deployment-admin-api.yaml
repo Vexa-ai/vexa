@@ -155,6 +155,9 @@ spec:
             - name: CRM_ORG_ID
               value: {{ .Values.crm.orgId | quote }}
             {{- end }}
+            # account delete erases every meeting of the person through meeting-api's door
+            - name: MEETING_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
             {{- if .Values.crm.enabled }}
             # account delete erases a person's own CRM (an individual's org of one) through the CRM's door
             - name: CRM_API_URL

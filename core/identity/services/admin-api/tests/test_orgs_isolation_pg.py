@@ -176,6 +176,8 @@ def _crm(monkeypatch, status_code):
     asked = []
 
     def handle(request):
+        if request.url.path.endswith("/meetings"):   # meeting-api's erase door (account delete)
+            return httpx.Response(200, json={"deleted": {"meetings": 0}})
         asked.append((request.method, request.url.path, request.headers.get("x-internal-secret")))
         return httpx.Response(status_code, json={"rows": 3})
     real = httpx.AsyncClient
@@ -200,7 +202,7 @@ def test_deleting_an_individual_erases_their_crm_then_their_org(client, two_orgs
     client.post(f"/internal/users/{a}/personal-org", headers={"X-Internal-Secret": INTERNAL_SECRET})
     asked = _crm(monkeypatch, 200)
     r = client.delete(f"/admin/users/{a}", headers=_admin())
-    assert r.status_code == 204, r.text
+    assert r.status_code == 200, r.text
     assert asked == [("POST", f"/internal/orgs/p-{a}/erase", INTERNAL_SECRET)]
     assert _org_rows(pg_url, f"p-{a}") == (0, 0)
     assert client.get(f"/internal/users/{a}/org", headers={"X-Internal-Secret": INTERNAL_SECRET}).status_code == 404
@@ -219,6 +221,6 @@ def test_if_the_crm_cannot_erase_nothing_is_deleted(client, two_orgs, pg_url, mo
 def test_a_company_account_delete_never_asks_the_crm(client, two_orgs, monkeypatch):
     from test_stack_admin_api import _admin
     asked = _crm(monkeypatch, 200)
-    assert client.delete(f"/admin/users/{two_orgs['b']}", headers=_admin()).status_code == 204
+    assert client.delete(f"/admin/users/{two_orgs['b']}", headers=_admin()).status_code == 200
     assert asked == []
     assert _org_rows  # the company org itself is never removed by an account delete

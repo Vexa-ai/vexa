@@ -2,6 +2,10 @@
  "contract": "config.v1",
  "service": "admin-api",
  "capabilities": {
+  "account_meetings_erase": {
+   "description": "deleting an account first erases every meeting of that person through meeting-api's internal door (DELETE /internal/users/{id}/meetings): a live bot is stopped, recordings and session tapes are deleted in storage, then transcripts, sessions, the meeting rows and the person's Redis keys. If meeting-api does not confirm, identity deletes nothing.",
+   "when_unconfigured": "no meetings domain is deployed, so the person has no meetings to erase; account delete removes identity's rows and the receipt says meetings: not_present."
+  },
   "personal_crm_erase": {
    "description": "deleting an account also erases that person's own CRM (an individual account's org of one, p-<id>) through crm-api's internal erase door, before identity removes the account.",
    "when_unconfigured": "no CRM is deployed, so there is no personal CRM to erase; account delete removes identity's rows only, as before."
@@ -222,6 +226,13 @@
    "default": "(empty — the default org is not bound to a CRM organisation yet; orgs.crm_org_id stays NULL)",
    "description": "The CRM organisation the install's default org is tied to (MIGRATION-0008, architecture A1): the same value crm-api runs as (its CRM_ORG_ID, the org_id key of every crm_* row). admin-api's schema convergence stamps it on the default org's orgs.crm_org_id while that is still unset, and never overwrites a set value. Nothing reads it yet; GET /internal/orgs/{id} and GET /internal/users/{id}/org answer it.",
    "targets": ["compose", "helm"]
+  },
+  {
+   "key": "MEETING_API_URL",
+   "class": "capability",
+   "capability": "account_meetings_erase",
+   "description": "meeting-api's base URL. DELETE /admin/users/{id} first asks meeting-api to erase every meeting of that person (DELETE /internal/users/{id}/meetings, internal secret): it stops a live bot, deletes recordings and session tapes in storage, transcripts, sessions, the meeting rows and the person's Redis keys. If meeting-api does not confirm (409 a bot is still running, 502 otherwise), nothing is deleted, so a retry is safe (app/account_erase.py). Unset: there is no meetings domain, and nothing to erase. Every install that runs meeting-api must set it.",
+   "targets": ["compose", "helm", "lite"]
   },
   {
    "key": "CRM_API_URL",

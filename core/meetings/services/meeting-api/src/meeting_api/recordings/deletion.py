@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .jsonb import signal_meeting_prefix
+from .jsonb import SIGNAL_ROOT_PREFIX, signal_meeting_prefix
 from .ports import MeetingErased, RecordingRepo, Storage
 
 
@@ -101,3 +101,16 @@ async def delete_meeting_fixtures(storage: Storage, *, user_id: int, meeting_id:
     for key in keys:
         await storage.delete(key)
     return keys
+
+
+async def delete_owner_objects(storage: Storage, *, user_id: int) -> list[str]:
+    """Account erase: every object in the person's two namespaces — recordings and session tapes —
+    including any that no meeting row names any more (an object whose row was lost, an aborted
+    upload). Run after the per-meeting deletes; idempotent."""
+    deleted: list[str] = []
+    for prefix in (f"recordings/{int(user_id)}/", f"{SIGNAL_ROOT_PREFIX}{int(user_id)}/"):
+        keys = [key for key in await storage.list(prefix) if key.startswith(prefix)]
+        for key in keys:
+            await storage.delete(key)
+        deleted.extend(keys)
+    return deleted

@@ -435,6 +435,11 @@ def create_app(
         await _drop_voice_note_stream(meeting_id)
         return deleted
 
+    async def _delete_owner_objects(user_id: int) -> list[str]:
+        from .recordings.deletion import delete_owner_objects
+
+        return await delete_owner_objects(storage, user_id=user_id)
+
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()
@@ -443,7 +448,9 @@ def create_app(
                                                calendar_sync_status=calendar_sync_status,
                                                artifact_object_deleter=_delete_recording_objects,
                                                fixture_object_deleter=_delete_meeting_fixtures,
-                                               meeting_stopper=stop_router.stop_meeting)
+                                               meeting_stopper=stop_router.stop_meeting,
+                                               owner_object_deleter=_delete_owner_objects,
+                                               internal_secret=internal_secret)
     _deferred_delete.append(collector_router.complete_deferred_delete)
     app.include_router(collector_router)
 

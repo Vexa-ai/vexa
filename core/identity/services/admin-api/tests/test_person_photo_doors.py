@@ -433,8 +433,14 @@ def test_db_store_keeps_a_key_not_bytes_and_user_delete_takes_the_objects(pg_url
     app_db.configure(pg_async_url)   # a fresh pool: the one above is bound to asyncio.run's closed loop
     assert len(objects.data) == 1
     monkeypatch.setenv("ADMIN_API_TOKEN", "admin-token-for-the-photo-doors")
+    # The account delete asks meeting-api to erase the person's meetings first: answered at the seam.
+    import httpx
+    real = httpx.AsyncClient
+    meetings_erased = lambda request: httpx.Response(200, json={"deleted": {"meetings": 0}})  # noqa: E731
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda *a, **kw: real(*a, **{**kw, "transport": httpx.MockTransport(meetings_erased)}))
     with TestClient(main_mod.create_app()) as c:
-        assert c.delete("/admin/users/5", headers={"X-Admin-API-Key": "admin-token-for-the-photo-doors"}).status_code == 204
+        assert c.delete("/admin/users/5", headers={"X-Admin-API-Key": "admin-token-for-the-photo-doors"}).status_code == 200
     assert objects.data == {}
     with eng.begin() as cx:
         assert cx.execute(text("SELECT count(*) FROM person_photos WHERE user_id = 5")).scalar() == 0

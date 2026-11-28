@@ -80,6 +80,24 @@ def erased_meeting_cache_keys(meeting_id) -> tuple[str, ...]:
     return (f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}", f"tc:meeting:{meeting_id}")
 
 
+#: The statuses a meeting row may be hard-deleted in by an ACCOUNT ERASE: planned (no bot) or terminal.
+#: Any other status has a bot that may still write to the row, so the erase stops it first.
+ACCOUNT_ERASABLE_STATUSES = ("idle", "scheduled", "completed", "failed")
+
+
+def account_cache_keys(user_id) -> tuple[str, ...]:
+    """Every Redis key this service keeps for ONE PERSON (not per meeting), removed by an account
+    erase: the webhook delivery history (``webhooks.ledger.RedisDeliveryLedger``) and the calendar
+    sync stamp (``calendar_sync.runner.store_stamp``). A test ties both to their writers."""
+    uid = int(user_id)
+    return (f"webhook:deliveries:{uid}", f"cal:sync:{uid}")
+
+
+def account_cache_patterns(user_id) -> tuple[str, ...]:
+    """The per-person key FAMILIES, matched with SCAN: one calendar sync stamp per connection."""
+    return (f"cal:sync:{int(user_id)}:*",)
+
+
 @runtime_checkable
 class TranscriptStore(Protocol):
     """Read a meeting's transcript; list a user's meetings; append a segment; authorize a

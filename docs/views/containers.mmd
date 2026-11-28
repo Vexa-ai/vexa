@@ -111,6 +111,7 @@ flowchart LR
   crm_api -->|"JDBC"| postgres
   crm_api -->|"HTTP"| admin_api
   admin_api -->|"HTTP"| crm_api
+  admin_api -->|"HTTP"| meeting_api
   mcp -->|"HTTP"| crm_api
   gateway -->|"HTTP"| crm_api
   gateway -->|"HTTP"| flows_api

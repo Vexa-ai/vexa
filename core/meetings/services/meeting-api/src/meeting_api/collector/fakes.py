@@ -884,6 +884,38 @@ class InMemoryTranscriptStore:
             await self._redis.srem("active_meetings", str(meeting_id))
         return True
 
+    async def account_meetings(self, user_id):
+        return [{"id": mid, "status": m["status"], "platform": m["platform"],
+                 "native_meeting_id": m["native_meeting_id"],
+                 "recordings": list((m.get("data") or {}).get("recordings") or [])}
+                for mid, m in sorted(self._meetings.items()) if m.get("user_id") == int(user_id)]
+
+    async def erase_account_meeting(self, user_id, meeting_id):
+        from .ports import ACCOUNT_ERASABLE_STATUSES, erased_meeting_cache_keys
+
+        m = self._meetings.get(int(meeting_id))
+        if m is None or m.get("user_id") != int(user_id):
+            return None
+        if m["status"] not in ACCOUNT_ERASABLE_STATUSES:
+            return {"error": "conflict", "status": m["status"]}
+        if self._redis is not None:
+            await self._redis.delete(*erased_meeting_cache_keys(meeting_id))
+            await self._redis.srem("active_meetings", str(meeting_id))
+        transcripts = len(m.get("segments") or {})
+        del self._meetings[int(meeting_id)]
+        return {"transcripts": transcripts, "sessions": 0}   # sessions live in the bot_spawn fake
+
+    async def erase_account_cache(self, user_id):
+        if self._redis is None:
+            return 0
+        from .ports import account_cache_keys, account_cache_patterns
+
+        keys = list(account_cache_keys(user_id))
+        for pattern in account_cache_patterns(user_id):
+            async for key in self._redis.scan_iter(match=pattern):
+                keys.append(key)
+        return int(await self._redis.delete(*keys) or 0)
+
     def _row_or_placeholder(self, meeting_id) -> dict:
         m = self._meetings.get(meeting_id)
         if m is None:

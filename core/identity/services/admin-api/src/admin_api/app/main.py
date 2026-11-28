@@ -30,13 +30,13 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Respo
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
-from sqlalchemy import delete, func
+from sqlalchemy import delete, func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..schema.models import (APIToken, Meeting, MeetingSession, PersonPhoto, PlatformSetting,
-                             Transcription, User)
+from ..schema.models import (APIToken, Membership, PersonPhoto, PlatformSetting, Principal, User,
+                             Workspace)
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .. import obs
 from .db import get_db
@@ -49,6 +49,7 @@ from . import person_photo_doors as person_photo_doors_mod
 from . import photo_storage as photo_storage_mod
 from . import profile_doors as profile_doors_mod
 from . import orgs as orgs_mod
+from . import account_erase as account_erase_mod
 from . import claim_code
 from . import admin_account
 from . import signin_allow
@@ -811,48 +812,67 @@ def create_app() -> FastAPI:
                 "api_key_set": bool(prefs.get("api_key")),
                 "api_key": _mask_secret(prefs.get("api_key"))}
 
-    @app.delete("/admin/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT,
-                dependencies=[Depends(verify_admin_token)])
+    @app.delete("/admin/users/{user_id}", dependencies=[Depends(verify_admin_token)])
     async def delete_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
-        """DELETE one person and everything keyed to them. Irreversible.
+        """ERASE one person and everything keyed to them, and answer the receipt. Irreversible.
 
         WHY IT HAS TO EXIST. There was no per-user delete anywhere in the product, so the only way
-        to remove somebody was `blank-instance.sh`, which deletes EVERY person on the stack — the
-        instrument for "reset one test subject" was a wipe of the whole instance. PRD decision 38.3
-        (`subject_reset`) is the caller that needs it: a state re-entered in seconds, the instance
-        never blanked.
+        to remove somebody was `blank-instance.sh`, which deletes EVERY person on the stack. PRD
+        decision 38.3 (`subject_reset`) needs one person reset; P15 needs a person to erase their own
+        account with nothing left, and a receipt.
 
-        IT DELETES EXPLICITLY, IN FK ORDER, because the cascade does not exist: `meetings.user_id`
-        is a plain Integer with no ForeignKey to `users`, so removing the row alone would leave
-        that person's meetings, sessions and transcripts behind, owned by an id that no longer
-        names anybody — the ghost-identity failure the rig hit on 2026-09-02, one layer down. The
-        order is the one `blank-instance.sh` documents: transcriptions → meeting_sessions →
-        meetings → api_tokens → the user.
+        THE MEETINGS GO FIRST, THROUGH MEETING-API'S OWN DOOR (`account_erase.erase_meetings`): it
+        stops a live bot, deletes the recordings and session tapes in storage, then the transcripts,
+        sessions and meeting rows, and the person's Redis keys. `meetings.user_id` has no ForeignKey
+        to `users`, so nothing cascades; and the objects and keys are meeting-api's, out of reach of a
+        SQL delete from here. If it does not confirm (409 a bot is still running, 502 otherwise),
+        nothing here is deleted and a retry is safe.
 
-        It does NOT touch the workspace volume, redis, or the flows lanes: those stores belong to
-        other services, and a route that reached into them would be this service writing three
-        surfaces it does not own. `subject_reset` clears them through their own owners. The one
-        exception is an individual account's personal CRM: identity asks crm-api to erase it through
-        crm-api's own door (`orgs.erase_personal`), then removes the org of one it owns.
+        THEN, in one transaction: the personal CRM through crm-api's door (`orgs.erase_personal`,
+        fails closed the same way), every api_token (sessions included), the photo rows, the
+        workspace memberships, the owner mark on workspaces they owned, and the users row, which
+        carries the calendar connections and the webhook URL and secret in `data`. The photo objects
+        follow. Stripe is NOT called (a later slice): the receipt names the Stripe ids found.
+
+        An account that pays for a workspace's principal (`principals.bills_to`) is refused (409)
+        before anything is deleted: that workspace needs a new payer first.
+
+        It does NOT touch the workspace volume or the flows lanes: those stores belong to other
+        services, and `subject_reset` clears them through their own owners.
         """
+        user = await db.get(User, user_id)
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        payer_of = [row[0] for row in (await db.execute(
+            select(Principal.id).where(Principal.bills_to == user_id))).all()]
+        if payer_of:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail={
+                "error": "pays_for_workspaces", "principals": payer_of,
+                "detail": "This account pays for workspace principals; move them to another payer first. "
+                          "Nothing was deleted."})
+        # No transaction stays open across the hop to meeting-api (it may wait for a bot to leave).
+        await db.rollback()
+        meetings = await account_erase_mod.erase_meetings(user_id)
+
         user = (await db.execute(
             select(User).where(User.id == user_id).with_for_update()
         )).scalar_one_or_none()
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
-        meeting_ids = [row[0] for row in (await db.execute(
-            select(Meeting.id).where(Meeting.user_id == user_id))).all()]
-        if meeting_ids:
-            await db.execute(delete(Transcription).where(
-                Transcription.meeting_id.in_(meeting_ids)))
-            await db.execute(delete(MeetingSession).where(
-                MeetingSession.meeting_id.in_(meeting_ids)))
-            await db.execute(delete(Meeting).where(Meeting.id.in_(meeting_ids)))
+        from .calendars import connections_from_data  # noqa: PLC0415
+        data = dict(user.data or {})
+        stripe = account_erase_mod.stripe_ids(data)
+        calendars = len(connections_from_data(data, user_id, include_deleted=True))
+        webhook = 1 if (data.get("webhook_url") or data.get("webhook_secret")) else 0
         # An individual's org of one and their whole personal CRM go with the account — the CRM's
         # rows through the CRM's own erase door, FIRST: if it cannot confirm, nothing is deleted.
         await orgs_mod.erase_personal(db, user)
-        await db.execute(delete(APIToken).where(APIToken.user_id == user_id))
+        tokens = (await db.execute(delete(APIToken).where(APIToken.user_id == user_id))).rowcount
         await db.execute(delete(PersonPhoto).where(PersonPhoto.user_id == user_id))
+        memberships = (await db.execute(
+            delete(Membership).where(Membership.principal_id == str(user_id)))).rowcount
+        unowned = (await db.execute(
+            update(Workspace).where(Workspace.owner == str(user_id)).values(owner=None))).rowcount
         await db.delete(user)
         await db.commit()
         # Their photos' bytes live in the object store (`photo_storage.py`): removed with them.
@@ -862,7 +882,18 @@ def create_app() -> FastAPI:
                 photos.delete_person(user_id)
             except Exception:  # noqa: BLE001 — the row is gone; say so loudly, the objects need a sweep
                 logger.error("user %s deleted but their photo objects were not (person-photos/%s/)", user_id, user_id)
-        return None
+        logger.info("account %s erased: meetings=%s tokens=%s memberships=%s", user_id,
+                    meetings.get("meetings") if isinstance(meetings, dict) else meetings, tokens, memberships)
+        return {
+            "user_id": user_id,
+            "deleted": {
+                "user": 1, "meetings": meetings, "api_tokens": int(tokens or 0),
+                "calendar_connections": calendars, "workspace_memberships": int(memberships or 0),
+                "webhook": webhook, "workspaces_unowned": int(unowned or 0),
+            },
+            # Not called by this route (a later slice): what is still held at Stripe for this person.
+            "stripe": stripe,
+        }
 
     @app.post("/admin/users/{user_id}/tokens", response_model=TokenResponse,
               status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_admin_token)])

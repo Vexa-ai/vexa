@@ -1846,6 +1846,75 @@ class SqlAlchemyTranscriptStore:
             await self._redis.srem("active_meetings", str(meeting_id))
         return True
 
+    # ── account erase (P15): every row keyed to one person, HARD-deleted — no tombstone ─────────
+    async def account_meetings(self, user_id) -> "list[dict]":
+        """Every meeting row keyed to ``user_id`` — personal and room rows alike (a room's row is
+        keyed to the account that pays for it), with what the erase needs to delete its objects."""
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (await db.execute(
+                select(Meeting.id, Meeting.status, Meeting.platform, Meeting.platform_specific_id,
+                       Meeting.data).where(Meeting.user_id == int(user_id)).order_by(Meeting.id)
+            )).all()
+        return [{"id": int(r.id), "status": r.status, "platform": r.platform,
+                 "native_meeting_id": r.platform_specific_id,
+                 "recordings": list((r.data or {}).get("recordings") or [])
+                 if isinstance(r.data, dict) else []} for r in rows]
+
+    async def erase_account_meeting(self, user_id, meeting_id) -> "Optional[dict]":
+        """Hard-delete one of the person's meetings: its Redis keys, then transcripts, sessions and
+        the row, in one transaction. ``None`` when the row is gone (a retry); ``{"error":
+        "conflict"}`` when a bot owns it again. The caller has deleted its objects already."""
+        from sqlalchemy import delete, select
+
+        from ..sessions.models import MeetingSession
+        from .models import Meeting, Transcription
+        from .ports import ACCOUNT_ERASABLE_STATUSES, erased_meeting_cache_keys
+
+        mid = int(meeting_id)
+        owned = (Meeting.id == mid, Meeting.user_id == int(user_id))
+        async with self._session_factory() as db:
+            status = (await db.execute(select(Meeting.status).where(*owned))).scalars().first()
+        if status is None:
+            return None
+        if status not in ACCOUNT_ERASABLE_STATUSES:
+            return {"error": "conflict", "status": status}
+        # Redis BEFORE the row, and outside the transaction (no session held across a non-DB await):
+        # a failure here leaves the row, so a retry finds it and tries again.
+        if self._redis is not None:
+            await self._redis.delete(*erased_meeting_cache_keys(mid))
+            await self._redis.srem("active_meetings", str(mid))
+        async with self._session_factory() as db:
+            meeting = (await db.execute(select(Meeting).where(*owned).with_for_update())).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ACCOUNT_ERASABLE_STATUSES:
+                return {"error": "conflict", "status": meeting.status}
+            transcripts = (await db.execute(
+                delete(Transcription).where(Transcription.meeting_id == mid))).rowcount or 0
+            sessions = (await db.execute(
+                delete(MeetingSession).where(MeetingSession.meeting_id == mid))).rowcount or 0
+            await db.execute(delete(Meeting).where(Meeting.id == mid))
+            await db.commit()
+        self._native_cache.pop(mid, None)
+        self._erased.discard(mid)
+        return {"transcripts": int(transcripts), "sessions": int(sessions)}
+
+    async def erase_account_cache(self, user_id) -> int:
+        """Delete the person's own Redis keys (``ports.account_cache_keys``); the count removed."""
+        if self._redis is None:
+            return 0
+        from .ports import account_cache_keys, account_cache_patterns
+
+        keys = list(account_cache_keys(user_id))
+        for pattern in account_cache_patterns(user_id):
+            async for key in self._redis.scan_iter(match=pattern):
+                keys.append(key)
+        return int(await self._redis.delete(*keys) or 0)
+
 
 class RedisStreamBus:
     """``RedisBus`` over a ``redis.asyncio`` client — XREADGROUP the segments stream, XACK,
